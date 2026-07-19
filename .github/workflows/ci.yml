@@ -8,6 +8,25 @@ on:
 jobs:
   lint-test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: orchestrator
+          POSTGRES_PASSWORD: orchestrator
+          POSTGRES_DB: orchestrator
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U orchestrator -d orchestrator"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Enables the real-Postgres tests (token race, auth flow, migrations);
+      # without this they skip, and the security-critical guarantees go
+      # unverified. Points at the ephemeral CI Postgres service above.
+      TEST_DATABASE_URL: postgresql+asyncpg://orchestrator:orchestrator@localhost:5432/orchestrator
     steps:
       - uses: actions/checkout@v4
 
