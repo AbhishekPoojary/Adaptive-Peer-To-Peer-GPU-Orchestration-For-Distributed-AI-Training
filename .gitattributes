@@ -1,0 +1,4 @@
+# Shell scripts must keep LF line endings — CRLF breaks the shebang when
+# these run inside Linux containers (docker-entrypoint.sh) or Git Bash/CI
+# (check_no_fake_data.sh), regardless of core.autocrlf on the checkout.
+*.sh text eol=lf
