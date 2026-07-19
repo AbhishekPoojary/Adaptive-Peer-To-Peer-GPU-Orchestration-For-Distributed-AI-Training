@@ -14,11 +14,10 @@ from alembic import context
 from sqlalchemy import Connection, pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+# Import model modules so Base.metadata is fully populated for autogenerate.
+import orchestrator.models  # noqa: E402,F401
 from orchestrator.core.config import get_settings
 from orchestrator.core.db import Base
-
-# Import model modules here so Base.metadata is populated once models exist.
-# (M0: no tables yet — intentionally empty baseline.)
 
 config = context.config
 
