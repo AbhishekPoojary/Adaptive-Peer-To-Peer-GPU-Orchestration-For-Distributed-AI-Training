@@ -44,6 +44,25 @@ class Settings(BaseSettings):
     jwt_signing_key: str = "dev-only-change-me"
     jwt_access_token_ttl_seconds: int = 900
     enrollment_token_ttl_seconds: int = 3600
+    # Admin bootstrap key for POST /auth/enrollment-tokens. No default: absent
+    # means the admin surface is disabled, and startup is refused outside dev
+    # (see orchestrator.main.lifespan). Never bake a real key into an image.
+    admin_api_key: str | None = None
+    # Challenge-response nonce lifetime for POST /auth/token/refresh.
+    auth_nonce_ttl_seconds: int = 120
+
+    # --- Telemetry / RTT (ADR-004) ---
+    # Smoothing factor for the round-trip-time EWMA the heartbeat handler
+    # maintains from agent-measured RTT. Never used to invent an RTT — only to
+    # smooth measured values. 0 < alpha <= 1; higher weights recent samples.
+    rtt_ewma_alpha: float = 0.3
+
+    # --- Reliability prior (ADR-009) ---
+    # Declared Beta(alpha, beta) prior for a freshly enrolled node before any
+    # lease history exists. Beta(1, 1) is the uniform prior: no reliability is
+    # assumed, it is derived from recorded lease outcomes as they accrue.
+    reliability_prior_alpha: float = 1.0
+    reliability_prior_beta: float = 1.0
 
     # --- Scheduling (ADR-009) ---
     scheduler_strategy: str = "least_loaded"

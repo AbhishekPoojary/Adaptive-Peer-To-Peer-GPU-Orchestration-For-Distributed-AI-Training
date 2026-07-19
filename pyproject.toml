@@ -18,11 +18,14 @@ server = [
     "sqlalchemy[asyncio]==2.0.36",
     "asyncpg==0.30.0",
     "alembic==1.14.0",
+    "pyjwt==2.10.1",
+    "cryptography==44.0.0",
 ]
 agent = [
     "psutil==6.1.1",
     "httpx==0.28.1",
     "websockets==14.1",
+    "cryptography==44.0.0",
 ]
 trainer = [
     "torch==2.5.1",
@@ -60,6 +63,17 @@ ignore = []
 
 [tool.ruff.lint.isort]
 known-first-party = ["orchestrator", "agent", "trainer"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency markers are the canonical exception to B008: calling
+# them in argument defaults is the framework's intended usage.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Header",
+    "fastapi.Path",
+    "fastapi.Query",
+    "fastapi.Body",
+]
 
 [tool.mypy]
 python_version = "3.11"
