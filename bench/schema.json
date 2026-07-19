@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Benchmark report artifact",
+  "description": "Every benchmark run must produce an artifact matching this schema. Numbers are machine-written by the bench harness only — never hand-typed (see CONTRIBUTING.md #6).",
+  "type": "object",
+  "required": ["timestamp_utc", "git_sha", "hardware", "scenario", "results"],
+  "properties": {
+    "timestamp_utc": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC timestamp the run completed, ISO 8601."
+    },
+    "git_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$",
+      "description": "Exact commit the benchmarked code was built from."
+    },
+    "hardware": {
+      "type": "object",
+      "required": ["cpu", "gpu", "ram_gb", "os"],
+      "properties": {
+        "cpu": { "type": "string" },
+        "gpu": { "type": ["string", "null"] },
+        "ram_gb": { "type": "number" },
+        "os": { "type": "string" }
+      }
+    },
+    "scenario": { "type": "string" },
+    "results": {
+      "type": "object",
+      "description": "Scenario-specific measured metrics only."
+    }
+  }
+}
