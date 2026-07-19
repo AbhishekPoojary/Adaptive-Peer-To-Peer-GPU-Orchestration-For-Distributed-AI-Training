@@ -1,0 +1,5 @@
+# Root-level pointer so `docker compose up` works from the repo root
+# without an explicit `-f deploy/compose.yaml`. The real stack definition
+# lives in deploy/compose.yaml (see also deploy/.env.example).
+include:
+  - deploy/compose.yaml
