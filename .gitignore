@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+build/
+dist/
+
+# Env
+.env
+deploy/.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+
+# Bench reports are machine-written artifacts, not source — keep the
+# schema but ignore generated reports.
+bench/report/*
+!bench/report/.gitkeep
+
+# Docker
+*.log
