@@ -1,14 +1,16 @@
-"""Node endpoints: enrollment and authenticated, self-scoped heartbeat.
+"""Node endpoints: enrollment, authenticated self-scoped heartbeat, and the
+read-only fleet/detail views the dashboard polls.
 
-Read endpoints for nodes/telemetry are a later (Sonnet) task; this module owns
-only the two write paths the identity/telemetry foundation needs.
+# TODO(M8): read-side auth. GET /nodes and GET /nodes/{id} are unauthenticated
+# for dev convenience; hardening (M8) must gate them behind real auth before
+# any non-dev deployment.
 """
 
 from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.api.deps import assert_node_scope, get_settings_dep, require_node_auth
@@ -19,11 +21,19 @@ from orchestrator.models.node import Node
 from orchestrator.schemas.node import (
     HeartbeatRequest,
     HeartbeatResponse,
+    NodeDetailResponse,
+    NodeListResponse,
     NodeRegisterRequest,
     NodeRegisterResponse,
 )
 from orchestrator.services.enrollment import TokenClaimOutcome
-from orchestrator.services.nodes import RegistrationError, record_heartbeat, register_node
+from orchestrator.services.nodes import (
+    RegistrationError,
+    get_node_detail,
+    list_nodes,
+    record_heartbeat,
+    register_node,
+)
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
 
@@ -93,4 +103,49 @@ async def heartbeat(
         last_heartbeat_at=result.last_heartbeat_at,
         status=node.status.value,
         rtt_ewma_ms=result.rtt_ewma_ms,
+    )
+
+
+@router.get("", response_model=NodeListResponse)
+async def list_nodes_endpoint(
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings_dep),
+) -> NodeListResponse:
+    """List every enrolled node with its latest telemetry sample.
+
+    # TODO(M8): read-side auth — unauthenticated for dev.
+    """
+    nodes = await list_nodes(session, settings=settings)
+    return NodeListResponse(nodes=nodes)
+
+
+@router.get("/{node_id}", response_model=NodeDetailResponse)
+async def get_node_endpoint(
+    node_id: uuid.UUID,
+    samples: int | None = Query(
+        default=None,
+        ge=1,
+        description="Number of recent telemetry samples to include (capped).",
+    ),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings_dep),
+) -> NodeDetailResponse:
+    """Return one node's current state plus its recent telemetry samples.
+
+    ``samples`` defaults to ``settings.node_detail_default_samples`` and is
+    capped at ``settings.node_detail_max_samples`` regardless of what is
+    requested.
+
+    # TODO(M8): read-side auth — unauthenticated for dev.
+    """
+    limit = settings.node_detail_default_samples if samples is None else samples
+    limit = min(limit, settings.node_detail_max_samples)
+
+    detail = await get_node_detail(
+        session, node_id=node_id, sample_limit=limit, settings=settings
+    )
+    if detail is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown node")
+    return NodeDetailResponse(
+        **detail.summary.model_dump(), telemetry_samples=detail.telemetry_samples
     )

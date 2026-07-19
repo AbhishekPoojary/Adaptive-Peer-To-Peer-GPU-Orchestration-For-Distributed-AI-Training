@@ -77,6 +77,15 @@ class Settings(BaseSettings):
     # --- Failure detection (ADR-004) ---
     heartbeat_floor_seconds: float = 5.0
 
+    # --- Read API (M1) ---
+    # A node is reported `heartbeat_stale: true` when now - last_heartbeat_at
+    # exceeds this window. Computed on read only — it never mutates node
+    # status; that is the failure detector's job (ADR-004, M6).
+    heartbeat_stale_seconds: float = 15.0
+    # Default / max number of telemetry samples GET /nodes/{id} returns.
+    node_detail_default_samples: int = 50
+    node_detail_max_samples: int = 500
+
 
 @lru_cache
 def get_settings() -> Settings:

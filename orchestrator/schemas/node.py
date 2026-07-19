@@ -123,3 +123,50 @@ class HeartbeatResponse(BaseModel):
     last_heartbeat_at: datetime
     status: str
     rtt_ewma_ms: float | None
+
+
+# --- Read endpoints (GET /nodes, GET /nodes/{id}) ----------------------------
+
+
+class TelemetrySampleOut(BaseModel):
+    """One recorded telemetry sample, as stored — nulls pass through untouched."""
+
+    ts: datetime
+    cpu_percent: float
+    ram_used_bytes: int
+    ram_total_bytes: int
+    gpu: list[GpuTelemetry] | None
+    rtt_ms: float | None
+    rtt_ewma_ms: float | None
+
+
+class NodeSummary(BaseModel):
+    """One node's current state for the fleet list view.
+
+    ``heartbeat_stale`` is computed at read time from ``last_heartbeat_at`` and
+    the configured staleness window — it never mutates ``status``; declaring a
+    node failed is the failure detector's job (ADR-004, M6).
+    """
+
+    id: uuid.UUID
+    name: str
+    status: str
+    last_heartbeat_at: datetime | None
+    heartbeat_stale: bool
+    hardware: HardwareInventory
+    lease_success_count: int
+    lease_failure_count: int
+    # None means the node has never sent a heartbeat yet — not zeros.
+    latest_telemetry: TelemetrySampleOut | None
+
+
+class NodeListResponse(BaseModel):
+    """Body of GET /nodes."""
+
+    nodes: list[NodeSummary]
+
+
+class NodeDetailResponse(NodeSummary):
+    """Body of GET /nodes/{id}: the summary plus a capped, recent sample window."""
+
+    telemetry_samples: list[TelemetrySampleOut]
