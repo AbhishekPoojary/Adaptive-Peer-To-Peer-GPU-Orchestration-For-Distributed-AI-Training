@@ -9,10 +9,13 @@ from fastapi import FastAPI
 
 from orchestrator.api.auth import router as auth_router
 from orchestrator.api.health import router as health_router
+from orchestrator.api.jobs import router as jobs_router
+from orchestrator.api.leases import router as leases_router
 from orchestrator.api.nodes import router as nodes_router
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.db import dispose_engine, get_engine
 from orchestrator.core.logging import configure_logging
+from orchestrator.services.loops import start_background_loops, stop_background_loops
 
 # APP_ENV values treated as development/test, where dev-only defaults are
 # tolerated. Anything else is a real deployment and must supply real secrets.
@@ -47,8 +50,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     configure_logging(settings.log_level)
     _enforce_production_secrets(settings)
     get_engine(settings)
-    yield
-    await dispose_engine()
+    loop_tasks = (
+        start_background_loops(settings) if settings.enable_background_loops else []
+    )
+    try:
+        yield
+    finally:
+        await stop_background_loops(loop_tasks)
+        await dispose_engine()
 
 
 def create_app() -> FastAPI:
@@ -57,6 +66,8 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(auth_router)
     app.include_router(nodes_router)
+    app.include_router(jobs_router)
+    app.include_router(leases_router)
     return app
 
 
