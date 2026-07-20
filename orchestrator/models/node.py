@@ -93,6 +93,14 @@ class Node(Base):
         Float, nullable=False, server_default="1.0", default=1.0
     )
 
+    # --- Scheduler rotation state (M2). The RoundRobin scheduler derives
+    # fairness from this: the eligible node whose last assignment is oldest
+    # (NULL = never assigned) is picked next, then this is stamped. NULL for a
+    # node the scheduler has never placed a job on. ---
+    last_assigned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     telemetry_samples: Mapped[list[NodeTelemetrySample]] = relationship(
         back_populates="node", cascade="all, delete-orphan"
     )

@@ -74,6 +74,17 @@ class Settings(BaseSettings):
     lease_ttl_seconds: int = 30
     lease_renewal_grace_seconds: int = 5
 
+    # --- Background loops (M2) ---
+    # The orchestrator runs two periodic asyncio loops: a scheduler pass that
+    # places QUEUED/REASSIGNED jobs, and a sweep that expires overdue leases.
+    # Intervals are how often each wakes; a submit also triggers an immediate
+    # scheduler pass so placement isn't gated on the loop cadence.
+    scheduler_pass_interval_seconds: float = 3.0
+    lease_sweep_interval_seconds: float = 3.0
+    # Master switch for the background loops. Disabled in tests so scheduling
+    # and sweeping are driven deterministically by the test, not a wall clock.
+    enable_background_loops: bool = True
+
     # --- Failure detection (ADR-004) ---
     heartbeat_floor_seconds: float = 5.0
 
