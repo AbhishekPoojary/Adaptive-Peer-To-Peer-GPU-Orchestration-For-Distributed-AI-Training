@@ -17,6 +17,7 @@ from collections.abc import AsyncGenerator, Iterator
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.core import db as db_module
 from orchestrator.core.config import get_settings
@@ -102,3 +103,18 @@ async def api_client(
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
     await dispose_engine()
+
+
+@pytest_asyncio.fixture
+async def session(api_client: AsyncClient) -> AsyncGenerator[AsyncSession, None]:
+    """An AsyncSession on the same migrated+truncated test DB the API client uses.
+
+    Depends on ``api_client`` so the engine/settings are already configured and
+    the tables truncated. Used by M2 concurrency tests for direct setup and
+    DB-level assertions alongside real HTTP calls.
+    """
+    from orchestrator.core.db import get_sessionmaker
+
+    maker = get_sessionmaker()
+    async with maker() as db_session:
+        yield db_session

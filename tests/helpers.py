@@ -27,6 +27,9 @@ ALEMBIC_INI = REPO_ROOT / "orchestrator" / "alembic.ini"
 TEST_ADMIN_KEY = "test-admin-key"
 
 ALL_TABLES = (
+    "leases",
+    "job_events",
+    "jobs",
     "node_telemetry_samples",
     "auth_challenges",
     "nodes",
@@ -198,3 +201,48 @@ async def register_new_node(
     )
     resp.raise_for_status()
     return resp.json(), private_key
+
+
+def auth_headers(token: str) -> dict[str, str]:
+    """Bearer auth header for a node's access token."""
+    return {"Authorization": f"Bearer {token}"}
+
+
+async def send_heartbeat(
+    client: AsyncClient,
+    *,
+    node_id: str,
+    token: str,
+    cpu_percent: float = 10.0,
+    gpu_util: float | None = None,
+) -> dict[str, Any]:
+    """Send one heartbeat so the node is ONLINE with a real telemetry sample.
+
+    ``gpu_util`` present -> one GPU telemetry entry; ``None`` -> gpu is null.
+    """
+    gpu = (
+        [
+            {
+                "util_percent": gpu_util,
+                "mem_used_bytes": 0,
+                "mem_total_bytes": 8 * 1024**3,
+                "temperature_c": None,
+                "power_w": None,
+            }
+        ]
+        if gpu_util is not None
+        else None
+    )
+    resp = await client.post(
+        f"/nodes/{node_id}/heartbeat",
+        json={
+            "cpu_percent": cpu_percent,
+            "ram_used_bytes": 1,
+            "ram_total_bytes": 16 * 1024**3,
+            "gpu": gpu,
+            "rtt_ms": None,
+        },
+        headers=auth_headers(token),
+    )
+    resp.raise_for_status()
+    return resp.json()
