@@ -63,9 +63,23 @@ class Settings(BaseSettings):
     # assumed, it is derived from recorded lease outcomes as they accrue.
     reliability_prior_alpha: float = 1.0
     reliability_prior_beta: float = 1.0
+    # Half-life (seconds) of the exponential decay applied to each historical
+    # lease outcome when computing reliability (ADR-009 time decay): an outcome
+    # this many seconds old counts half as much as a fresh one. Default 1 day.
+    reliability_decay_halflife_seconds: float = 86400.0
+    # Normal quantile for the Wilson score interval's confidence level. 1.96 is
+    # the standard ~95% two-sided value; larger = more conservative (lower R for
+    # the same evidence). Affects reliability, so it is logged and audited per
+    # decision, not applied silently.
+    reliability_wilson_z: float = 1.96
 
     # --- Scheduling (ADR-009) ---
+    # 'adaptive' (M3 penalty score), 'least_loaded', or 'round_robin'. Default
+    # stays least_loaded so existing behaviour is unchanged; adaptive is opt-in
+    # per job via scheduler_name (the M3 live demo submits it explicitly).
     scheduler_strategy: str = "least_loaded"
+    # Weights in S_i = alpha*L_i - beta*R_i + gamma*D_i. All read here and
+    # logged/audited with every adaptive decision.
     scheduler_alpha_load: float = 1.0
     scheduler_beta_reliability: float = 1.0
     scheduler_gamma_latency: float = 0.5
