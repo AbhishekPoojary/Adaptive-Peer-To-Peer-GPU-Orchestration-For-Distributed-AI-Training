@@ -39,9 +39,22 @@ def _submit_body(scheduler_name: str | None = None, **spec_overrides: object) ->
 
 @pytest.mark.asyncio
 async def test_submit_unknown_scheduler_rejected(api_client: AsyncClient) -> None:
-    resp = await api_client.post("/jobs", json=_submit_body(scheduler_name="adaptive"))
+    # 'adaptive' is registered as of M3; use a genuinely-unknown name to keep
+    # exercising the unknown-scheduler rejection path.
+    resp = await api_client.post(
+        "/jobs", json=_submit_body(scheduler_name="no_such_scheduler")
+    )
     assert resp.status_code == 422
-    assert "adaptive" in resp.text
+    assert "no_such_scheduler" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_submit_adaptive_scheduler_accepted(api_client: AsyncClient) -> None:
+    # 'adaptive' is now a valid registered strategy: submission is accepted
+    # (queued when there is no eligible node), not rejected at validation.
+    resp = await api_client.post("/jobs", json=_submit_body(scheduler_name="adaptive"))
+    assert resp.status_code == 201
+    assert resp.json()["scheduler_name"] == "adaptive"
 
 
 @pytest.mark.asyncio

@@ -21,6 +21,7 @@ from orchestrator.schemas.job import (
     JobListResponse,
     JobSubmitRequest,
 )
+from orchestrator.schemas.scheduling import SchedulingDecisionListResponse
 from orchestrator.services.jobs import (
     IllegalTransitionError,
     JobNotFoundError,
@@ -30,6 +31,7 @@ from orchestrator.services.jobs import (
     list_jobs,
 )
 from orchestrator.services.loops import trigger_scheduler_pass
+from orchestrator.services.scheduling import list_scheduling_decisions
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -95,6 +97,29 @@ async def get_job_endpoint(
     if detail is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown job")
     return detail
+
+
+@router.get(
+    "/{job_id}/scheduling-decisions",
+    response_model=SchedulingDecisionListResponse,
+)
+async def get_job_scheduling_decisions(
+    job_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+) -> SchedulingDecisionListResponse:
+    """The adaptive scheduler's audit trail for this job (ADR-009).
+
+    One decision per scheduling pass that considered the job, newest first, each
+    with the weights used and the per-candidate L/R/D/S breakdown that explains
+    the pick. Empty for a job placed by a baseline scheduler (only ``adaptive``
+    records decisions) or never scheduled. 404 only if the job itself is unknown.
+
+    # TODO(M8): user auth — unauthenticated for dev.
+    """
+    if await get_job_detail(session, job_id=job_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown job")
+    decisions = await list_scheduling_decisions(session, job_id=job_id)
+    return SchedulingDecisionListResponse(decisions=decisions)
 
 
 @router.post("/{job_id}/cancel", response_model=JobDetailResponse)
