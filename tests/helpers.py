@@ -27,6 +27,8 @@ ALEMBIC_INI = REPO_ROOT / "orchestrator" / "alembic.ini"
 TEST_ADMIN_KEY = "test-admin-key"
 
 ALL_TABLES = (
+    "scheduling_decision_candidates",
+    "scheduling_decisions",
     "leases",
     "job_events",
     "jobs",

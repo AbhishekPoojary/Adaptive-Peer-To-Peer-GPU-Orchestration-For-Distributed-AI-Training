@@ -19,6 +19,10 @@ from orchestrator.models.job import (
 from orchestrator.models.lease import Lease, LeaseState
 from orchestrator.models.node import Node, NodeStatus, NodeTelemetrySample
 from orchestrator.models.nonce import AuthChallenge
+from orchestrator.models.scheduling import (
+    SchedulingDecision,
+    SchedulingDecisionCandidate,
+)
 
 __all__ = [
     "AuthChallenge",
@@ -31,6 +35,8 @@ __all__ = [
     "Node",
     "NodeStatus",
     "NodeTelemetrySample",
+    "SchedulingDecision",
+    "SchedulingDecisionCandidate",
     "can_transition",
     "is_terminal",
 ]
