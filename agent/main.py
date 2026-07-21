@@ -28,6 +28,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,14 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from agent import __version__ as _agent_version
+from agent.leases import (
+    RELEASE_REASON,
+    HeldLease,
+    claim_lease,
+    fail_lease,
+    held_from_response,
+    renew_lease,
+)
 from agent.telemetry.latency import RttEwma, Stopwatch
 from agent.telemetry.nvml import GpuInventoryEntry, GpuTelemetryEntry, collect_gpu_telemetry
 from agent.telemetry.nvml import collect_gpu_inventory as _collect_gpu_inventory
@@ -281,6 +290,91 @@ async def send_heartbeat(
 # --- CLI / main loop -----------------------------------------------------------
 
 
+async def _service_lease(
+    client: httpx.AsyncClient,
+    *,
+    orchestrator: str,
+    node_id: str,
+    access_token: str,
+    held: HeldLease | None,
+    renew_margin_seconds: float,
+    release_after: float | None,
+) -> HeldLease | None:
+    """Advance the lease state machine for one cycle; return the held lease.
+
+    With no lease held, poll claim. With a lease held: optionally release it
+    (``--release-after``), otherwise renew it when due. Execution is M4 — this
+    only ever holds/renews/releases, never pretends to train.
+    """
+    if held is None:
+        try:
+            lease = await claim_lease(
+                client, orchestrator=orchestrator, node_id=node_id, access_token=access_token
+            )
+        except httpx.HTTPError as exc:
+            logger.error("lease claim failed: %s", exc)
+            return None
+        if lease is None:
+            return None
+        held = held_from_response(lease)
+        logger.info(
+            "lease claimed: id=%s epoch=%d — lease held; execution arrives in M4 "
+            "(no work is being run)",
+            held.lease_id,
+            held.lease_epoch,
+        )
+        return held
+
+    # Voluntary release for automated testing only.
+    if release_after is not None and held.seconds_held() >= release_after:
+        try:
+            await fail_lease(
+                client,
+                orchestrator=orchestrator,
+                lease_id=held.lease_id,
+                lease_epoch=held.lease_epoch,
+                reason=RELEASE_REASON,
+                access_token=access_token,
+            )
+            logger.info(
+                "released lease id=%s after %.1fs via /fail (reason=%s)",
+                held.lease_id,
+                held.seconds_held(),
+                RELEASE_REASON,
+            )
+        except httpx.HTTPError as exc:
+            logger.error("lease release failed: %s", exc)
+        return None
+
+    if held.renewal_due(margin_seconds=renew_margin_seconds):
+        try:
+            renewed = await renew_lease(
+                client,
+                orchestrator=orchestrator,
+                lease_id=held.lease_id,
+                lease_epoch=held.lease_epoch,
+                access_token=access_token,
+            )
+            held.expires_at_ts = datetime.fromisoformat(renewed["expires_at"]).timestamp()
+            logger.info(
+                "renewed lease id=%s epoch=%d (new expiry=%s) — still just holding",
+                held.lease_id,
+                held.lease_epoch,
+                renewed["expires_at"],
+            )
+        except httpx.HTTPStatusError as exc:
+            # 409 = fenced/expired: we lost the lease. Drop it and re-claim later.
+            logger.warning(
+                "lease id=%s renew rejected (%s): dropping it and will re-claim",
+                held.lease_id,
+                exc.response.status_code,
+            )
+            return None
+        except httpx.HTTPError as exc:
+            logger.error("lease renew failed (network): %s", exc)
+    return held
+
+
 def _configure_logging(level: str) -> None:
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
@@ -312,6 +406,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=0.3,
         help="Smoothing factor for the agent-side RTT EWMA (0 < alpha <= 1)",
+    )
+    parser.add_argument(
+        "--lease-renew-margin-seconds",
+        type=float,
+        default=5.0,
+        help="Renew a held lease once fewer than this many seconds remain on it",
+    )
+    parser.add_argument(
+        "--release-after",
+        type=float,
+        default=None,
+        help=(
+            "TEST ONLY: after holding a lease this many seconds, release it via "
+            f"/fail with reason '{RELEASE_REASON}'. Default: hold and renew until "
+            "interrupted (M2 does not execute work — that is M4)."
+        ),
     )
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args(argv)
@@ -376,6 +486,7 @@ async def run(args: argparse.Namespace) -> None:
             )
 
         rtt_tracker = RttEwma(alpha=args.rtt_ewma_alpha)
+        held_lease: HeldLease | None = None
         logger.info(
             "starting heartbeat loop: interval=%.1fs orchestrator=%s",
             args.heartbeat_interval_seconds,
@@ -419,6 +530,18 @@ async def run(args: argparse.Namespace) -> None:
                 )
             except httpx.HTTPError as exc:
                 logger.error("heartbeat failed (network): %s", exc)
+
+            # After each heartbeat: poll for / renew a lease. Execution is M4;
+            # the agent only ever holds and renews here (or releases if asked).
+            held_lease = await _service_lease(
+                client,
+                orchestrator=orchestrator,
+                node_id=state.node_id,
+                access_token=access_token,
+                held=held_lease,
+                renew_margin_seconds=args.lease_renew_margin_seconds,
+                release_after=args.release_after,
+            )
 
             await asyncio.sleep(args.heartbeat_interval_seconds)
 
