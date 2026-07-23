@@ -1,5 +1,5 @@
-"""Agent entrypoint: enrollment, JWT refresh, and the real telemetry heartbeat
-loop (M1).
+"""Agent entrypoint: enrollment, JWT refresh, telemetry heartbeat, and real
+training execution (M1/M2/M4).
 
 Flow:
   1. If ``--state-dir`` already has a persisted node identity, skip
@@ -12,6 +12,11 @@ Flow:
      (psutil) and GPU (NVML, or ``null`` if unavailable) telemetry plus the
      agent-side RTT EWMA measured around each heartbeat round trip
      (CONTRIBUTING.md #2, #3). The JWT is refreshed before it expires.
+  4. After each heartbeat, service this node's lease: claim scheduled work,
+     launch the real trainer container for it (ADR-007 isolation, M4 —
+     ``agent.runtime.execution``), keep the lease alive by timer while the
+     container runs however long it takes, and report the real outcome via
+     complete/fail once it exits.
 
 Every number reported here is either read from real hardware/OS interfaces or
 is ``None`` — nothing is ever invented to fill a gap.
@@ -32,6 +37,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import docker
 import httpx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -41,10 +47,14 @@ from agent.leases import (
     RELEASE_REASON,
     HeldLease,
     claim_lease,
+    complete_lease,
     fail_lease,
+    fetch_job_spec,
     held_from_response,
     renew_lease,
 )
+from agent.runtime.docker_launcher import TrainerLaunchConfig
+from agent.runtime.execution import DockerLaunchError, ExecutionResult, run_lease_execution
 from agent.telemetry.latency import RttEwma, Stopwatch
 from agent.telemetry.nvml import GpuInventoryEntry, GpuTelemetryEntry, collect_gpu_telemetry
 from agent.telemetry.nvml import collect_gpu_inventory as _collect_gpu_inventory
@@ -290,23 +300,113 @@ async def send_heartbeat(
 # --- CLI / main loop -----------------------------------------------------------
 
 
+@dataclass
+class ExecutingLease:
+    """A lease this agent claimed and is (or was) running a real trainer
+    container for (M4). Wraps the held-lease bookkeeping (renewal timing,
+    which runs on a timer independent of training progress) with the
+    background asyncio task actually executing it
+    (``agent.runtime.execution.run_lease_execution``).
+
+    ``task`` is ``None`` only on the ``--release-after`` test-only path, which
+    holds and releases a lease without ever launching a container (used by
+    tests that exercise the renew/release mechanics without needing Docker).
+    """
+
+    held: HeldLease
+    task: asyncio.Task[ExecutionResult] | None
+
+
+def _node_has_gpu() -> bool:
+    """Fresh, live NVML check at launch time (never a cached, possibly-stale
+    enrollment-time value) — the only thing that decides whether the trainer
+    container is launched with a GPU device request."""
+    gpus = _collect_gpu_inventory()
+    return bool(gpus)
+
+
+async def _report_result(
+    client: httpx.AsyncClient,
+    *,
+    orchestrator: str,
+    held: HeldLease,
+    access_token: str,
+    result: ExecutionResult | None,
+    failure_reason: str | None,
+) -> None:
+    """Report a lease's real terminal outcome: complete on a real exit 0,
+    fail otherwise (including when there is no container result at all, e.g.
+    Docker itself never launched). Never pretends success."""
+    payload = result.as_result_payload() if result is not None else None
+    try:
+        if result is not None and result.exit_code == 0:
+            await complete_lease(
+                client,
+                orchestrator=orchestrator,
+                lease_id=held.lease_id,
+                lease_epoch=held.lease_epoch,
+                access_token=access_token,
+                result=payload,
+            )
+            logger.info(
+                "lease id=%s completed: final_test_accuracy=%s epochs_completed=%s",
+                held.lease_id,
+                result.final_test_accuracy,
+                result.epochs_completed,
+            )
+        else:
+            reason = failure_reason or (
+                f"trainer exited with code {result.exit_code}"
+                if result is not None
+                else "unknown execution failure"
+            )
+            await fail_lease(
+                client,
+                orchestrator=orchestrator,
+                lease_id=held.lease_id,
+                lease_epoch=held.lease_epoch,
+                reason=reason,
+                access_token=access_token,
+                result=payload,
+            )
+            logger.info("lease id=%s failed: %s", held.lease_id, reason)
+    except httpx.HTTPStatusError as exc:
+        # A stale/fenced epoch (409) here means the job was reassigned while
+        # this container ran — the correct outcome is exactly to let this
+        # report be rejected, not to retry as if we still owned the lease.
+        logger.warning(
+            "reporting outcome for lease id=%s was rejected (%s) — likely fenced out",
+            held.lease_id,
+            exc.response.status_code,
+        )
+    except httpx.HTTPError as exc:
+        logger.error(
+            "reporting outcome for lease id=%s failed (network): %s", held.lease_id, exc
+        )
+
+
 async def _service_lease(
     client: httpx.AsyncClient,
     *,
     orchestrator: str,
     node_id: str,
     access_token: str,
-    held: HeldLease | None,
+    executing: ExecutingLease | None,
     renew_margin_seconds: float,
     release_after: float | None,
-) -> HeldLease | None:
-    """Advance the lease state machine for one cycle; return the held lease.
+    docker_client: docker.DockerClient | None,
+    launch_config: TrainerLaunchConfig,
+) -> ExecutingLease | None:
+    """Advance the lease state machine for one cycle.
 
-    With no lease held, poll claim. With a lease held: optionally release it
-    (``--release-after``), otherwise renew it when due. Execution is M4 — this
-    only ever holds/renews/releases, never pretends to train.
+    With no lease held: poll claim, then (Docker permitting) launch the real
+    trainer container as a background task and start tracking it. With a
+    lease held: if its execution task has finished, report the real outcome
+    (complete/fail) and free the slot; otherwise keep the lease alive by
+    renewing on schedule while the container keeps running, however long that
+    takes — renewal is timer-driven, independent of training progress.
     """
-    if held is None:
+    if executing is None:
         try:
             lease = await claim_lease(
                 client, orchestrator=orchestrator, node_id=node_id, access_token=access_token
@@ -318,14 +418,76 @@ async def _service_lease(
             return None
         held = held_from_response(lease)
         logger.info(
-            "lease claimed: id=%s epoch=%d — lease held; execution arrives in M4 "
-            "(no work is being run)",
+            "lease claimed: id=%s epoch=%d job=%s",
             held.lease_id,
             held.lease_epoch,
+            held.job_id,
         )
-        return held
 
-    # Voluntary release for automated testing only.
+        if release_after is not None:
+            # Test-only path: hold-and-release, never executes (no Docker
+            # needed) — see ExecutingLease.task's docstring.
+            return ExecutingLease(held=held, task=None)
+
+        if docker_client is None:
+            logger.error(
+                "cannot execute lease id=%s: Docker is unavailable on this node",
+                held.lease_id,
+            )
+            await _report_result(
+                client,
+                orchestrator=orchestrator,
+                held=held,
+                access_token=access_token,
+                result=None,
+                failure_reason="docker unavailable on this node",
+            )
+            return None
+
+        try:
+            job_spec = await fetch_job_spec(
+                client, orchestrator=orchestrator, job_id=held.job_id
+            )
+        except httpx.HTTPError as exc:
+            logger.error("could not fetch job spec for job=%s: %s", held.job_id, exc)
+            await _report_result(
+                client,
+                orchestrator=orchestrator,
+                held=held,
+                access_token=access_token,
+                result=None,
+                failure_reason=f"could not fetch job spec: {exc}",
+            )
+            return None
+
+        has_gpu = _node_has_gpu()
+        logger.info(
+            "launching trainer container for lease id=%s job=%s has_gpu=%s spec=%s",
+            held.lease_id,
+            held.job_id,
+            has_gpu,
+            job_spec,
+        )
+        task: asyncio.Task[ExecutionResult] | None = asyncio.create_task(
+            run_lease_execution(
+                docker_client=docker_client,
+                orchestrator_http_base=orchestrator,
+                node_id=node_id,
+                access_token=access_token,
+                lease_id=held.lease_id,
+                lease_epoch=held.lease_epoch,
+                job_id=held.job_id,
+                job_spec=job_spec,
+                has_gpu=has_gpu,
+                launch_config=launch_config,
+            )
+        )
+        return ExecutingLease(held=held, task=task)
+
+    held = executing.held
+    task = executing.task
+
+    # Voluntary release for automated testing only (task is None here).
     if release_after is not None and held.seconds_held() >= release_after:
         try:
             await fail_lease(
@@ -346,6 +508,42 @@ async def _service_lease(
             logger.error("lease release failed: %s", exc)
         return None
 
+    if task is not None and task.done():
+        try:
+            result = task.result()
+        except DockerLaunchError as exc:
+            logger.error("docker launch failed for lease id=%s: %s", held.lease_id, exc)
+            await _report_result(
+                client,
+                orchestrator=orchestrator,
+                held=held,
+                access_token=access_token,
+                result=None,
+                failure_reason=f"docker launch failed: {exc}",
+            )
+            return None
+        except Exception as exc:  # noqa: BLE001 - bug in the orchestration itself
+            logger.error("lease execution crashed for lease id=%s: %s", held.lease_id, exc)
+            await _report_result(
+                client,
+                orchestrator=orchestrator,
+                held=held,
+                access_token=access_token,
+                result=None,
+                failure_reason=f"agent execution error: {exc}",
+            )
+            return None
+
+        await _report_result(
+            client,
+            orchestrator=orchestrator,
+            held=held,
+            access_token=access_token,
+            result=result,
+            failure_reason=None,
+        )
+        return None
+
     if held.renewal_due(margin_seconds=renew_margin_seconds):
         try:
             renewed = await renew_lease(
@@ -357,22 +555,25 @@ async def _service_lease(
             )
             held.expires_at_ts = datetime.fromisoformat(renewed["expires_at"]).timestamp()
             logger.info(
-                "renewed lease id=%s epoch=%d (new expiry=%s) — still just holding",
+                "renewed lease id=%s epoch=%d (new expiry=%s)%s",
                 held.lease_id,
                 held.lease_epoch,
                 renewed["expires_at"],
+                " — trainer still running" if task is not None else " — still just holding",
             )
         except httpx.HTTPStatusError as exc:
-            # 409 = fenced/expired: we lost the lease. Drop it and re-claim later.
+            # 409 = fenced/expired: we lost the lease. A running container's
+            # eventual report will itself be correctly rejected once it
+            # finishes — that is the right fencing outcome, not a bug to
+            # paper over here.
             logger.warning(
-                "lease id=%s renew rejected (%s): dropping it and will re-claim",
+                "lease id=%s renew rejected (%s): job was likely reassigned",
                 held.lease_id,
                 exc.response.status_code,
             )
-            return None
         except httpx.HTTPError as exc:
             logger.error("lease renew failed (network): %s", exc)
-    return held
+    return executing
 
 
 def _configure_logging(level: str) -> None:
@@ -419,9 +620,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             "TEST ONLY: after holding a lease this many seconds, release it via "
-            f"/fail with reason '{RELEASE_REASON}'. Default: hold and renew until "
-            "interrupted (M2 does not execute work — that is M4)."
+            f"/fail with reason '{RELEASE_REASON}' without ever launching a "
+            "trainer container. Default: claim, execute, and report a real outcome."
         ),
+    )
+    parser.add_argument(
+        "--trainer-image",
+        default=os.environ.get("TRAINER_IMAGE", "gpu-orchestrator-trainer:latest"),
+        help="Docker image the agent launches for training jobs (ADR-007).",
+    )
+    parser.add_argument(
+        "--trainer-memory-limit",
+        default=os.environ.get("TRAINER_MEMORY_LIMIT", "6g"),
+        help="--memory limit applied to the trainer container.",
+    )
+    parser.add_argument(
+        "--trainer-pids-limit",
+        type=int,
+        default=int(os.environ.get("TRAINER_PIDS_LIMIT", "256")),
+        help="--pids-limit applied to the trainer container.",
+    )
+    parser.add_argument(
+        "--dataset-cache-volume",
+        default=os.environ.get("DATASET_CACHE_VOLUME", "gpu-orchestrator-dataset-cache"),
+        help="Named Docker volume mounted at /data-cache, created once per node if absent.",
     )
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args(argv)
@@ -486,7 +708,28 @@ async def run(args: argparse.Namespace) -> None:
             )
 
         rtt_tracker = RttEwma(alpha=args.rtt_ewma_alpha)
-        held_lease: HeldLease | None = None
+        executing_lease: ExecutingLease | None = None
+        launch_config = TrainerLaunchConfig(
+            image=args.trainer_image,
+            memory_limit=args.trainer_memory_limit,
+            pids_limit=args.trainer_pids_limit,
+            dataset_cache_volume=args.dataset_cache_volume,
+        )
+
+        docker_client: docker.DockerClient | None = None
+        if args.release_after is None:
+            try:
+                docker_client = docker.from_env()
+                docker_client.ping()
+                logger.info("Docker daemon reachable: this node can execute training jobs")
+            except Exception as exc:  # noqa: BLE001 - any Docker SDK/daemon failure
+                logger.error(
+                    "Docker is unavailable on this node (%s); any claimed lease will be "
+                    "failed honestly rather than executed",
+                    exc,
+                )
+                docker_client = None
+
         logger.info(
             "starting heartbeat loop: interval=%.1fs orchestrator=%s",
             args.heartbeat_interval_seconds,
@@ -531,16 +774,20 @@ async def run(args: argparse.Namespace) -> None:
             except httpx.HTTPError as exc:
                 logger.error("heartbeat failed (network): %s", exc)
 
-            # After each heartbeat: poll for / renew a lease. Execution is M4;
-            # the agent only ever holds and renews here (or releases if asked).
-            held_lease = await _service_lease(
+            # After each heartbeat: poll for / renew / execute a lease. A lease
+            # with a running trainer container keeps getting renewed here on
+            # schedule regardless of how long training takes; execution
+            # itself runs as a background task (see _service_lease).
+            executing_lease = await _service_lease(
                 client,
                 orchestrator=orchestrator,
                 node_id=state.node_id,
                 access_token=access_token,
-                held=held_lease,
+                executing=executing_lease,
                 renew_margin_seconds=args.lease_renew_margin_seconds,
                 release_after=args.release_after,
+                docker_client=docker_client,
+                launch_config=launch_config,
             )
 
             await asyncio.sleep(args.heartbeat_interval_seconds)

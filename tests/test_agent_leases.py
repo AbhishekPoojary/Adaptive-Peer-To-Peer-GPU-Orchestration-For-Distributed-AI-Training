@@ -11,6 +11,7 @@ from agent.leases import RELEASE_REASON, held_from_response
 def _lease(expires_in_s: float) -> dict[str, object]:
     return {
         "id": "11111111-1111-1111-1111-111111111111",
+        "job_id": "22222222-2222-2222-2222-222222222222",
         "lease_epoch": 1,
         "expires_at": (datetime.now(UTC) + timedelta(seconds=expires_in_s)).isoformat(),
     }
@@ -19,6 +20,7 @@ def _lease(expires_in_s: float) -> dict[str, object]:
 def test_held_from_response_parses_fields() -> None:
     held = held_from_response(_lease(30))
     assert held.lease_epoch == 1
+    assert held.job_id == "22222222-2222-2222-2222-222222222222"
     assert held.expires_at_ts > time.time()
 
 

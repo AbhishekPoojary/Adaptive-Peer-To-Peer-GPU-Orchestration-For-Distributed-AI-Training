@@ -27,6 +27,7 @@ agent = [
     "websockets==14.1",
     "cryptography==44.0.0",
     "nvidia-ml-py==12.560.30",
+    "docker==7.1.0",
 ]
 trainer = [
     "torch==2.5.1",
