@@ -1,0 +1,104 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+ * Design tokens (locked, ADR-011). This is a control-plane instrument panel,
+ * dark-first and always dark — there is no light theme to toggle to, the
+ * audience runs this while training jobs execute.
+ * ------------------------------------------------------------------------- */
+:root {
+  --bg-base: #0b0d12;
+  --bg-panel: #12151c;
+  --bg-elevated: #1a1e27;
+
+  --border-hairline: #2a2f3a;
+
+  --text-primary: #e6e8eb;
+  --text-secondary: #9aa1ac;
+  --text-tertiary: #6b7280;
+
+  --accent: #5b9dd9;
+
+  --status-good: #3fb950;
+  --status-active: #58a6ff;
+  --status-warn: #d29922;
+  --status-bad: #f85149;
+
+  color-scheme: dark;
+}
+
+/* Tailwind v4 CSS-first theme: point utility names at the tokens above so
+   markup can use bg-base / text-primary / border-hairline / bg-good / etc.
+   without duplicating the hex values. */
+@theme {
+  --color-base: var(--bg-base);
+  --color-panel: var(--bg-panel);
+  --color-elevated: var(--bg-elevated);
+
+  --color-hairline: var(--border-hairline);
+
+  --color-primary: var(--text-primary);
+  --color-secondary: var(--text-secondary);
+  --color-tertiary: var(--text-tertiary);
+
+  --color-accent: var(--accent);
+
+  --color-good: var(--status-good);
+  --color-active: var(--status-active);
+  --color-warn: var(--status-warn);
+  --color-bad: var(--status-bad);
+
+  --font-sans: Inter, system-ui, sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", "IBM Plex Mono", monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Numbers, IDs, timestamps, node names, epochs: anything that is *data* uses
+   monospace so columns align and never jitter on poll. */
+.font-data {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Respect prefers-reduced-motion globally as a safety net, in addition to
+   component-level motion-reduce: variants. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Brief highlight-fade for a value that changed on poll. Disabled entirely
+   under reduced motion via the block above (duration collapses to ~0). */
+@keyframes value-flash {
+  from {
+    background-color: color-mix(in srgb, var(--accent) 25%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+.value-flash {
+  animation: value-flash 1.2s ease-out;
+}
