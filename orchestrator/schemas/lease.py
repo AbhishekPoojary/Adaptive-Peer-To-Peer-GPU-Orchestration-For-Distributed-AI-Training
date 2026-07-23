@@ -11,6 +11,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from orchestrator.schemas.job import LeaseOut
+from orchestrator.schemas.training import TrainingResultIn
 
 _FORBID = ConfigDict(extra="forbid")
 
@@ -26,20 +27,39 @@ class ClaimResponse(BaseModel):
 
 
 class LeaseEpochRequest(BaseModel):
-    """Body carrying just the fencing epoch (renew / complete)."""
+    """Body carrying just the fencing epoch (renew)."""
 
     model_config = _FORBID
 
     lease_epoch: int = Field(ge=1)
 
 
+class LeaseCompleteRequest(BaseModel):
+    """Body of POST /leases/{id}/complete: fencing epoch plus an optional real
+    training result summary (M4). ``result`` is omitted entirely by callers
+    that have nothing to report (e.g. a non-training job)."""
+
+    model_config = _FORBID
+
+    lease_epoch: int = Field(ge=1)
+    result: TrainingResultIn | None = None
+
+
 class LeaseFailRequest(BaseModel):
-    """Body of POST /leases/{id}/fail: fencing epoch plus a real reason."""
+    """Body of POST /leases/{id}/fail: fencing epoch, a real reason, and an
+    optional real training result summary (M4)."""
 
     model_config = _FORBID
 
     lease_epoch: int = Field(ge=1)
     reason: str = Field(min_length=1, max_length=1024)
+    result: TrainingResultIn | None = None
 
 
-__all__ = ["ClaimResponse", "LeaseEpochRequest", "LeaseFailRequest", "LeaseOut"]
+__all__ = [
+    "ClaimResponse",
+    "LeaseCompleteRequest",
+    "LeaseEpochRequest",
+    "LeaseFailRequest",
+    "LeaseOut",
+]

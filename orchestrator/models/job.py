@@ -157,6 +157,15 @@ class Job(Base):
     )
     # Populated only by a real failure; NULL otherwise.
     failure_reason: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # Populated only when a real training run reported an outcome (M4, ADR-007
+    # execution): {"final_loss": f, "final_test_accuracy": f, "epochs_completed":
+    # n, "exit_code": n, "device": "cuda"|"cpu"}. NULL until the leaseholder's
+    # complete/fail call carries a real result summary — never fabricated, and
+    # individual fields may be null within it if the trainer never got that far
+    # (e.g. a Docker launch failure before any epoch ran).
+    result: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
 
     events: Mapped[list[JobEvent]] = relationship(
         back_populates="job",

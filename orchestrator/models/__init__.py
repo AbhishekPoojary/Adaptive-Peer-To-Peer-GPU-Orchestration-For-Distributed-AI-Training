@@ -23,6 +23,7 @@ from orchestrator.models.scheduling import (
     SchedulingDecision,
     SchedulingDecisionCandidate,
 )
+from orchestrator.models.training import TrainingLogLine, TrainingMetric
 
 __all__ = [
     "AuthChallenge",
@@ -37,6 +38,8 @@ __all__ = [
     "NodeTelemetrySample",
     "SchedulingDecision",
     "SchedulingDecisionCandidate",
+    "TrainingLogLine",
+    "TrainingMetric",
     "can_transition",
     "is_terminal",
 ]

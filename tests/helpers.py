@@ -29,6 +29,8 @@ TEST_ADMIN_KEY = "test-admin-key"
 ALL_TABLES = (
     "scheduling_decision_candidates",
     "scheduling_decisions",
+    "training_log_lines",
+    "training_metrics",
     "leases",
     "job_events",
     "jobs",

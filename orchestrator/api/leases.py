@@ -26,6 +26,7 @@ from orchestrator.models.node import Node
 from orchestrator.schemas.job import LeaseOut
 from orchestrator.schemas.lease import (
     ClaimResponse,
+    LeaseCompleteRequest,
     LeaseEpochRequest,
     LeaseFailRequest,
 )
@@ -119,14 +120,23 @@ async def renew(
 @router.post("/leases/{lease_id}/complete", response_model=LeaseOut)
 async def complete(
     lease_id: uuid.UUID,
-    body: LeaseEpochRequest,
+    body: LeaseCompleteRequest,
     node: Node = Depends(require_node_auth),
     session: AsyncSession = Depends(get_session),
 ) -> LeaseOut:
-    """Finish a lease successfully (epoch-fenced); job → COMPLETED."""
+    """Finish a lease successfully (epoch-fenced); job → COMPLETED.
+
+    ``body.result`` is the optional real training result summary (M4); when
+    present it is persisted to ``Job.result`` and shapes the plain-language
+    completion message.
+    """
     try:
         lease = await complete_lease(
-            session, lease_id=lease_id, node=node, epoch=body.lease_epoch
+            session,
+            lease_id=lease_id,
+            node=node,
+            epoch=body.lease_epoch,
+            result=body.result.model_dump() if body.result is not None else None,
         )
     except LeaseNotFoundError as exc:
         await session.rollback()
@@ -151,7 +161,12 @@ async def fail(
     node: Node = Depends(require_node_auth),
     session: AsyncSession = Depends(get_session),
 ) -> LeaseOut:
-    """Finish a lease as failed (epoch-fenced); job → FAILED with a reason."""
+    """Finish a lease as failed (epoch-fenced); job → FAILED with a reason.
+
+    ``body.result`` is the optional real training result summary (M4); when
+    present it is persisted to ``Job.result`` and shapes the plain-language
+    failure message.
+    """
     try:
         lease = await fail_lease(
             session,
@@ -159,6 +174,7 @@ async def fail(
             node=node,
             epoch=body.lease_epoch,
             reason=body.reason,
+            result=body.result.model_dump() if body.result is not None else None,
         )
     except LeaseNotFoundError as exc:
         await session.rollback()

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -166,15 +167,60 @@ async def renew_lease(
     epoch: int,
     settings: Settings,
 ) -> Lease:
-    """Extend an ACTIVE lease's TTL. Epoch-fenced. Caller commits."""
-    lease, _job = await _load_fenced(
+    """Extend an ACTIVE lease's TTL. Epoch-fenced. Caller commits.
+
+    A lease being renewed means the node is actively holding it — as of M4,
+    that means a real trainer container is running. The *first* renewal after
+    claim is also where the job makes its LEASED -> RUNNING transition (this
+    reuses the existing renew endpoint rather than adding a new "mark
+    running" REST call; idempotent because the second and later renewals see
+    the job already in RUNNING and skip it).
+    """
+    lease, job = await _load_fenced(
         session, lease_id=lease_id, node=node, epoch=epoch
     )
     now = datetime.now(UTC)
+    if job.state is JobState.LEASED:
+        transition_job(
+            session,
+            job,
+            JobState.RUNNING,
+            message="Training started on the leaseholder.",
+            extra={"lease_id": str(lease.id), "lease_epoch": lease.lease_epoch},
+            now=now,
+        )
     lease.renewed_at = now
     lease.expires_at = now + timedelta(seconds=settings.lease_ttl_seconds)
     await session.flush()
     return lease
+
+
+def _complete_message(result: dict[str, Any] | None) -> str:
+    """Plain-language completion message for the dashboard timeline (M4).
+
+    When a real training result is present and it reports a test accuracy,
+    surface it directly — that number is exactly what a user came here for.
+    Otherwise fall back to the pre-M4 generic message (non-training jobs, or a
+    completion with no result payload attached).
+    """
+    if result is not None and result.get("final_test_accuracy") is not None:
+        pct = result["final_test_accuracy"] * 100
+        epochs = result.get("epochs_completed") or 0
+        unit = "epoch" if epochs == 1 else "epochs"
+        return f"Training completed: final test accuracy {pct:.1f}% after {epochs} {unit}."
+    return "Job completed successfully by the leaseholder."
+
+
+def _fail_message(reason: str, result: dict[str, Any] | None) -> str:
+    """Plain-language failure message for the dashboard timeline (M4).
+
+    A real training result carrying an exit code gets the concise, specific
+    phrasing; otherwise the original reason-only message (M2/M3 behaviour, and
+    still exactly right for non-training failures like a Docker launch error).
+    """
+    if result is not None and result.get("exit_code") is not None:
+        return f"Training failed: exit code {result['exit_code']}."
+    return f"Job failed on the leaseholder: {reason}"
 
 
 async def complete_lease(
@@ -183,19 +229,28 @@ async def complete_lease(
     lease_id: uuid.UUID,
     node: Node,
     epoch: int,
+    result: dict[str, Any] | None = None,
 ) -> Lease:
-    """Finish a lease successfully: job → COMPLETED, node success += 1. Fenced."""
+    """Finish a lease successfully: job → COMPLETED, node success += 1. Fenced.
+
+    ``result`` is the optional real training result summary (M4) reported by
+    the leaseholder; when present it is persisted to ``Job.result`` verbatim
+    and shapes the audit message. Never fabricated — omitted entirely when the
+    caller has nothing to report.
+    """
     lease, job = await _load_fenced(
         session, lease_id=lease_id, node=node, epoch=epoch
     )
     now = datetime.now(UTC)
     lease.state = LeaseState.COMPLETED
     lease.released_at = now
+    if result is not None:
+        job.result = result
     transition_job(
         session,
         job,
         JobState.COMPLETED,
-        message="Job completed successfully by the leaseholder.",
+        message=_complete_message(result),
         extra={"lease_id": str(lease.id), "lease_epoch": lease.lease_epoch},
         now=now,
     )
@@ -215,8 +270,13 @@ async def fail_lease(
     node: Node,
     epoch: int,
     reason: str,
+    result: dict[str, Any] | None = None,
 ) -> Lease:
-    """Finish a lease as failed: job → FAILED, node failure += 1. Fenced."""
+    """Finish a lease as failed: job → FAILED, node failure += 1. Fenced.
+
+    ``result`` is the optional real training result summary (M4); when present
+    it is persisted to ``Job.result`` verbatim and shapes the audit message.
+    """
     lease, job = await _load_fenced(
         session, lease_id=lease_id, node=node, epoch=epoch
     )
@@ -224,11 +284,13 @@ async def fail_lease(
     lease.state = LeaseState.FAILED
     lease.released_at = now
     job.failure_reason = reason
+    if result is not None:
+        job.result = result
     transition_job(
         session,
         job,
         JobState.FAILED,
-        message=f"Job failed on the leaseholder: {reason}",
+        message=_fail_message(reason, result),
         extra={"lease_id": str(lease.id), "lease_epoch": lease.lease_epoch, "reason": reason},
         now=now,
     )

@@ -197,6 +197,7 @@ def _summary(job: Job) -> JobSummary:
         started_at=job.started_at,
         finished_at=job.finished_at,
         failure_reason=job.failure_reason,
+        result=job.result,
     )
 
 

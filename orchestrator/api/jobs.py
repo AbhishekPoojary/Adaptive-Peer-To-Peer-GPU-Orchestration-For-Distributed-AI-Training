@@ -22,6 +22,7 @@ from orchestrator.schemas.job import (
     JobSubmitRequest,
 )
 from orchestrator.schemas.scheduling import SchedulingDecisionListResponse
+from orchestrator.schemas.training import TrainingMetricListResponse, TrainingMetricOut
 from orchestrator.services.jobs import (
     IllegalTransitionError,
     JobNotFoundError,
@@ -32,6 +33,7 @@ from orchestrator.services.jobs import (
 )
 from orchestrator.services.loops import trigger_scheduler_pass
 from orchestrator.services.scheduling import list_scheduling_decisions
+from orchestrator.services.training import list_metrics
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -120,6 +122,39 @@ async def get_job_scheduling_decisions(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown job")
     decisions = await list_scheduling_decisions(session, job_id=job_id)
     return SchedulingDecisionListResponse(decisions=decisions)
+
+
+@router.get("/{job_id}/metrics", response_model=TrainingMetricListResponse)
+async def get_job_metrics(
+    job_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+) -> TrainingMetricListResponse:
+    """This job's real per-epoch metrics (M4), oldest first — the loss curve.
+
+    Fed exclusively by the WebSocket log/metric stream as a real training run
+    reports them; empty for a job that hasn't trained yet. 404 only if the job
+    itself is unknown.
+
+    # TODO(M8): user auth — unauthenticated for dev.
+    """
+    if await get_job_detail(session, job_id=job_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown job")
+    rows = await list_metrics(session, job_id=job_id)
+    return TrainingMetricListResponse(
+        metrics=[
+            TrainingMetricOut(
+                id=m.id,
+                job_id=m.job_id,
+                lease_id=m.lease_id,
+                epoch=m.epoch,
+                step=m.step,
+                loss=m.loss,
+                test_accuracy=m.test_accuracy,
+                ts=m.ts,
+            )
+            for m in rows
+        ]
+    )
 
 
 @router.post("/{job_id}/cancel", response_model=JobDetailResponse)

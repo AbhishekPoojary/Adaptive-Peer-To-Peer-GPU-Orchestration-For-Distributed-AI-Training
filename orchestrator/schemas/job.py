@@ -86,6 +86,11 @@ class JobSummary(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     failure_reason: str | None
+    # Real training result summary (M4), or null until a leaseholder reports
+    # one: {"final_loss", "final_test_accuracy", "epochs_completed",
+    # "exit_code", "device"}. Returned as a free-form dict like `spec` — the
+    # write boundary (TrainingResultIn) is what validates it.
+    result: dict[str, Any] | None = None
 
 
 class JobListResponse(BaseModel):
