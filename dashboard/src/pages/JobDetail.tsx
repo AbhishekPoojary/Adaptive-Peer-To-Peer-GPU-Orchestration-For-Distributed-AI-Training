@@ -1,10 +1,16 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useCancelJobMutation, useJobDetailQuery, useSchedulingDecisionsQuery } from "@/api/jobs";
+import {
+  useCancelJobMutation,
+  useJobDetailQuery,
+  useJobMetricsQuery,
+  useSchedulingDecisionsQuery,
+} from "@/api/jobs";
 import { ApiError } from "@/api/client";
-import { asJobEventDetail, asJobSpec, isTerminalJobState } from "@/api/types";
+import { asJobEventDetail, asJobResult, asJobSpec, isTerminalJobState } from "@/api/types";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { ErrorState } from "@/components/ErrorState";
+import { StatTile } from "@/components/StatTile";
 import { StatusPill } from "@/components/StatusPill";
 import { TechnicalDetails } from "@/components/TechnicalDetails";
 import { UpdatedAgo } from "@/components/UpdatedAgo";
@@ -28,6 +34,7 @@ export function JobDetail() {
   const query = useJobDetailQuery(jobId);
   const isAdaptive = query.data?.scheduler_name === "adaptive";
   const decisionsQuery = useSchedulingDecisionsQuery(isAdaptive ? jobId : undefined);
+  const metricsQuery = useJobMetricsQuery(jobId);
   const cancelMutation = useCancelJobMutation(jobId ?? "");
 
   if (query.isPending) {
@@ -52,6 +59,7 @@ export function JobDetail() {
 
   const job = query.data;
   const spec = asJobSpec(job.spec);
+  const result = asJobResult(job.result);
   const canCancel = !isTerminalJobState(job.state);
 
   async function handleConfirmCancel() {
@@ -92,6 +100,35 @@ export function JobDetail() {
           <span className="font-medium">Failure reason: </span>
           {job.failure_reason}
         </div>
+      )}
+
+      {result && (
+        <section className="rounded-md border border-hairline bg-panel p-4">
+          <h2 className="mb-3 text-sm font-semibold text-primary">Training result</h2>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <StatTile
+              label="Final test accuracy"
+              value={
+                result.final_test_accuracy !== null && result.final_test_accuracy !== undefined
+                  ? `${(result.final_test_accuracy * 100).toFixed(1)}%`
+                  : "—"
+              }
+            />
+            <StatTile
+              label="Final loss"
+              value={
+                result.final_loss !== null && result.final_loss !== undefined
+                  ? result.final_loss.toFixed(4)
+                  : "—"
+              }
+            />
+            <StatTile
+              label="Epochs completed"
+              value={result.epochs_completed !== undefined ? String(result.epochs_completed) : "—"}
+            />
+            <StatTile label="Device" value={result.device ?? "—"} />
+          </div>
+        </section>
       )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -214,6 +251,38 @@ export function JobDetail() {
                 )}
               </div>
             ))}
+          </div>
+        </section>
+      )}
+
+      {metricsQuery.data && metricsQuery.data.metrics.length > 0 && (
+        <section className="rounded-md border border-hairline bg-panel p-4">
+          <h2 className="mb-3 text-sm font-semibold text-primary">Training metrics</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-hairline text-tertiary">
+                  <th className="px-2 py-1 text-left">Epoch</th>
+                  <th className="px-2 py-1 text-right">Loss</th>
+                  <th className="px-2 py-1 text-right">Test accuracy</th>
+                  <th className="px-2 py-1 text-right">Recorded</th>
+                </tr>
+              </thead>
+              <tbody>
+                {metricsQuery.data.metrics.map((m) => (
+                  <tr key={m.id} className="font-data text-secondary">
+                    <td className="px-2 py-1 text-primary">{m.epoch}</td>
+                    <td className="px-2 py-1 text-right">{m.loss.toFixed(4)}</td>
+                    <td className="px-2 py-1 text-right">
+                      {m.test_accuracy !== null ? `${(m.test_accuracy * 100).toFixed(1)}%` : "—"}
+                    </td>
+                    <td className="px-2 py-1 text-right text-tertiary">
+                      {formatTimestamp(m.ts)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </section>
       )}

@@ -58,6 +58,20 @@ export function useSchedulingDecisionsQuery(jobId: string | undefined) {
   });
 }
 
+export function useJobMetricsQuery(jobId: string | undefined) {
+  return useQuery({
+    queryKey: ["jobs", jobId, "metrics"],
+    queryFn: async () => {
+      if (!jobId) throw new Error("jobId is required");
+      return unwrap(
+        await api.GET("/jobs/{job_id}/metrics", { params: { path: { job_id: jobId } } }),
+      );
+    },
+    enabled: Boolean(jobId),
+    refetchInterval: POLL_INTERVAL_MS,
+  });
+}
+
 export function useSubmitJobMutation() {
   const queryClient = useQueryClient();
   return useMutation({

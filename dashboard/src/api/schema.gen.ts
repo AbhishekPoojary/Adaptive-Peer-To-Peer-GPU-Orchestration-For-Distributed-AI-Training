@@ -257,6 +257,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/jobs/{job_id}/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Metrics
+         * @description This job's real per-epoch metrics (M4), oldest first — the loss curve.
+         *
+         *     Fed exclusively by the WebSocket log/metric stream as a real training run
+         *     reports them; empty for a job that hasn't trained yet. 404 only if the job
+         *     itself is unknown.
+         *
+         *     # TODO(M8): user auth — unauthenticated for dev.
+         */
+        get: operations["get_job_metrics_jobs__job_id__metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/jobs/{job_id}/cancel": {
         parameters: {
             query?: never;
@@ -331,6 +357,10 @@ export interface paths {
         /**
          * Complete
          * @description Finish a lease successfully (epoch-fenced); job → COMPLETED.
+         *
+         *     ``body.result`` is the optional real training result summary (M4); when
+         *     present it is persisted to ``Job.result`` and shapes the plain-language
+         *     completion message.
          */
         post: operations["complete_leases__lease_id__complete_post"];
         delete?: never;
@@ -351,6 +381,10 @@ export interface paths {
         /**
          * Fail
          * @description Finish a lease as failed (epoch-fenced); job → FAILED with a reason.
+         *
+         *     ``body.result`` is the optional real training result summary (M4); when
+         *     present it is persisted to ``Job.result`` and shapes the plain-language
+         *     failure message.
          */
         post: operations["fail_leases__lease_id__fail_post"];
         delete?: never;
@@ -560,6 +594,8 @@ export interface components {
             finished_at: string | null;
             /** Failure Reason */
             failure_reason: string | null;
+            /** Result */
+            result?: Record<string, never> | null;
             /** Events */
             events: components["schemas"]["JobEventOut"][];
             /** Leases */
@@ -661,10 +697,23 @@ export interface components {
             finished_at: string | null;
             /** Failure Reason */
             failure_reason: string | null;
+            /** Result */
+            result?: Record<string, never> | null;
+        };
+        /**
+         * LeaseCompleteRequest
+         * @description Body of POST /leases/{id}/complete: fencing epoch plus an optional real
+         *     training result summary (M4). ``result`` is omitted entirely by callers
+         *     that have nothing to report (e.g. a non-training job).
+         */
+        LeaseCompleteRequest: {
+            /** Lease Epoch */
+            lease_epoch: number;
+            result?: components["schemas"]["TrainingResultIn"] | null;
         };
         /**
          * LeaseEpochRequest
-         * @description Body carrying just the fencing epoch (renew / complete).
+         * @description Body carrying just the fencing epoch (renew).
          */
         LeaseEpochRequest: {
             /** Lease Epoch */
@@ -672,13 +721,15 @@ export interface components {
         };
         /**
          * LeaseFailRequest
-         * @description Body of POST /leases/{id}/fail: fencing epoch plus a real reason.
+         * @description Body of POST /leases/{id}/fail: fencing epoch, a real reason, and an
+         *     optional real training result summary (M4).
          */
         LeaseFailRequest: {
             /** Lease Epoch */
             lease_epoch: number;
             /** Reason */
             reason: string;
+            result?: components["schemas"]["TrainingResultIn"] | null;
         };
         /**
          * LeaseOut
@@ -946,6 +997,69 @@ export interface components {
             token_type: string;
             /** Expires In */
             expires_in: number;
+        };
+        /**
+         * TrainingMetricListResponse
+         * @description Body of GET /jobs/{job_id}/metrics — this job's real loss/accuracy curve.
+         */
+        TrainingMetricListResponse: {
+            /** Metrics */
+            metrics: components["schemas"]["TrainingMetricOut"][];
+        };
+        /**
+         * TrainingMetricOut
+         * @description One real per-epoch metric row, as recorded from the WebSocket stream.
+         */
+        TrainingMetricOut: {
+            /** Id */
+            id: number;
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /** Epoch */
+            epoch: number;
+            /** Step */
+            step: number | null;
+            /** Loss */
+            loss: number;
+            /** Test Accuracy */
+            test_accuracy: number | null;
+            /**
+             * Ts
+             * Format: date-time
+             */
+            ts: string;
+        };
+        /**
+         * TrainingResultIn
+         * @description Optional result summary attached to a lease's terminal REST call.
+         *
+         *     All fields are individually nullable: a Docker launch failure before the
+         *     trainer ever started means every field but ``exit_code`` (itself possibly
+         *     unknown) is genuinely unknown, and ``null`` is the honest representation
+         *     — never a fabricated 0 or "cpu" guess.
+         */
+        TrainingResultIn: {
+            /** Final Loss */
+            final_loss?: number | null;
+            /** Final Test Accuracy */
+            final_test_accuracy?: number | null;
+            /**
+             * Epochs Completed
+             * @default 0
+             */
+            epochs_completed: number;
+            /** Exit Code */
+            exit_code?: number | null;
+            /** Device */
+            device?: ("cuda" | "cpu") | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -1327,6 +1441,37 @@ export interface operations {
             };
         };
     };
+    get_job_metrics_jobs__job_id__metrics_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrainingMetricListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     cancel_job_endpoint_jobs__job_id__cancel_post: {
         parameters: {
             query?: never;
@@ -1441,7 +1586,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["LeaseEpochRequest"];
+                "application/json": components["schemas"]["LeaseCompleteRequest"];
             };
         };
         responses: {

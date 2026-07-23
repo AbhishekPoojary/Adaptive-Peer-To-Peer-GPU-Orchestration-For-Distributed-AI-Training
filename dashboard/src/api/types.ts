@@ -17,6 +17,27 @@ export type JobSubmitRequest = components["schemas"]["JobSubmitRequest"];
 export type SchedulingDecision = components["schemas"]["SchedulingDecisionOut"];
 export type SchedulingCandidate = components["schemas"]["SchedulingCandidateOut"];
 
+export type TrainingMetric = components["schemas"]["TrainingMetricOut"];
+
+/**
+ * `Job(Summary|Detail).result` is free-form JSONB on the backend (M4): null
+ * until a real training run reports an outcome, otherwise
+ * {final_loss, final_test_accuracy, epochs_completed, exit_code, device}
+ * (orchestrator/models/job.py). Narrowed defensively like `asJobSpec` below —
+ * nothing here is invented if a field is ever absent.
+ */
+export interface JobResult {
+  final_loss?: number | null;
+  final_test_accuracy?: number | null;
+  epochs_completed?: number;
+  exit_code?: number | null;
+  device?: "cuda" | "cpu" | null;
+}
+
+export function asJobResult(result: unknown): JobResult | null {
+  return (result ?? null) as JobResult | null;
+}
+
 /**
  * `Job(Summary|Detail).spec` and `JobEventOut.detail` are stored as free-form
  * JSONB on the backend (`dict[str, Any]`), so openapi-typescript can only
