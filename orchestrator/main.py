@@ -12,6 +12,7 @@ from orchestrator.api.health import router as health_router
 from orchestrator.api.jobs import router as jobs_router
 from orchestrator.api.leases import router as leases_router
 from orchestrator.api.nodes import router as nodes_router
+from orchestrator.api.streaming import router as streaming_router
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.db import dispose_engine, get_engine
 from orchestrator.core.logging import configure_logging
@@ -68,6 +69,7 @@ def create_app() -> FastAPI:
     app.include_router(nodes_router)
     app.include_router(jobs_router)
     app.include_router(leases_router)
+    app.include_router(streaming_router)
     return app
 
 
