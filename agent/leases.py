@@ -65,14 +65,18 @@ def held_from_response(lease: dict[str, Any]) -> HeldLease:
 async def claim_lease(
     client: httpx.AsyncClient, *, orchestrator: str, node_id: str, access_token: str
 ) -> dict[str, Any] | None:
-    """Poll for a job scheduled to this node. Returns the lease dict or None."""
+    """Poll for a rank slot assigned to this node. Returns the full claim
+    response (``{"lease": ..., "rendezvous": ...}``) on a grant, or ``None`` on
+    an empty-handed poll. The ``rendezvous`` block (M5) carries the
+    rank/world_size/endpoint the caller needs to launch the rank under torchrun.
+    """
     resp = await client.post(
         f"{orchestrator}/nodes/{node_id}/leases/claim",
         headers={"Authorization": f"Bearer {access_token}"},
     )
     resp.raise_for_status()
-    lease = resp.json()["lease"]
-    return lease if lease is not None else None
+    body: dict[str, Any] = resp.json()
+    return body if body.get("lease") is not None else None
 
 
 async def renew_lease(

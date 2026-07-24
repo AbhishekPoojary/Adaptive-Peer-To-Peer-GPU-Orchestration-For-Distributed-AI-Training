@@ -53,7 +53,7 @@ from agent.leases import (
     held_from_response,
     renew_lease,
 )
-from agent.runtime.docker_launcher import TrainerLaunchConfig
+from agent.runtime.docker_launcher import RendezvousSpec, TrainerLaunchConfig
 from agent.runtime.execution import DockerLaunchError, ExecutionResult, run_lease_execution
 from agent.telemetry.latency import RttEwma, Stopwatch
 from agent.telemetry.nvml import GpuInventoryEntry, GpuTelemetryEntry, collect_gpu_telemetry
@@ -325,6 +325,25 @@ def _node_has_gpu() -> bool:
     return bool(gpus)
 
 
+def _rendezvous_spec(rendezvous: dict[str, Any] | None) -> RendezvousSpec | None:
+    """Build the launch-side ``RendezvousSpec`` from the claim response's
+    ``rendezvous`` block (M5). ``None`` (or a missing block) means the M4
+    single-process path — the container is launched without torchrun."""
+    if rendezvous is None:
+        return None
+    return RendezvousSpec(
+        world_size=int(rendezvous["world_size"]),
+        rank=int(rendezvous["rank"]),
+        is_rendezvous_host=bool(rendezvous["is_rendezvous_host"]),
+        backend=str(rendezvous["backend"]),
+        endpoint=str(rendezvous["endpoint"]),
+        rdzv_id=str(rendezvous["rdzv_id"]),
+        network=str(rendezvous["network"]),
+        host_alias=str(rendezvous["host_alias"]),
+        max_restarts=int(rendezvous["max_restarts"]),
+    )
+
+
 async def _report_result(
     client: httpx.AsyncClient,
     *,
@@ -408,20 +427,24 @@ async def _service_lease(
     """
     if executing is None:
         try:
-            lease = await claim_lease(
+            claimed = await claim_lease(
                 client, orchestrator=orchestrator, node_id=node_id, access_token=access_token
             )
         except httpx.HTTPError as exc:
             logger.error("lease claim failed: %s", exc)
             return None
-        if lease is None:
+        if claimed is None:
             return None
+        lease = claimed["lease"]
+        rendezvous = _rendezvous_spec(claimed.get("rendezvous"))
         held = held_from_response(lease)
         logger.info(
-            "lease claimed: id=%s epoch=%d job=%s",
+            "lease claimed: id=%s epoch=%d job=%s rank=%s world_size=%s",
             held.lease_id,
             held.lease_epoch,
             held.job_id,
+            rendezvous.rank if rendezvous is not None else 0,
+            rendezvous.world_size if rendezvous is not None else 1,
         )
 
         if release_after is not None:
@@ -480,6 +503,7 @@ async def _service_lease(
                 job_spec=job_spec,
                 has_gpu=has_gpu,
                 launch_config=launch_config,
+                rendezvous=rendezvous,
             )
         )
         return ExecutingLease(held=held, task=task)

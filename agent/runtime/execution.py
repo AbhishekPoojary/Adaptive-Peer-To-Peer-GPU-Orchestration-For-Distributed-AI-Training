@@ -23,10 +23,12 @@ from typing import Any
 import docker
 
 from agent.runtime.docker_launcher import (
+    RendezvousSpec,
     SupportsLogs,
     TrainerLaunchConfig,
     build_run_kwargs,
     ensure_dataset_cache_volume,
+    ensure_rendezvous_network,
     launch_trainer_container,
     stream_container_logs,
     wait_for_exit,
@@ -105,13 +107,20 @@ async def run_lease_execution(
     job_spec: dict[str, Any],
     has_gpu: bool,
     launch_config: TrainerLaunchConfig,
+    rendezvous: RendezvousSpec | None = None,
 ) -> ExecutionResult:
     """Launch the trainer container for this lease and run it to completion,
     forwarding its real output over the WebSocket stream as it happens.
 
-    Raises :class:`DockerLaunchError` if the container itself never started.
+    ``rendezvous`` (M5): when present with ``world_size > 1`` the container is
+    launched under torchrun for real DDP, joining the cohort's shared network
+    (created here if absent). ``None``/``world_size == 1`` is the M4
+    single-process path. Raises :class:`DockerLaunchError` if the container
+    itself never started.
     """
     ensure_dataset_cache_volume(docker_client, name=launch_config.dataset_cache_volume)
+    if rendezvous is not None and rendezvous.world_size > 1:
+        ensure_rendezvous_network(docker_client, name=rendezvous.network)
     run_kwargs = build_run_kwargs(
         config=launch_config,
         job_spec=job_spec,
@@ -119,6 +128,7 @@ async def run_lease_execution(
         lease_id=lease_id,
         lease_epoch=lease_epoch,
         has_gpu=has_gpu,
+        rendezvous=rendezvous,
     )
     try:
         container = await asyncio.to_thread(
@@ -128,11 +138,13 @@ async def run_lease_execution(
         raise DockerLaunchError(str(exc)) from exc
 
     logger.info(
-        "trainer container launched: id=%s lease=%s job=%s has_gpu=%s",
+        "trainer container launched: id=%s lease=%s job=%s has_gpu=%s rank=%s world_size=%s",
         getattr(container, "id", "?"),
         lease_id,
         job_id,
         has_gpu,
+        rendezvous.rank if rendezvous is not None else 0,
+        rendezvous.world_size if rendezvous is not None else 1,
     )
 
     ws_url = stream_url(

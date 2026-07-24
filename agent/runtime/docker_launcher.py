@@ -1,4 +1,4 @@
-"""Docker Engine launch of the trainer container (ADR-007, M4).
+"""Docker Engine launch of the trainer container (ADR-007, M4; torchrun M5).
 
 Exact isolation profile — fixed by ADR-007, do not deviate:
   * ``--rm``                         (auto-cleanup)
@@ -12,11 +12,18 @@ Exact isolation profile — fixed by ADR-007, do not deviate:
   * a named dataset-cache volume mounted at ``/data-cache`` (created once per
     node if absent), so downloads are reused across runs
   * ``--memory`` / ``--pids-limit`` from node config
-  * bridge networking (never ``--network host``)
+  * bridge networking, never ``--network host``: a single-rank job uses the
+    default bridge; a multi-rank cohort (M5) uses a shared *user-defined* bridge
+    network so ranks resolve each other by name for c10d rendezvous — still a
+    bridge, never host networking, so the isolation profile is preserved
   * no ``--privileged``, no extra ``--cap-add``
 
+For a multi-rank job (M5, ADR-005) the entrypoint is ``torchrun`` with real
+c10d rendezvous (``--rdzv-backend=c10d`` etc. — see ``_torchrun_command``); a
+single-rank job keeps the M4 image default (``python train.py``), unchanged.
+
 ``build_run_kwargs`` is pure and side-effect free specifically so the exact
-flags/mounts can be unit-tested without a Docker daemon — see
+flags/mounts/torchrun-argv can be unit-tested without a Docker daemon — see
 ``tests/test_docker_launcher.py``'s ``FakeDockerClient``. Everything else here
 is a thin wrapper around the real ``docker`` SDK and is exercised by the
 end-to-end verification run, not a unit test.
@@ -53,6 +60,27 @@ class TrainerLaunchConfig:
     dataset_cache_volume: str = DEFAULT_DATASET_CACHE_VOLUME
 
 
+@dataclass(frozen=True)
+class RendezvousSpec:
+    """The cohort/rendezvous fields the orchestrator hands an agent at claim
+    time (M5, ADR-005) — everything ``build_run_kwargs`` needs to launch this
+    rank under ``torchrun`` with real c10d rendezvous.
+
+    ``world_size == 1`` is the single-process path (no torchrun); the fields
+    below are then unused.
+    """
+
+    world_size: int
+    rank: int
+    is_rendezvous_host: bool
+    backend: str
+    endpoint: str
+    rdzv_id: str
+    network: str
+    host_alias: str
+    max_restarts: int
+
+
 class SupportsLogs(Protocol):
     """The subset of docker-py's ``Container`` this module relies on —
     documents the real interface and lets tests substitute a lightweight
@@ -66,6 +94,25 @@ class SupportsLogs(Protocol):
     def id(self) -> str: ...
 
 
+def _torchrun_command(rendezvous: RendezvousSpec) -> list[str]:
+    """The ``torchrun`` argv that launches this rank with real c10d rendezvous
+    (ADR-005). Every rank runs the same command; c10d assigns the actual torch
+    rank at rendezvous, and ``--rdzv-endpoint`` points every rank at the
+    rendezvous host. ``--nproc-per-node=1`` because each agent/container is one
+    rank for now; ``--max-restarts`` is the bounded elastic flag (real and
+    present even though M5 does not exercise deep elasticity)."""
+    return [
+        "torchrun",
+        f"--nnodes={rendezvous.world_size}",
+        "--nproc-per-node=1",
+        "--rdzv-backend=c10d",
+        f"--rdzv-id={rendezvous.rdzv_id}",
+        f"--rdzv-endpoint={rendezvous.endpoint}",
+        f"--max-restarts={rendezvous.max_restarts}",
+        "train.py",
+    ]
+
+
 def build_run_kwargs(
     *,
     config: TrainerLaunchConfig,
@@ -74,15 +121,23 @@ def build_run_kwargs(
     lease_id: str,
     lease_epoch: int,
     has_gpu: bool,
+    rendezvous: RendezvousSpec | None = None,
 ) -> dict[str, Any]:
     """Build the exact kwargs for ``docker_client.containers.run(**kwargs)``.
 
     ``job_spec`` is the job's validated spec dict (``dataset``, ``model``,
-    ``epochs``, ``batch_size``, ``learning_rate`` — the existing M2 shape;
-    nothing new is invented here). ``has_gpu`` must reflect this node's own
-    real, freshly-checked hardware (not a cached enrollment-time value) — GPU
-    device requests are attached only when true, so a CPU-only peer node never
-    claims a GPU it does not have.
+    ``epochs``, ``batch_size``, ``learning_rate``). ``has_gpu`` must reflect this
+    node's own real, freshly-checked hardware (not a cached enrollment-time
+    value) — GPU device requests are attached only when true, so a CPU-only peer
+    node never claims a GPU it does not have.
+
+    ``rendezvous`` (M5): when present with ``world_size > 1`` the container is
+    launched under ``torchrun`` for real DDP — the entrypoint becomes the
+    torchrun argv, ``DIST_BACKEND`` is set, and the container joins the cohort's
+    shared user-defined network (so ranks resolve each other by name) with the
+    rendezvous host taking the agreed network name/alias so its endpoint
+    resolves. ``world_size == 1`` (or ``None``) keeps the M4 single-process path
+    exactly: image default entrypoint, plain bridge networking.
     """
     environment = {
         "DATASET": str(job_spec["dataset"]),
@@ -106,11 +161,27 @@ def build_run_kwargs(
         "volumes": {config.dataset_cache_volume: {"bind": "/data-cache", "mode": "rw"}},
         "mem_limit": config.memory_limit,
         "pids_limit": config.pids_limit,
-        "network_mode": "bridge",
         "privileged": False,
         "stdout": True,
         "stderr": True,
     }
+
+    is_ddp = rendezvous is not None and rendezvous.world_size > 1
+    if is_ddp:
+        assert rendezvous is not None  # narrowed by is_ddp
+        environment["DIST_BACKEND"] = rendezvous.backend
+        kwargs["command"] = _torchrun_command(rendezvous)
+        # Cohort members share a user-defined network so c10d ranks reach each
+        # other by name (ADR-007-preserving: a bridge-type network, never host
+        # networking). The rendezvous host takes the agreed name so its
+        # endpoint resolves for every rank.
+        kwargs["network"] = rendezvous.network
+        if rendezvous.is_rendezvous_host:
+            kwargs["name"] = rendezvous.host_alias
+    else:
+        # M4 single-process path: image default entrypoint, plain bridge.
+        kwargs["network_mode"] = "bridge"
+
     if has_gpu:
         kwargs["device_requests"] = [
             docker.types.DeviceRequest(count=-1, capabilities=[["gpu"]])
@@ -125,6 +196,25 @@ def ensure_dataset_cache_volume(client: docker.DockerClient, *, name: str) -> No
     except docker.errors.NotFound:
         logger.info("creating dataset cache volume %r", name)
         client.volumes.create(name=name)
+
+
+def ensure_rendezvous_network(client: docker.DockerClient, *, name: str) -> None:
+    """Create the cohort's shared user-defined bridge network if absent (M5).
+
+    Every cohort member ensures it before launching, so whichever agent gets
+    there first creates it. A concurrent "already exists" race is benign and
+    ignored — the network only needs to exist, not to be created by us."""
+    try:
+        client.networks.get(name)
+        return
+    except docker.errors.NotFound:
+        pass
+    try:
+        logger.info("creating rendezvous network %r", name)
+        client.networks.create(name=name, driver="bridge", check_duplicate=True)
+    except docker.errors.APIError as exc:
+        # Another cohort member created it between our get and create — fine.
+        logger.info("rendezvous network %r already present (%s)", name, exc)
 
 
 def launch_trainer_container(client: docker.DockerClient, *, run_kwargs: dict[str, Any]) -> Any:
