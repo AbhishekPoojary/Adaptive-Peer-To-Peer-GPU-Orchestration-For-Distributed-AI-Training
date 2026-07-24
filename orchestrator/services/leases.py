@@ -285,6 +285,19 @@ async def renew_lease(
     return lease
 
 
+def _result_has_metrics(result: dict[str, Any] | None) -> bool:
+    """True iff a training result actually carries measured numbers.
+
+    A rank>0 DDP worker completes its lease with an all-null result payload (it
+    trains silently — only rank 0 reports real metrics). This distinguishes that
+    placeholder from rank 0's real result so the cohort's job.result is populated
+    from the rank that actually measured accuracy/loss, whatever order the
+    cohort's completes arrive in."""
+    if result is None:
+        return False
+    return result.get("final_test_accuracy") is not None or result.get("final_loss") is not None
+
+
 def _complete_message(result: dict[str, Any] | None) -> str:
     """Plain-language completion message for the dashboard timeline (M4).
 
@@ -335,9 +348,11 @@ async def complete_lease(
     lease.state = LeaseState.COMPLETED
     lease.released_at = now
     # Only rank 0 (the rendezvous host) carries the real training result; a
-    # rank>0 agent trains silently and reports result=None. Never clobber a real
-    # result with a null one, whatever order the cohort's completes arrive in.
-    if result is not None and job.result is None:
+    # rank>0 agent trains silently and reports an all-null payload. Populate
+    # job.result from the rank that actually measured metrics, and never clobber
+    # a real result with a null one — whatever order the cohort's completes
+    # arrive in.
+    if result is not None and (job.result is None or _result_has_metrics(result)):
         job.result = result
     # Every rank that finishes its own work is a real success for its node.
     await session.execute(

@@ -1,15 +1,15 @@
-"""Real training entrypoint for the trainer container (M4).
+"""Real training entrypoint for the trainer container (M4 single-process, M5 DDP).
 
 Driven entirely by environment variables — no hidden config:
 
     DATASET        "cifar10" | "mnist"
     MODEL          free text; only "small_cnn" (a compact, dataset-agnostic
-                   CNN — see SmallCNN below) is implemented in M4. Any other
-                   value is honestly logged as unrecognized and SmallCNN is
-                   used anyway, rather than silently pretending to run
-                   whatever architecture name was requested.
+                   CNN — see SmallCNN below) is implemented. Any other value is
+                   honestly logged as unrecognized and SmallCNN is used anyway,
+                   rather than silently pretending to run whatever architecture
+                   name was requested.
     EPOCHS         positive int
-    BATCH_SIZE     positive int
+    BATCH_SIZE     positive int  (per-rank batch size under DDP)
     LEARNING_RATE  positive float
     JOB_ID         opaque string, forwarded into logs only
     LEASE_ID       opaque string, forwarded into logs only
@@ -18,17 +18,32 @@ Driven entirely by environment variables — no hidden config:
                       volume, not baked into the image, so repeated runs on
                       the same node reuse the download)
     NUM_WORKERS    DataLoader worker count (default 2)
+    DIST_BACKEND   torch.distributed backend when run under torchrun: "gloo"
+                   (default, M5's verified backend on shared/mixed hardware) or
+                   "nccl" (intended once real distinct multi-GPU hardware
+                   exists — ADR-005). Ignored in the single-process path.
+
+Distributed (DDP, M5, ADR-005): when launched under ``torchrun`` the launcher
+sets ``WORLD_SIZE`` > 1 (plus ``RANK``/``LOCAL_RANK``); this file then joins the
+process group, wraps the model in ``DistributedDataParallel``, shards the
+training set with a ``DistributedSampler`` (each rank trains on a distinct
+slice), and lets DDP all-reduce gradients across ranks every step — so N real
+processes train one model together. Only rank 0 reports metrics/final lines to
+avoid duplicate/conflicting rows; every rank genuinely participates in the
+gradient sync (a silent rank>0 would break DDP's collective, not merely omit
+logs). ``WORLD_SIZE`` unset or 1 is the M4 single-process path, preserved
+exactly.
 
 Every dataset is the real torchvision CIFAR-10/MNIST download, split exactly
 as torchvision ships it (the canonical test set is the held-out set — never
 shuffled into train). Every forward/backward/optimizer step is real; there is
 no synthetic data and no sleep-based stand-in for compute anywhere in this
-file (CONTRIBUTING.md rule 4). Trains on GPU when available, otherwise CPU
-with an explicit, honest log line — GPU use is never claimed when it did not
-happen.
+file (CONTRIBUTING.md rule 4). Trains on GPU when available (single-process, or
+DDP with the nccl backend), otherwise CPU with an explicit, honest log line —
+GPU use is never claimed when it did not happen.
 
-Machine-readable contract (stdout, one exact JSON line per event — nothing
-else on stdout may match this shape):
+Machine-readable contract (rank-0 stdout, one exact JSON line per event —
+nothing else on stdout may match this shape):
     per epoch:  {"type": "metric", "epoch": N, "loss": F, "test_accuracy": F}
     on success: {"type": "final", "epochs_completed": N, "final_loss": F,
                  "final_test_accuracy": F, "device": "cuda"|"cpu"}
@@ -46,12 +61,15 @@ import json
 import os
 import sys
 import time
+from dataclasses import dataclass
 from typing import Literal
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F  # noqa: N812 - idiomatic PyTorch import alias
-from torch.utils.data import DataLoader
+from torch.nn.parallel import DistributedDataParallel
+from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import datasets, transforms
 
 # --- Dataset-specific real normalization stats (standard, published values,
@@ -140,6 +158,62 @@ def _require_env(name: str) -> str:
     return value
 
 
+@dataclass(frozen=True)
+class DistConfig:
+    """Distributed run configuration read from the torchrun-set environment.
+
+    ``distributed`` is False for the M4 single-process path (``WORLD_SIZE`` unset
+    or 1). When True, ``rank``/``world_size``/``local_rank`` come from torchrun
+    and ``backend`` from ``DIST_BACKEND`` (default gloo).
+    """
+
+    distributed: bool
+    rank: int
+    world_size: int
+    local_rank: int
+    backend: str
+
+    @property
+    def is_main(self) -> bool:
+        """Only rank 0 reports metrics/final lines (avoids duplicate rows)."""
+        return self.rank == 0
+
+
+def _read_dist_config() -> DistConfig:
+    """Read the distributed topology torchrun exports into the environment.
+
+    ``WORLD_SIZE`` > 1 means this process is one rank of a torchrun-launched
+    cohort; anything else is the single-process path."""
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    if world_size <= 1:
+        return DistConfig(
+            distributed=False, rank=0, world_size=1, local_rank=0, backend="none"
+        )
+    return DistConfig(
+        distributed=True,
+        rank=int(os.environ.get("RANK", "0")),
+        world_size=world_size,
+        local_rank=int(os.environ.get("LOCAL_RANK", "0")),
+        backend=os.environ.get("DIST_BACKEND", "gloo").lower(),
+    )
+
+
+def _select_device(dist_config: DistConfig) -> torch.device:
+    """Pick the real compute device, honestly.
+
+    Single-process: GPU when available, else CPU (M4 behaviour, unchanged).
+    DDP with nccl: this rank's own GPU (cuda:local_rank). DDP with gloo: CPU —
+    gloo is a CPU collectives backend, and M5's verification runs it on the
+    shared-single-GPU / mixed-hardware dev box where two real GPU processes
+    cannot coexist (ADR-010). GPU use is never claimed when it did not happen.
+    """
+    if not dist_config.distributed:
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if dist_config.backend == "nccl" and torch.cuda.is_available():
+        return torch.device(f"cuda:{dist_config.local_rank}")
+    return torch.device("cpu")
+
+
 def _build_datasets(
     dataset_name: Literal["cifar10", "mnist"], cache_dir: str
 ) -> tuple[torch.utils.data.Dataset, torch.utils.data.Dataset, int, int]:
@@ -181,6 +255,25 @@ def _build_datasets(
     raise RuntimeError(f"unsupported DATASET '{dataset_name}'")
 
 
+def _epoch_mean_loss(
+    running_loss: float, n_batches: int, dist_config: DistConfig, device: torch.device
+) -> float:
+    """The epoch's mean training loss.
+
+    Single-process: this process's own mean. DDP: the true cross-rank mean —
+    ``running_loss`` and ``n_batches`` are all-reduced (SUM) so rank 0 reports a
+    loss computed over the whole dataset (every rank's shard), directly
+    comparable to the single-process baseline. The all-reduce is a real
+    collective every rank joins, so it also confirms the process group is live.
+    """
+    if not dist_config.distributed:
+        return running_loss / max(n_batches, 1)
+    totals = torch.tensor([running_loss, float(n_batches)], device=device)
+    dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+    summed_loss, summed_batches = totals[0].item(), totals[1].item()
+    return summed_loss / max(summed_batches, 1.0)
+
+
 def main() -> None:
     dataset_name = _require_env("DATASET").lower()
     if dataset_name not in ("cifar10", "mnist"):
@@ -203,43 +296,82 @@ def main() -> None:
     if learning_rate <= 0:
         raise RuntimeError(f"LEARNING_RATE must be > 0, got {learning_rate}")
 
+    dist_config = _read_dist_config()
+    device = _select_device(dist_config)
+
+    def log(message: str) -> None:
+        """Human-readable log line, rank-tagged under DDP. Never the metric shape."""
+        if dist_config.distributed:
+            _log(f"[rank {dist_config.rank}/{dist_config.world_size}] {message}")
+        else:
+            _log(message)
+
     if model_name.lower() not in ("small_cnn", "cnn"):
-        _log(
-            f"MODEL='{model_name}' is not implemented; only 'small_cnn' exists in M4 — "
+        log(
+            f"MODEL='{model_name}' is not implemented; only 'small_cnn' exists — "
             f"using SmallCNN honestly rather than fabricating another architecture."
         )
 
-    _log(
+    log(
         f"job_id={job_id} lease_id={lease_id} lease_epoch={lease_epoch} "
         f"dataset={dataset_name} model={model_name} epochs={epochs} "
-        f"batch_size={batch_size} learning_rate={learning_rate}"
+        f"batch_size={batch_size}(per-rank) learning_rate={learning_rate}"
     )
-    _log(f"torch={torch.__version__} cuda_build={torch.version.cuda}")
+    log(f"torch={torch.__version__} cuda_build={torch.version.cuda}")
 
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-        _log(f"CUDA available: training on GPU ({torch.cuda.get_device_name(device)})")
+    if dist_config.distributed:
+        # env:// init: torchrun's c10d rendezvous already exported RANK/WORLD_SIZE
+        # and the rendezvous endpoint; init_process_group forms the group.
+        log(
+            f"DDP: joining process group backend={dist_config.backend} "
+            f"world_size={dist_config.world_size} rank={dist_config.rank} "
+            f"local_rank={dist_config.local_rank}"
+        )
+        dist.init_process_group(backend=dist_config.backend)
+        log("DDP: process group established (rendezvous complete)")
+
+    if device.type == "cuda":
+        log(f"training on GPU ({torch.cuda.get_device_name(device)})")
     else:
-        device = torch.device("cpu")
-        _log("CUDA not available: training on CPU (honest fallback, no GPU is being used)")
+        reason = (
+            "DDP gloo backend is CPU collectives"
+            if dist_config.distributed
+            else "CUDA not available"
+        )
+        log(f"training on CPU ({reason}; no GPU is being used) — honest")
 
-    _log(f"loading real dataset '{dataset_name}' into cache dir '{cache_dir}' (torchvision)...")
+    log(f"loading real dataset '{dataset_name}' into cache dir '{cache_dir}' (torchvision)...")
     t0 = time.monotonic()
     train_set, test_set, in_channels, num_classes = _build_datasets(dataset_name, cache_dir)
-    _log(
+    log(
         f"dataset ready in {time.monotonic() - t0:.1f}s: "
         f"{len(train_set)} train / {len(test_set)} test examples (canonical split)"
     )
 
     pin_memory = device.type == "cuda"
+    # DDP: a DistributedSampler shards the training set so each rank trains on a
+    # distinct, non-overlapping slice — the data-parallel half of DDP.
+    train_sampler: DistributedSampler | None = (
+        DistributedSampler(
+            train_set,
+            num_replicas=dist_config.world_size,
+            rank=dist_config.rank,
+            shuffle=True,
+            drop_last=False,
+        )
+        if dist_config.distributed
+        else None
+    )
     train_loader = DataLoader(
         train_set,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=False,
     )
+    # Only rank 0 evaluates the held-out set (single, unsharded pass) and reports.
     test_loader = DataLoader(
         test_set,
         batch_size=max(batch_size, 256),
@@ -248,7 +380,15 @@ def main() -> None:
         pin_memory=pin_memory,
     )
 
-    model = SmallCNN(in_channels=in_channels, num_classes=num_classes).to(device)
+    base_model = SmallCNN(in_channels=in_channels, num_classes=num_classes).to(device)
+    model: nn.Module
+    if dist_config.distributed:
+        # DDP all-reduces gradients across ranks every backward — the model-
+        # parallel-sync half. device_ids only for a real per-rank GPU (nccl).
+        device_ids = [dist_config.local_rank] if device.type == "cuda" else None
+        model = DistributedDataParallel(base_model, device_ids=device_ids)
+    else:
+        model = base_model
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.CrossEntropyLoss()
 
@@ -256,6 +396,8 @@ def main() -> None:
     final_test_accuracy = 0.0
 
     for epoch in range(1, epochs + 1):
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch)  # reshuffle shards deterministically per epoch
         model.train()
         running_loss = 0.0
         n_batches = 0
@@ -267,44 +409,59 @@ def main() -> None:
             optimizer.zero_grad()
             outputs = model(images)
             loss = criterion(outputs, labels)
-            loss.backward()
+            loss.backward()  # DDP hooks all-reduce gradients here across ranks
             optimizer.step()
 
             running_loss += loss.item()
             n_batches += 1
 
-        mean_loss = running_loss / max(n_batches, 1)
+        mean_loss = _epoch_mean_loss(running_loss, n_batches, dist_config, device)
 
-        model.eval()
-        correct = 0
-        total = 0
-        with torch.no_grad():
-            for images, labels in test_loader:
-                images = images.to(device, non_blocking=pin_memory)
-                labels = labels.to(device, non_blocking=pin_memory)
-                outputs = model(images)
-                predictions = outputs.argmax(dim=1)
-                correct += int((predictions == labels).sum().item())
-                total += labels.size(0)
-        test_accuracy = correct / total if total > 0 else 0.0
+        # Only rank 0 evaluates + reports (the model is identical on every rank
+        # after gradient sync, so rank 0's eval is the cohort's true accuracy).
+        if dist_config.is_main:
+            eval_model = model.module if isinstance(model, DistributedDataParallel) else model
+            eval_model.eval()
+            correct = 0
+            total = 0
+            with torch.no_grad():
+                for images, labels in test_loader:
+                    images = images.to(device, non_blocking=pin_memory)
+                    labels = labels.to(device, non_blocking=pin_memory)
+                    outputs = eval_model(images)
+                    predictions = outputs.argmax(dim=1)
+                    correct += int((predictions == labels).sum().item())
+                    total += labels.size(0)
+            test_accuracy = correct / total if total > 0 else 0.0
 
-        _log(
-            f"epoch {epoch}/{epochs} done in {time.monotonic() - epoch_t0:.1f}s: "
-            f"train_loss={mean_loss:.4f} test_accuracy={test_accuracy:.4f} "
-            f"({correct}/{total})"
+            log(
+                f"epoch {epoch}/{epochs} done in {time.monotonic() - epoch_t0:.1f}s: "
+                f"train_loss={mean_loss:.4f} test_accuracy={test_accuracy:.4f} "
+                f"({correct}/{total})"
+            )
+            _emit_metric(epoch=epoch, loss=mean_loss, test_accuracy=test_accuracy)
+            final_loss = mean_loss
+            final_test_accuracy = test_accuracy
+        else:
+            log(
+                f"epoch {epoch}/{epochs} done in {time.monotonic() - epoch_t0:.1f}s: "
+                f"train_loss={mean_loss:.4f} (rank>0 trains silently, no eval/report)"
+            )
+
+    if dist_config.distributed:
+        dist.barrier()  # every rank reaches the end before the group is destroyed
+
+    if dist_config.is_main:
+        _emit_final(
+            epochs_completed=epochs,
+            final_loss=final_loss,
+            final_test_accuracy=final_test_accuracy,
+            device=device.type,
         )
-        _emit_metric(epoch=epoch, loss=mean_loss, test_accuracy=test_accuracy)
+    log("training complete")
 
-        final_loss = mean_loss
-        final_test_accuracy = test_accuracy
-
-    _emit_final(
-        epochs_completed=epochs,
-        final_loss=final_loss,
-        final_test_accuracy=final_test_accuracy,
-        device=device.type,
-    )
-    _log("training complete")
+    if dist_config.distributed:
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

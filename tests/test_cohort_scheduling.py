@@ -493,7 +493,9 @@ async def test_both_ranks_complete_marks_job_completed(
     ).json()
 
     # The rank-0 (rendezvous host) agent reports the real training result; the
-    # other rank completes silently (result omitted).
+    # rank>0 worker completes FIRST with an all-null payload (exactly what a
+    # silently-training rank>0 agent sends) — which must NOT clobber the host's
+    # real result whenever it arrives.
     host = claim_a if claim_a["rendezvous"]["is_rendezvous_host"] else claim_b
     host_token = token_a if host is claim_a else token_b
     worker = claim_b if host is claim_a else claim_a
@@ -501,7 +503,16 @@ async def test_both_ranks_complete_marks_job_completed(
 
     r_worker = await api_client.post(
         f"/leases/{worker['lease']['id']}/complete",
-        json={"lease_epoch": 1},
+        json={
+            "lease_epoch": 1,
+            "result": {
+                "final_loss": None,
+                "final_test_accuracy": None,
+                "epochs_completed": 0,
+                "exit_code": 0,
+                "device": None,
+            },
+        },
         headers=auth_headers(worker_token),
     )
     assert r_worker.status_code == 200
