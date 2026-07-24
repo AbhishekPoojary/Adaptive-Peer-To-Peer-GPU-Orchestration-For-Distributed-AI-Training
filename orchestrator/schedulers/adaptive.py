@@ -162,6 +162,12 @@ def score_candidates(
     return scored
 
 
+def _rank_key(c: ScoredCandidate) -> tuple[float, str]:
+    """Deterministic ranking key: lowest ``S_i`` wins, ties broken on node name
+    so repeated passes over an unchanged pool are stable."""
+    return (c.s_score, c.snapshot.node.name)
+
+
 def select_best(scored: list[ScoredCandidate]) -> ScoredCandidate | None:
     """Return the minimum-``S_i`` candidate, or ``None`` for an empty pool.
 
@@ -170,7 +176,19 @@ def select_best(scored: list[ScoredCandidate]) -> ScoredCandidate | None:
     """
     if not scored:
         return None
-    return min(scored, key=lambda c: (c.s_score, c.snapshot.node.name))
+    return min(scored, key=_rank_key)
+
+
+def select_top_n(scored: list[ScoredCandidate], n: int) -> list[ScoredCandidate]:
+    """The ``n`` lowest-``S_i`` candidates, best first (ADR-005 cohort selection).
+
+    The natural generalisation of :func:`select_best` from one winner to a
+    world_size=N cohort: sort by the same key and take the first ``n``. Returns
+    fewer than ``n`` only when the pool is smaller (the caller must decide
+    whether a short pool is placeable — a cohort needs the full N). Ties break
+    on node name, so selection is stable across passes.
+    """
+    return sorted(scored, key=_rank_key)[: max(0, n)]
 
 
 class AdaptiveScheduler:
@@ -193,13 +211,20 @@ class AdaptiveScheduler:
 
     name = "adaptive"
 
+    _DB_BACKED = (
+        "adaptive scheduling is DB-backed and audited: the scheduler pass routes "
+        "'adaptive' jobs through "
+        "orchestrator.services.scheduling.place_job_cohort, not this pure "
+        "ranking path. Reliability requires real lease history, which the "
+        "NodeSnapshot contract deliberately excludes."
+    )
+
+    def rank_candidates(
+        self, job: Job, candidates: list[NodeSnapshot]
+    ) -> list[NodeSnapshot]:
+        raise NotImplementedError(self._DB_BACKED)
+
     async def select_node(
         self, job: Job, candidates: list[NodeSnapshot]
     ) -> NodeSnapshot | None:
-        raise NotImplementedError(
-            "adaptive scheduling is DB-backed and audited: the scheduler pass "
-            "routes 'adaptive' jobs through "
-            "orchestrator.services.scheduling.place_job_adaptive, not this pure "
-            "select_node path. Reliability requires real lease history, which "
-            "the NodeSnapshot contract deliberately excludes."
-        )
+        raise NotImplementedError(self._DB_BACKED)

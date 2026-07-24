@@ -27,19 +27,26 @@ class RoundRobinScheduler:
 
     name = "round_robin"
 
+    def _sort_key(self, s: NodeSnapshot) -> tuple[datetime, str]:
+        last = s.node.last_assigned_at
+        # Normalise to naive UTC-comparable: all stored timestamps are tz-aware
+        # from Postgres; the never-assigned sentinel is tz-naive datetime.min,
+        # so compare on POSIX-like ordinal via replace(tzinfo=None) fallback.
+        if last is None:
+            return (_EPOCH, s.node.name)
+        return (last.replace(tzinfo=None), s.node.name)
+
+    def rank_candidates(
+        self, job: Job, candidates: list[NodeSnapshot]
+    ) -> list[NodeSnapshot]:
+        """Eligible nodes ordered oldest-last-assignment first (never-assigned
+        first). Taking the first N gives a fair top-N cohort selection — the
+        same fairness that picks one node, applied to N."""
+        return sorted(candidates, key=self._sort_key)
+
     async def select_node(
         self, job: Job, candidates: list[NodeSnapshot]
     ) -> NodeSnapshot | None:
         if not candidates:
             return None
-
-        def sort_key(s: NodeSnapshot) -> tuple[datetime, str]:
-            last = s.node.last_assigned_at
-            # Normalise to naive UTC-comparable: all stored timestamps are tz-aware
-            # from Postgres; the never-assigned sentinel is tz-naive datetime.min,
-            # so compare on POSIX-like ordinal via replace(tzinfo=None) fallback.
-            if last is None:
-                return (_EPOCH, s.node.name)
-            return (last.replace(tzinfo=None), s.node.name)
-
-        return min(candidates, key=sort_key)
+        return min(candidates, key=self._sort_key)

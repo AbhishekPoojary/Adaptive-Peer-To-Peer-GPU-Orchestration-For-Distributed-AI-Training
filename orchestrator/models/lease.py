@@ -13,6 +13,14 @@ locking:
 Each lease carries a monotonic ``lease_epoch``; agent writes fenced against the
 job's current epoch reject stale ("zombie") holders (see
 ``orchestrator.services.leases``).
+
+M5 generalises this to N-rank training cohorts (ADR-005). A world_size=N job's
+attempt is N leases that all share one ``lease_epoch`` (minted once, at schedule
+time) and differ only by ``rank`` (0..N-1). The unique index is correspondingly
+generalised to *one non-terminal lease per (job, rank)*: a cohort holds N
+concurrent ACTIVE leases legitimately, but never two for the same rank. A
+single-rank (world_size=1) job is simply a one-member cohort at rank 0, so the
+M2 path is unchanged.
 """
 
 from __future__ import annotations
@@ -88,7 +96,14 @@ class Lease(Base):
         index=True,
     )
     # Matches the job's current_lease_epoch at grant time. Monotonic per job.
+    # Every lease in one attempt's cohort shares this epoch (ADR-005 + ADR-003).
     lease_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Rank slot 0..world_size-1 within the job's attempt. 0 for a single-rank
+    # (world_size=1) job — so the M2 path is exactly rank 0. Rank 0 is always the
+    # rendezvous host (ADR-005: highest-reliability cohort member).
+    rank: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
     state: Mapped[LeaseState] = mapped_column(_lease_state_enum, nullable=False)
     granted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -106,12 +121,16 @@ class Lease(Base):
     job: Mapped[Job] = relationship(back_populates="leases")
 
     __table_args__ = (
-        # Defense in depth: at most one ACTIVE lease per job, enforced by the
-        # database itself. Even a logic bug cannot double-assign a job.
+        # Defense in depth: at most one *non-terminal* (PENDING or ACTIVE) lease
+        # per (job, rank), enforced by the database itself. A cohort's N ranks
+        # each hold their own ACTIVE lease legitimately, but a rank is never
+        # double-assigned and a PENDING slot is never duplicated — even a logic
+        # bug cannot violate it (ADR-003 defense in depth, generalised for M5).
         Index(
-            "uq_one_active_lease_per_job",
+            "uq_active_lease_per_job_rank",
             "job_id",
+            "rank",
             unique=True,
-            postgresql_where=text("state = 'ACTIVE'"),
+            postgresql_where=text("state IN ('PENDING', 'ACTIVE')"),
         ),
     )

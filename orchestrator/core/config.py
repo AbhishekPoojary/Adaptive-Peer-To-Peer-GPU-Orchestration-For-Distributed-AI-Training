@@ -88,6 +88,21 @@ class Settings(BaseSettings):
     lease_ttl_seconds: int = 30
     lease_renewal_grace_seconds: int = 5
 
+    # --- Distributed training / rendezvous (ADR-005, M5) ---
+    # TCP port the c10d rendezvous host binds for a multi-rank cohort; every rank
+    # dials <rendezvous host>:<this port>. High port so no CAP_NET_BIND_SERVICE
+    # is needed under ADR-007's cap_drop=ALL.
+    rendezvous_port: int = 29500
+    # torchrun --max-restarts: bounded elastic re-formations of the process group
+    # on a worker crash (ADR-005). Real and present even though M5 does not
+    # exercise deep elasticity.
+    torchrun_max_restarts: int = 1
+    # torch.distributed backend handed to every rank. 'gloo' for M5's
+    # correctness verification given the shared-single-GPU / mixed-hardware
+    # reality (ADR-010); 'nccl' is the intended backend once real distinct
+    # multi-GPU hardware exists (ADR-005). A deliberate, documented choice.
+    training_backend: str = "gloo"
+
     # --- Background loops (M2) ---
     # The orchestrator runs two periodic asyncio loops: a scheduler pass that
     # places QUEUED/REASSIGNED jobs, and a sweep that expires overdue leases.

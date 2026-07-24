@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.models.job import Job, JobState
 from orchestrator.models.lease import Lease, LeaseState
-from tests.helpers import auth_headers, register_new_node
+from tests.helpers import auth_headers, register_new_node, schedule_single_rank_job
 
 _NODES = 10
 _CLAIMS_PER_NODE = 5  # 10 x 5 = 50 concurrent attempts
@@ -37,15 +37,12 @@ _SPEC = {
 
 
 async def _scheduled_job_for(session: AsyncSession, node_id: uuid.UUID) -> Job:
-    job = Job(
-        spec=_SPEC,
-        scheduler_name="round_robin",
-        state=JobState.SCHEDULED,
-        scheduled_node_id=node_id,
-        submitted_by="race-test",
+    # A world_size=1 cohort already SCHEDULED to this node with a rank-0 PENDING
+    # lease waiting — exactly what a scheduler pass produces — so a claim has a
+    # slot to activate (adds rows; the caller commits).
+    return schedule_single_rank_job(
+        session, node_id=node_id, spec=_SPEC, submitted_by="race-test"
     )
-    session.add(job)
-    return job
 
 
 @pytest.mark.asyncio

@@ -65,6 +65,8 @@ class LeaseOut(BaseModel):
     job_id: uuid.UUID
     node_id: uuid.UUID
     lease_epoch: int
+    # Rank slot 0..world_size-1 within the job's attempt (M5). 0 for single-rank.
+    rank: int
     state: str
     granted_at: datetime
     expires_at: datetime

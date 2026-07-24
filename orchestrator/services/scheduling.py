@@ -2,19 +2,23 @@
 
 A scheduler *pass* loads jobs awaiting placement, builds a real snapshot of the
 fleet (node row + latest telemetry + whether the node is already occupied),
-runs the shared hard filters, and lets each job's chosen strategy pick a node.
-A placed job moves QUEUED/REASSIGNED → SCHEDULED with its target recorded; the
-agent later claims it (``services.leases.claim_job_for_node``).
+runs the shared hard filters, and forms each job's training cohort. A placed
+job moves QUEUED/REASSIGNED → SCHEDULED with N PENDING leases (one per rank)
+recorded at a freshly minted attempt epoch; each rank's agent later claims its
+lease (``services.leases.claim_job_for_node``), flipping it ACTIVE.
 
-The ``adaptive`` strategy (M3) is special: ranking a survivor needs its real
-lease history (reliability) and every decision is audit-logged. That work is
-DB-backed, so it lives here in :func:`place_job_adaptive` rather than in the
-pure ``select_node`` contract the baselines share; the pass routes ``adaptive``
-jobs to it by name. The baselines still go through ``scheduler.select_node``.
+Cohort formation (M5, ADR-005) is one path for every strategy: the job's
+scheduler ranks the eligible pool and the top ``world_size`` nodes are taken
+(each baseline generalises to top-N by construction; ``adaptive`` scores by
+S_i, takes the N lowest, and audit-logs the decision with the whole cohort
+marked selected — reliability is DB-backed so that work lives here in
+:func:`place_job_cohort`). The rendezvous host is the highest-reliability
+member (Wilson lower bound, ADR-005) and takes rank 0. A world_size=1 job is a
+one-member cohort, so the M2/M3 single-rank behaviour is exactly the N=1 case.
 
 "One job per node" is enforced structurally: a node counts as occupied if it
-holds an ACTIVE lease *or* is already the pending target of a SCHEDULED job,
-and additionally cannot be picked twice within a single pass.
+holds any non-terminal (PENDING or ACTIVE) lease, and additionally cannot be
+picked twice within a single pass.
 
 Passes must not run concurrently in-process (two passes could pick the same
 free node for two jobs); the background runner serialises them under a lock.
@@ -27,7 +31,8 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,11 +51,11 @@ from orchestrator.schedulers.adaptive import (
     CandidateReliability,
     ScoredCandidate,
     score_candidates,
-    select_best,
+    select_top_n,
 )
 from orchestrator.schedulers.base import NodeSnapshot, eligible_candidates
 from orchestrator.schedulers.registry import get_scheduler
-from orchestrator.schedulers.reliability import decay_weight
+from orchestrator.schedulers.reliability import decay_weight, wilson_lower_bound
 from orchestrator.schemas.scheduling import (
     SchedulingCandidateOut,
     SchedulingDecisionOut,
@@ -71,24 +76,20 @@ _RELIABILITY_STATES = (*_SUCCESS_STATES, *_FAILURE_STATES)
 
 
 async def _busy_node_ids(session: AsyncSession) -> set[object]:
-    """Nodes that are occupied: holding an ACTIVE lease or the pending target
-    of a SCHEDULED (not-yet-claimed) job. Such nodes are ineligible ("one job
-    per node")."""
-    active = (
+    """Nodes that are occupied and so ineligible ("one job per node").
+
+    A node is busy if it holds any non-terminal lease — ACTIVE (running a rank)
+    or PENDING (a cohort slot the scheduler created that the node has not yet
+    claimed). The PENDING case is how a multi-rank cohort reserves all N of its
+    nodes at schedule time, before any rank has claimed."""
+    busy = (
         await session.execute(
-            select(Lease.node_id).where(Lease.state == LeaseState.ACTIVE).distinct()
-        )
-    ).scalars().all()
-    scheduled = (
-        await session.execute(
-            select(Job.scheduled_node_id)
-            .where(
-                Job.state == JobState.SCHEDULED, Job.scheduled_node_id.is_not(None)
-            )
+            select(Lease.node_id)
+            .where(Lease.state.in_((LeaseState.ACTIVE, LeaseState.PENDING)))
             .distinct()
         )
     ).scalars().all()
-    return {*active, *scheduled}
+    return set(busy)
 
 
 async def _node_snapshots(session: AsyncSession) -> list[NodeSnapshot]:
@@ -190,10 +191,17 @@ def _persist_decision(
     *,
     job: Job,
     scored: list[ScoredCandidate],
-    winner: ScoredCandidate | None,
+    selected_ids: set[uuid.UUID],
+    rendezvous_id: uuid.UUID | None,
     settings: Settings,
 ) -> None:
-    """Write the SchedulingDecision + one candidate row per considered node."""
+    """Write the SchedulingDecision + one candidate row per considered node.
+
+    ``selected_ids`` is the whole chosen cohort (one id for a world_size=1 job,
+    N for a cohort); ``was_selected`` is stamped ``True`` for each. The
+    decision's ``selected_node_id`` is the rendezvous host (rank 0) — the single
+    node the audit points at as the attempt's coordinator (ADR-005).
+    """
     decision = SchedulingDecision(
         job_id=job.id,
         scheduler_name=AdaptiveScheduler.name,
@@ -202,10 +210,9 @@ def _persist_decision(
         gamma=settings.scheduler_gamma_latency,
         reliability_halflife_seconds=settings.reliability_decay_halflife_seconds,
         wilson_z=settings.reliability_wilson_z,
-        selected_node_id=winner.snapshot.node.id if winner is not None else None,
+        selected_node_id=rendezvous_id,
     )
     session.add(decision)
-    winner_node_id = winner.snapshot.node.id if winner is not None else None
     for cand in scored:
         session.add(
             SchedulingDecisionCandidate(
@@ -220,60 +227,180 @@ def _persist_decision(
                 raw_rtt_ewma_ms=cand.raw_rtt_ewma_ms,
                 weighted_success=cand.weighted_success,
                 weighted_failure=cand.weighted_failure,
-                was_selected=cand.snapshot.node.id == winner_node_id,
+                was_selected=cand.snapshot.node.id in selected_ids,
             )
         )
 
 
-async def place_job_adaptive(
+@dataclass(frozen=True)
+class CohortMember:
+    """One node's assigned slot in a scheduled training cohort (ADR-005).
+
+    ``rank`` is the 0..world_size-1 slot; ``rank == 0`` is always the rendezvous
+    host (``is_rendezvous_host`` True), the highest-reliability member.
+    """
+
+    rank: int
+    snapshot: NodeSnapshot
+    is_rendezvous_host: bool
+
+
+def _wilson_by_node(
+    reliability: list[CandidateReliability], *, wilson_z: float
+) -> dict[uuid.UUID, float]:
+    """Wilson lower-bound reliability (ADR-009's R term) per candidate node, from
+    its decay-weighted success/failure pseudo-counts. Reused to pick the
+    rendezvous host regardless of which scheduler formed the cohort (ADR-005)."""
+    return {
+        ci.snapshot.node.id: wilson_lower_bound(
+            ci.weighted_success, ci.weighted_failure, wilson_z
+        )
+        for ci in reliability
+    }
+
+
+async def place_job_cohort(
     session: AsyncSession,
     job: Job,
     candidates: list[NodeSnapshot],
     *,
+    world_size: int,
     now: datetime,
     settings: Settings,
-) -> NodeSnapshot | None:
-    """Score ``candidates`` for ``job`` by S_i, persist the audit trail, and
-    return the winner's snapshot (or ``None`` if there was nothing to rank).
+) -> list[CohortMember] | None:
+    """Form and persist a world_size=N training cohort for ``job`` (ADR-005).
 
-    ``candidates`` are already hard-filtered by the caller. With an empty pool
-    no decision is recorded (there is nothing to explain and no placement to
-    make). Otherwise every candidate is scored and one ``SchedulingDecision``
-    with per-candidate rows is written before the winner is returned.
+    ``candidates`` are already hard-filtered. Returns ``None`` (job left for a
+    later pass, no partial placement) when fewer than ``world_size`` nodes are
+    eligible — a distributed job needs its *whole* cohort or nothing.
+
+    Otherwise: the job's scheduler ranks the pool and the top ``world_size``
+    nodes are taken (each baseline generalises to top-N by construction; the
+    adaptive scorer takes the N lowest ``S_i`` and audits the decision with the
+    whole cohort marked selected). The rendezvous host is then the
+    highest-reliability member (Wilson lower bound, ADR-005) and is assigned
+    rank 0; the rest keep scheduler order at ranks 1..N-1. A single attempt
+    epoch is minted once and stamped on all N PENDING leases — the ADR-003
+    fence now guards a whole cohort. Each rank later claims its PENDING lease
+    (``services.leases.claim_job_for_node``), flipping it ACTIVE.
     """
-    if not candidates:
+    if len(candidates) < world_size:
         return None
 
     reliability = await _reliability_inputs(
         session, candidates, now=now, settings=settings
     )
-    scored = score_candidates(
-        reliability,
-        alpha=settings.scheduler_alpha_load,
-        beta=settings.scheduler_beta_reliability,
-        gamma=settings.scheduler_gamma_latency,
-        wilson_z=settings.reliability_wilson_z,
-    )
-    winner = select_best(scored)
-    _persist_decision(
-        session, job=job, scored=scored, winner=winner, settings=settings
-    )
+    wilson = _wilson_by_node(reliability, wilson_z=settings.reliability_wilson_z)
 
-    # ADR-009: the weights are logged with every decision, not applied silently.
-    logger.info(
-        "adaptive decision job=%s alpha=%.3f beta=%.3f gamma=%.3f "
-        "halflife_s=%.1f wilson_z=%.3f candidates=%d winner=%s (S=%s)",
-        job.id,
-        settings.scheduler_alpha_load,
-        settings.scheduler_beta_reliability,
-        settings.scheduler_gamma_latency,
-        settings.reliability_decay_halflife_seconds,
-        settings.reliability_wilson_z,
-        len(scored),
-        winner.snapshot.node.name if winner is not None else None,
-        f"{winner.s_score:.4f}" if winner is not None else None,
+    scored: list[ScoredCandidate] = []
+    if job.scheduler_name == AdaptiveScheduler.name:
+        scored = score_candidates(
+            reliability,
+            alpha=settings.scheduler_alpha_load,
+            beta=settings.scheduler_beta_reliability,
+            gamma=settings.scheduler_gamma_latency,
+            wilson_z=settings.reliability_wilson_z,
+        )
+        selected = [sc.snapshot for sc in select_top_n(scored, world_size)]
+    else:
+        scheduler = get_scheduler(job.scheduler_name)
+        selected = scheduler.rank_candidates(job, candidates)[:world_size]
+
+    # Rendezvous host: the highest-reliability cohort member (ADR-005). Ties
+    # break toward the node the scheduler itself ranked higher (smaller index).
+    rdzv_idx = max(
+        range(len(selected)),
+        key=lambda i: (wilson[selected[i].node.id], -i),
     )
-    return winner.snapshot if winner is not None else None
+    rdzv = selected[rdzv_idx]
+    members = [CohortMember(rank=0, snapshot=rdzv, is_rendezvous_host=True)]
+    others = [s for i, s in enumerate(selected) if i != rdzv_idx]
+    members += [
+        CohortMember(rank=r, snapshot=s, is_rendezvous_host=False)
+        for r, s in enumerate(others, start=1)
+    ]
+
+    # Mint the attempt epoch ONCE; every rank's lease shares it (ADR-003 cohort
+    # fence). A fresh attempt after any failure increments it again.
+    new_epoch = job.current_lease_epoch + 1
+    job.current_lease_epoch = new_epoch
+    ttl = timedelta(seconds=settings.lease_ttl_seconds)
+    for member in members:
+        session.add(
+            Lease(
+                id=uuid.uuid4(),
+                job_id=job.id,
+                node_id=member.snapshot.node.id,
+                lease_epoch=new_epoch,
+                rank=member.rank,
+                state=LeaseState.PENDING,
+                granted_at=now,
+                # A PENDING slot not claimed within the TTL is swept exactly like
+                # an unrenewed ACTIVE lease → the whole attempt is reassigned.
+                expires_at=now + ttl,
+            )
+        )
+        member.snapshot.node.last_assigned_at = now
+    job.rendezvous_node_id = rdzv.node.id
+    job.scheduled_node_id = rdzv.node.id  # rank-0 node, for read continuity
+
+    if job.scheduler_name == AdaptiveScheduler.name:
+        _persist_decision(
+            session,
+            job=job,
+            scored=scored,
+            selected_ids={m.snapshot.node.id for m in members},
+            rendezvous_id=rdzv.node.id,
+            settings=settings,
+        )
+        # ADR-009: the weights are logged with every decision, not applied silently.
+        logger.info(
+            "adaptive cohort job=%s world_size=%d alpha=%.3f beta=%.3f gamma=%.3f "
+            "halflife_s=%.1f wilson_z=%.3f candidates=%d cohort=%s rendezvous=%s",
+            job.id,
+            world_size,
+            settings.scheduler_alpha_load,
+            settings.scheduler_beta_reliability,
+            settings.scheduler_gamma_latency,
+            settings.reliability_decay_halflife_seconds,
+            settings.reliability_wilson_z,
+            len(scored),
+            [m.snapshot.node.name for m in members],
+            rdzv.node.name,
+        )
+
+    cohort_desc = ", ".join(
+        f"rank {m.rank}={m.snapshot.node.name}"
+        + ("(rendezvous)" if m.is_rendezvous_host else "")
+        for m in members
+    )
+    transition_job(
+        session,
+        job,
+        JobState.SCHEDULED,
+        message=(
+            f"Scheduled by the {job.scheduler_name} scheduler as a world_size="
+            f"{world_size} cohort (epoch {new_epoch}): {cohort_desc}. "
+            f"Rendezvous host: {rdzv.node.name}."
+        ),
+        extra={
+            "world_size": world_size,
+            "lease_epoch": new_epoch,
+            "rendezvous_node_id": str(rdzv.node.id),
+            "rendezvous_node_name": rdzv.node.name,
+            "cohort": [
+                {
+                    "rank": m.rank,
+                    "node_id": str(m.snapshot.node.id),
+                    "node_name": m.snapshot.node.name,
+                    "is_rendezvous_host": m.is_rendezvous_host,
+                }
+                for m in members
+            ],
+        },
+        now=now,
+    )
+    return members
 
 
 async def run_scheduler_pass(session: AsyncSession, *, settings: Settings) -> int:
@@ -302,36 +429,22 @@ async def run_scheduler_pass(session: AsyncSession, *, settings: Settings) -> in
     placed = 0
 
     for job in jobs:
+        # world_size=N needs N distinct nodes for one attempt; a partial cohort
+        # is never placed (place_job_cohort returns None and the job waits).
+        world_size = int(job.spec.get("world_size", 1) or 1)
         candidates = [
             s for s in snapshots if s.node.id not in assigned_this_pass
         ]
         elig = eligible_candidates(
             job, candidates, now=now, stale_seconds=settings.heartbeat_stale_seconds
         )
-        scheduler = get_scheduler(job.scheduler_name)
-        if job.scheduler_name == AdaptiveScheduler.name:
-            chosen = await place_job_adaptive(
-                session, job, elig, now=now, settings=settings
-            )
-        else:
-            chosen = await scheduler.select_node(job, elig)
-        if chosen is None:
-            continue
-
-        target = chosen.node
-        job.scheduled_node_id = target.id
-        target.last_assigned_at = now
-        assigned_this_pass.add(target.id)
-        transition_job(
-            session,
-            job,
-            JobState.SCHEDULED,
-            message=(
-                f"Scheduled to node {target.name} by the {job.scheduler_name} scheduler."
-            ),
-            extra={"node_id": str(target.id), "node_name": target.name},
-            now=now,
+        members = await place_job_cohort(
+            session, job, elig, world_size=world_size, now=now, settings=settings
         )
+        if members is None:
+            continue
+        for member in members:
+            assigned_this_pass.add(member.snapshot.node.id)
         placed += 1
 
     await session.flush()

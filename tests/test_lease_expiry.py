@@ -26,19 +26,16 @@ from orchestrator.services.leases import (
     sweep_expired_leases,
 )
 from orchestrator.services.scheduling import run_scheduler_pass
-from tests.helpers import auth_headers, register_new_node, send_heartbeat
+from tests.helpers import (
+    auth_headers,
+    register_new_node,
+    schedule_single_rank_job,
+    send_heartbeat,
+)
 
 
 async def _scheduled_job(session: AsyncSession, node_id: uuid.UUID) -> Job:
-    job = Job(
-        spec={"dataset": "mnist", "model": "cnn", "epochs": 1, "batch_size": 32,
-              "learning_rate": 0.01, "world_size": 1, "min_gpu_mem_bytes": None},
-        scheduler_name="round_robin",
-        state=JobState.SCHEDULED,
-        scheduled_node_id=node_id,
-        submitted_by="expiry-test",
-    )
-    session.add(job)
+    job = schedule_single_rank_job(session, node_id=node_id, submitted_by="expiry-test")
     await session.commit()
     return job
 

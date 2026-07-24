@@ -77,7 +77,9 @@ TERMINAL_STATES: frozenset[JobState] = frozenset(
 VALID_TRANSITIONS: dict[JobState, frozenset[JobState]] = {
     JobState.QUEUED: frozenset({JobState.SCHEDULED, JobState.CANCELLED}),
     JobState.SCHEDULED: frozenset(
-        {JobState.LEASED, JobState.QUEUED, JobState.CANCELLED}
+        # REASSIGNED (M5): a scheduled cohort whose PENDING rank slots expire
+        # before every rank claims is torn down and re-placed, not left stuck.
+        {JobState.LEASED, JobState.QUEUED, JobState.REASSIGNED, JobState.CANCELLED}
     ),
     JobState.LEASED: frozenset(
         {
@@ -137,12 +139,22 @@ class Job(Base):
         Integer, nullable=False, server_default="0", default=0
     )
     # Node this job is currently placed on (set at SCHEDULED, consumed at claim,
-    # cleared on reassignment). NULL while QUEUED/terminal.
+    # cleared on reassignment). NULL while QUEUED/terminal. For a multi-rank
+    # (world_size>1) cohort this is the rank-0 / rendezvous-host node.
     scheduled_node_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("nodes.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
+    )
+    # The c10d rendezvous host for the current attempt (ADR-005): the cohort
+    # member the orchestrator scores highest-reliability. NULL until a cohort is
+    # scheduled; cleared on reassignment. SET NULL on node delete so a completed
+    # job's audit trail survives node removal. Rank 0 is always this node.
+    rendezvous_node_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("nodes.id", ondelete="SET NULL"),
+        nullable=True,
     )
     # Free-text submitter identity (real user auth arrives in M8).
     submitted_by: Mapped[str] = mapped_column(String(255), nullable=False)

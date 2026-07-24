@@ -31,7 +31,45 @@ from orchestrator.core.config import Settings
 from orchestrator.models.job import Job, JobState
 from orchestrator.models.lease import Lease, LeaseState
 from orchestrator.models.node import Node
-from orchestrator.services.jobs import transition_job
+from orchestrator.schemas.lease import RendezvousAssignment
+from orchestrator.services.jobs import record_job_event, transition_job
+
+
+def rendezvous_wiring(job: Job) -> tuple[str, str]:
+    """Deterministic (network, host_alias) for a job's cohort rendezvous (M5).
+
+    Derived purely from the job id so every rank's agent — and the orchestrator
+    building the claim response — agree without extra coordination. In the dev
+    co-located topology (ADR-010) the cohort's trainer containers all join
+    ``network`` (a user-defined Docker bridge, so containers resolve each other
+    by name) and the rank-0 / rendezvous-host container takes ``host_alias`` as
+    its container name, so ``host_alias:<rendezvous_port>`` resolves to it for
+    every rank. For the real multi-host phase this is replaced by the peer's
+    Tailscale overlay address (see docs/adr/ADR-005-addendum.md)."""
+    short = job.id.hex[:12]
+    network = f"gpuorch-rdzv-{short}"
+    host_alias = f"{network}-r0"
+    return network, host_alias
+
+
+def rendezvous_assignment(
+    job: Job, lease: Lease, *, settings: Settings
+) -> RendezvousAssignment:
+    """Build the rank/world_size/endpoint an agent needs to launch a claimed
+    lease (M5). Pure over the job + lease + config."""
+    world_size = int(job.spec.get("world_size", 1) or 1)
+    network, host_alias = rendezvous_wiring(job)
+    return RendezvousAssignment(
+        rank=lease.rank,
+        world_size=world_size,
+        is_rendezvous_host=lease.rank == 0,
+        backend=settings.training_backend,
+        endpoint=f"{host_alias}:{settings.rendezvous_port}",
+        rdzv_id=f"{job.id.hex}-{lease.lease_epoch}",
+        network=network if world_size > 1 else "",
+        host_alias=host_alias if world_size > 1 else "",
+        max_restarts=settings.torchrun_max_restarts,
+    )
 
 
 class LeaseNotFoundError(Exception):
@@ -54,66 +92,82 @@ class LeaseNotActiveError(Exception):
 async def claim_job_for_node(
     session: AsyncSession, *, node: Node, settings: Settings
 ) -> Lease | None:
-    """Atomically claim one job scheduled to ``node``, granting a fresh lease.
+    """Atomically claim this node's assigned rank slot, activating its lease.
 
-    Returns the granted ``Lease`` (job → LEASED, epoch incremented), or ``None``
-    when nothing is scheduled to this node right now. Caller commits.
+    Returns the granted ``Lease`` (its PENDING cohort slot flipped ACTIVE), or
+    ``None`` when nothing is assigned to this node right now. Caller commits.
 
-    ``SELECT ... FOR UPDATE SKIP LOCKED`` guarantees that under arbitrary
-    concurrency each scheduled job is claimed at most once; concurrent claimers
-    that lose the row simply see no work.
+    The scheduler creates a cohort as N PENDING leases at a pre-minted attempt
+    epoch (``services.scheduling.place_job_cohort``); a claim does *not* mint an
+    epoch, it activates the one slot reserved for this node. ``SELECT ... FOR
+    UPDATE SKIP LOCKED`` on that PENDING row guarantees that under arbitrary
+    concurrency each slot is activated at most once; concurrent claimers for the
+    same node that lose the row simply see no work. The first rank of a cohort
+    to claim flips the job SCHEDULED → LEASED; later ranks find it already
+    LEASED/RUNNING and only record that they joined.
     """
-    job = (
+    lease = (
         await session.execute(
-            select(Job)
-            .where(
-                Job.scheduled_node_id == node.id, Job.state == JobState.SCHEDULED
-            )
-            .order_by(Job.submitted_at)
+            select(Lease)
+            .where(Lease.node_id == node.id, Lease.state == LeaseState.PENDING)
+            .order_by(Lease.lease_epoch)
             .limit(1)
             .with_for_update(skip_locked=True)
             .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
-    if job is None:
+    if lease is None:
         return None
 
-    # Defense in depth against "one job per node": never grant a second lease to
-    # a node already holding one (the DB index guards the per-job invariant).
-    already = (
+    # Lock the job so cohort members serialise on the SCHEDULED → LEASED flip.
+    job = (
         await session.execute(
-            select(Lease.id).where(
-                Lease.node_id == node.id, Lease.state == LeaseState.ACTIVE
-            )
+            select(Job)
+            .where(Job.id == lease.job_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
-    ).first()
-    if already is not None:
+    ).scalar_one()
+
+    # Defensive: a PENDING slot from a superseded attempt (its epoch is no longer
+    # the job's current one) is never activated — the sweep clears such rows, but
+    # never trust that it already has.
+    if lease.lease_epoch != job.current_lease_epoch:
         return None
 
     now = datetime.now(UTC)
-    new_epoch = job.current_lease_epoch + 1
-    job.current_lease_epoch = new_epoch
-    lease = Lease(
-        id=uuid.uuid4(),
-        job_id=job.id,
-        node_id=node.id,
-        lease_epoch=new_epoch,
-        state=LeaseState.ACTIVE,
-        granted_at=now,
-        expires_at=now + timedelta(seconds=settings.lease_ttl_seconds),
-    )
-    session.add(lease)
-    transition_job(
-        session,
-        job,
-        JobState.LEASED,
-        message=(
-            f"Lease granted to the assigned node (epoch {new_epoch}); "
-            f"expires in {settings.lease_ttl_seconds}s."
-        ),
-        extra={"lease_id": str(lease.id), "lease_epoch": new_epoch},
-        now=now,
-    )
+    lease.state = LeaseState.ACTIVE
+    lease.granted_at = now
+    lease.expires_at = now + timedelta(seconds=settings.lease_ttl_seconds)
+
+    grant_extra = {
+        "lease_id": str(lease.id),
+        "lease_epoch": lease.lease_epoch,
+        "rank": lease.rank,
+    }
+    if job.state is JobState.SCHEDULED:
+        transition_job(
+            session,
+            job,
+            JobState.LEASED,
+            message=(
+                f"Lease granted for rank {lease.rank} (epoch {lease.lease_epoch}); "
+                f"expires in {settings.lease_ttl_seconds}s."
+            ),
+            extra=grant_extra,
+            now=now,
+        )
+    else:
+        # A sibling rank already flipped the job LEASED/RUNNING; record this rank
+        # joining as a plain audit event (no state change).
+        record_job_event(
+            session,
+            job,
+            from_state=job.state,
+            to_state=job.state,
+            message=f"Rank {lease.rank} lease granted (epoch {lease.lease_epoch}).",
+            extra=grant_extra,
+        )
     await session.flush()
     await session.refresh(lease)
     return lease
@@ -157,6 +211,42 @@ async def _load_fenced(
     if lease.state is not LeaseState.ACTIVE:
         raise LeaseNotActiveError(str(lease_id))
     return lease, job
+
+
+async def _release_cohort_siblings(
+    session: AsyncSession,
+    *,
+    job: Job,
+    epoch: int,
+    exclude_lease_ids: set[uuid.UUID],
+    now: datetime,
+) -> int:
+    """Release every still-non-terminal sibling lease of one attempt (ADR-005).
+
+    When one rank of a cohort fails or times out, the whole attempt is doomed
+    (M5 tears the attempt down rather than doing in-flight single-rank
+    replacement — that is M6's checkpoint territory). The siblings are set
+    RELEASED, not FAILED/EXPIRED: their nodes did nothing wrong, so — exactly
+    like a cancellation — their reliability counters are untouched. Returns how
+    many were released. Rows are locked ``FOR UPDATE`` so a concurrent sweep
+    never double-processes them.
+    """
+    siblings = (
+        await session.execute(
+            select(Lease)
+            .where(
+                Lease.job_id == job.id,
+                Lease.lease_epoch == epoch,
+                Lease.id.not_in(exclude_lease_ids),
+                Lease.state.in_((LeaseState.PENDING, LeaseState.ACTIVE)),
+            )
+            .with_for_update()
+        )
+    ).scalars().all()
+    for sibling in siblings:
+        sibling.state = LeaseState.RELEASED
+        sibling.released_at = now
+    return len(siblings)
 
 
 async def renew_lease(
@@ -244,21 +334,44 @@ async def complete_lease(
     now = datetime.now(UTC)
     lease.state = LeaseState.COMPLETED
     lease.released_at = now
-    if result is not None:
+    # Only rank 0 (the rendezvous host) carries the real training result; a
+    # rank>0 agent trains silently and reports result=None. Never clobber a real
+    # result with a null one, whatever order the cohort's completes arrive in.
+    if result is not None and job.result is None:
         job.result = result
-    transition_job(
-        session,
-        job,
-        JobState.COMPLETED,
-        message=_complete_message(result),
-        extra={"lease_id": str(lease.id), "lease_epoch": lease.lease_epoch},
-        now=now,
-    )
+    # Every rank that finishes its own work is a real success for its node.
     await session.execute(
         update(Node)
         .where(Node.id == node.id)
         .values(lease_success_count=Node.lease_success_count + 1)
     )
+    finalize_extra = {
+        "lease_id": str(lease.id),
+        "lease_epoch": lease.lease_epoch,
+        "rank": lease.rank,
+    }
+    if job.state in (JobState.LEASED, JobState.RUNNING):
+        # First cohort member to complete flips the job COMPLETED. The epoch is
+        # not bumped, so siblings still ACTIVE remain fence-valid and can finish
+        # their own leases afterward.
+        transition_job(
+            session,
+            job,
+            JobState.COMPLETED,
+            message=_complete_message(job.result),
+            extra=finalize_extra,
+            now=now,
+        )
+    else:
+        # A sibling already finished the job; this rank just finalises its lease.
+        record_job_event(
+            session,
+            job,
+            from_state=job.state,
+            to_state=job.state,
+            message=f"Rank {lease.rank} finished (cohort already {job.state.value}).",
+            extra=finalize_extra,
+        )
     await session.flush()
     return lease
 
@@ -284,76 +397,153 @@ async def fail_lease(
     lease.state = LeaseState.FAILED
     lease.released_at = now
     job.failure_reason = reason
-    if result is not None:
+    if result is not None and job.result is None:
         job.result = result
-    transition_job(
-        session,
-        job,
-        JobState.FAILED,
-        message=_fail_message(reason, result),
-        extra={"lease_id": str(lease.id), "lease_epoch": lease.lease_epoch, "reason": reason},
-        now=now,
-    )
+    # The failing rank's node earns a real reliability failure.
     await session.execute(
         update(Node)
         .where(Node.id == node.id)
         .values(lease_failure_count=Node.lease_failure_count + 1)
     )
+    # One rank failing dooms the whole attempt (M5): release the siblings so the
+    # cohort stops, and end the job. A reported training failure is TERMINAL
+    # (ADR-005: failures surface instead of being masked by endless retry, and
+    # this preserves M4's single-rank fail → FAILED). A lease that merely
+    # *expired* (node dropped) is the retryable case and goes REASSIGNED via the
+    # sweep instead.
+    finalize_extra = {
+        "lease_id": str(lease.id),
+        "lease_epoch": lease.lease_epoch,
+        "rank": lease.rank,
+        "reason": reason,
+    }
+    if job.state in (JobState.LEASED, JobState.RUNNING):
+        await _release_cohort_siblings(
+            session, job=job, epoch=lease.lease_epoch, exclude_lease_ids={lease.id}, now=now
+        )
+        transition_job(
+            session,
+            job,
+            JobState.FAILED,
+            message=_fail_message(reason, result),
+            extra=finalize_extra,
+            now=now,
+        )
+        job.scheduled_node_id = None
+        job.rendezvous_node_id = None
+    else:
+        # A sibling already ended the job; this rank just finalises its lease.
+        record_job_event(
+            session,
+            job,
+            from_state=job.state,
+            to_state=job.state,
+            message=f"Rank {lease.rank} reported failure (cohort already {job.state.value}).",
+            extra=finalize_extra,
+        )
     await session.flush()
     return lease
+
+
+#: Job states from which an attempt whose cohort lost a member is reassignable.
+#: SCHEDULED is included so a cohort whose PENDING slots expire before every rank
+#: claims (a member that never showed up) is retried, not left stuck.
+_REASSIGNABLE = (JobState.LEASED, JobState.RUNNING, JobState.SCHEDULED)
 
 
 async def sweep_expired_leases(
     session: AsyncSession, *, settings: Settings
 ) -> int:
-    """Expire every ACTIVE lease past its TTL; reassign its job. Returns count.
+    """Expire overdue cohort leases and reassign the whole attempt. Returns the
+    number of leases expired. Caller commits.
 
-    Each expiry: lease → EXPIRED, the node's ``lease_failure_count`` += 1 (a
-    timeout is a real reliability signal, ADR-009), and the job → REASSIGNED
-    with its target cleared so a later pass re-places it under a new epoch.
-    Locked ``SKIP LOCKED`` so a concurrent sweep never double-processes a lease.
-    Caller commits.
+    "Overdue" is an ACTIVE lease past its TTL (a rank that stopped renewing) *or*
+    a PENDING slot past its TTL (a rank that never claimed) — both mean a cohort
+    member failed to make progress. Each overdue lease at the job's current
+    epoch → EXPIRED with the node's ``lease_failure_count`` += 1 (a timeout is a
+    real reliability signal, ADR-009). The rest of that attempt's cohort is then
+    torn down (siblings RELEASED, no reliability hit — the drop was not their
+    fault) and the job → REASSIGNED with its cohort/rendezvous wiring cleared, so
+    a later pass re-selects N nodes under a fresh epoch (ADR-005: one rank
+    dropping fails the whole attempt in M5; in-flight single-rank replacement is
+    M6). Locked ``SKIP LOCKED`` so a concurrent sweep never double-processes.
     """
     now = datetime.now(UTC)
-    leases = (
+    overdue = (
         await session.execute(
             select(Lease)
-            .where(Lease.state == LeaseState.ACTIVE, Lease.expires_at < now)
+            .where(
+                Lease.state.in_((LeaseState.ACTIVE, LeaseState.PENDING)),
+                Lease.expires_at < now,
+            )
             .with_for_update(skip_locked=True)
             .execution_options(populate_existing=True)
         )
     ).scalars().all()
-    if not leases:
+    if not overdue:
         return 0
 
-    for lease in leases:
+    # Group by job: each doomed attempt is torn down and reassigned exactly once,
+    # even when several of its ranks time out in the same sweep.
+    by_job: dict[uuid.UUID, list[Lease]] = {}
+    for lease in overdue:
+        by_job.setdefault(lease.job_id, []).append(lease)
+
+    expired_count = 0
+    for job_id, overdue_leases in by_job.items():
         job = (
             await session.execute(
                 select(Job)
-                .where(Job.id == lease.job_id)
+                .where(Job.id == job_id)
                 .with_for_update()
                 .execution_options(populate_existing=True)
             )
         ).scalar_one()
-        lease.state = LeaseState.EXPIRED
-        await session.execute(
-            update(Node)
-            .where(Node.id == lease.node_id)
-            .values(lease_failure_count=Node.lease_failure_count + 1)
+
+        current_overdue = [
+            lease for lease in overdue_leases
+            if lease.lease_epoch == job.current_lease_epoch
+        ]
+        for lease in overdue_leases:
+            lease.state = LeaseState.EXPIRED
+            expired_count += 1
+            # Only a timeout at the current epoch is this node's reliability
+            # failure; a leftover stale-epoch row (defensive) is just cleaned up.
+            if lease.lease_epoch == job.current_lease_epoch:
+                await session.execute(
+                    update(Node)
+                    .where(Node.id == lease.node_id)
+                    .values(lease_failure_count=Node.lease_failure_count + 1)
+                )
+
+        if not current_overdue:
+            continue
+        await _release_cohort_siblings(
+            session,
+            job=job,
+            epoch=job.current_lease_epoch,
+            exclude_lease_ids={lease.id for lease in current_overdue},
+            now=now,
         )
-        if job.state in (JobState.LEASED, JobState.RUNNING):
+        if job.state in _REASSIGNABLE:
+            n_timed_out = len(current_overdue)
             transition_job(
                 session,
                 job,
                 JobState.REASSIGNED,
                 message=(
-                    "Lease TTL expired without renewal; job requeued for "
+                    f"{n_timed_out} cohort lease(s) expired without progress; "
+                    "the whole attempt was torn down and requeued for "
                     "rescheduling under a new lease epoch."
                 ),
-                extra={"lease_id": str(lease.id), "lease_epoch": lease.lease_epoch},
+                extra={
+                    "expired_ranks": sorted(lease.rank for lease in current_overdue),
+                    "lease_epoch": job.current_lease_epoch,
+                },
                 now=now,
             )
             job.scheduled_node_id = None
+            job.rendezvous_node_id = None
 
     await session.flush()
-    return len(leases)
+    return expired_count

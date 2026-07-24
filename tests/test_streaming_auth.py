@@ -21,15 +21,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from orchestrator.api.streaming import StreamAuthOutcome, authorize_stream
 from orchestrator.core.config import get_settings
 from orchestrator.core.security import create_node_jwt
-from orchestrator.models.job import Job, JobState
+from orchestrator.models.job import Job
 from orchestrator.models.lease import Lease
 from orchestrator.services.leases import sweep_expired_leases
 from orchestrator.services.scheduling import run_scheduler_pass
-from tests.helpers import auth_headers, register_new_node, send_heartbeat
+from tests.helpers import (
+    auth_headers,
+    register_new_node,
+    schedule_single_rank_job,
+    send_heartbeat,
+)
 
 
 async def _scheduled_job(session: AsyncSession, node_id: uuid.UUID) -> Job:
-    job = Job(
+    job = schedule_single_rank_job(
+        session,
+        node_id=node_id,
         spec={
             "dataset": "mnist",
             "model": "small_cnn",
@@ -39,12 +46,8 @@ async def _scheduled_job(session: AsyncSession, node_id: uuid.UUID) -> Job:
             "world_size": 1,
             "min_gpu_mem_bytes": None,
         },
-        scheduler_name="round_robin",
-        state=JobState.SCHEDULED,
-        scheduled_node_id=node_id,
         submitted_by="stream-auth-test",
     )
-    session.add(job)
     await session.commit()
     return job
 

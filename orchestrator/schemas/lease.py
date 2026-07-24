@@ -16,14 +16,47 @@ from orchestrator.schemas.training import TrainingResultIn
 _FORBID = ConfigDict(extra="forbid")
 
 
+class RendezvousAssignment(BaseModel):
+    """How a claimed rank joins its training cohort (ADR-005, M5).
+
+    Everything an agent needs to launch its rank under ``torchrun`` with real
+    c10d rendezvous. ``world_size == 1`` marks the single-process path: the
+    agent runs the trainer directly (no torchrun), preserving M4 behaviour, and
+    the rendezvous fields are unused. For ``world_size > 1`` every rank dials the
+    same ``endpoint`` (``--rdzv-endpoint``) with the same ``rdzv_id``
+    (``--rdzv-id``); the rendezvous host (rank 0, ``is_rendezvous_host``) is the
+    one whose container is reachable at that endpoint.
+    """
+
+    rank: int
+    world_size: int
+    is_rendezvous_host: bool
+    # torch.distributed backend (gloo for M5; nccl once real multi-GPU exists).
+    backend: str
+    # host:port every rank dials for c10d rendezvous (--rdzv-endpoint).
+    endpoint: str
+    # Shared rendezvous identifier for this attempt (--rdzv-id).
+    rdzv_id: str
+    # Dev co-located wiring: the shared user-defined Docker network the cohort's
+    # containers join, and the network-alias/name the rank-0 (rendezvous host)
+    # container takes so ``endpoint`` resolves to it. Empty for world_size==1.
+    network: str
+    host_alias: str
+    # torchrun --max-restarts (bounded elastic re-formation, ADR-005).
+    max_restarts: int
+
+
 class ClaimResponse(BaseModel):
     """Result of POST /nodes/{id}/leases/claim.
 
     ``lease`` is the granted lease, or ``null`` when there was no work scheduled
     to this node right now (a clean empty-handed poll, not an error).
+    ``rendezvous`` accompanies a granted lease with the rank/world_size/endpoint
+    the agent needs to launch it (M5); ``null`` when ``lease`` is ``null``.
     """
 
     lease: LeaseOut | None
+    rendezvous: RendezvousAssignment | None = None
 
 
 class LeaseEpochRequest(BaseModel):
@@ -62,4 +95,5 @@ __all__ = [
     "LeaseEpochRequest",
     "LeaseFailRequest",
     "LeaseOut",
+    "RendezvousAssignment",
 ]

@@ -43,14 +43,22 @@ class NodeSnapshot:
 
 @runtime_checkable
 class Scheduler(Protocol):
-    """A placement strategy. Ranks pre-filtered candidates and picks one.
+    """A placement strategy. Ranks pre-filtered candidates and picks one (or N).
 
-    ``select_node`` receives only candidates that already pass every hard
-    filter, so a strategy never needs to re-check eligibility — it only ranks.
-    Returns the chosen snapshot, or ``None`` when it declines to place the job.
+    ``rank_candidates`` receives only candidates that already pass every hard
+    filter, so a strategy never needs to re-check eligibility — it only orders
+    them best-first. ``select_node`` is the world_size=1 convenience wrapper
+    (the best candidate, or ``None`` when the pool is empty); a world_size=N
+    cohort takes the first N of ``rank_candidates`` (see
+    ``services.scheduling``). Baselines generalise to top-N by construction:
+    the same ordering that picks one node picks the best N.
     """
 
     name: str
+
+    def rank_candidates(
+        self, job: Job, candidates: list[NodeSnapshot]
+    ) -> list[NodeSnapshot]: ...
 
     async def select_node(
         self, job: Job, candidates: list[NodeSnapshot]

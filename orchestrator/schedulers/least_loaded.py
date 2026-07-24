@@ -19,19 +19,26 @@ class LeastLoadedScheduler:
 
     name = "least_loaded"
 
+    def _sort_key(self, s: NodeSnapshot) -> tuple[int, float, str]:
+        load = current_load(s)
+        # (has_no_telemetry, load, name): nodes with a real reading (0) sort
+        # before nodes with unknown load (1); within each group, lower load
+        # then name for determinism.
+        if load is None:
+            return (1, 0.0, s.node.name)
+        return (0, load, s.node.name)
+
+    def rank_candidates(
+        self, job: Job, candidates: list[NodeSnapshot]
+    ) -> list[NodeSnapshot]:
+        """Eligible nodes ordered least-loaded first, nodes with no telemetry
+        last. Taking the first N gives the N least-loaded real-telemetry nodes —
+        the same rule that picks one, applied to N."""
+        return sorted(candidates, key=self._sort_key)
+
     async def select_node(
         self, job: Job, candidates: list[NodeSnapshot]
     ) -> NodeSnapshot | None:
         if not candidates:
             return None
-
-        def sort_key(s: NodeSnapshot) -> tuple[int, float, str]:
-            load = current_load(s)
-            # (has_no_telemetry, load, name): nodes with a real reading (0) sort
-            # before nodes with unknown load (1); within each group, lower load
-            # then name for determinism.
-            if load is None:
-                return (1, 0.0, s.node.name)
-            return (0, load, s.node.name)
-
-        return min(candidates, key=sort_key)
+        return min(candidates, key=self._sort_key)

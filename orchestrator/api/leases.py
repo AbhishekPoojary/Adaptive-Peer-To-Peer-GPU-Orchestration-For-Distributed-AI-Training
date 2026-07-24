@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from orchestrator.api.deps import assert_node_scope, get_settings_dep, require_node_auth
 from orchestrator.core.config import Settings
 from orchestrator.core.db import get_session
+from orchestrator.models.job import Job
 from orchestrator.models.lease import Lease
 from orchestrator.models.node import Node
 from orchestrator.schemas.job import LeaseOut
@@ -39,6 +40,7 @@ from orchestrator.services.leases import (
     claim_job_for_node,
     complete_lease,
     fail_lease,
+    rendezvous_assignment,
     renew_lease,
 )
 
@@ -51,6 +53,7 @@ def _lease_out(lease: Lease) -> LeaseOut:
         job_id=lease.job_id,
         node_id=lease.node_id,
         lease_epoch=lease.lease_epoch,
+        rank=lease.rank,
         state=lease.state.value,
         granted_at=lease.granted_at,
         expires_at=lease.expires_at,
@@ -81,11 +84,22 @@ async def claim_lease(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings_dep),
 ) -> ClaimResponse:
-    """Claim one job scheduled to this node, or return ``lease: null`` if none."""
+    """Claim this node's assigned rank slot, or return ``lease: null`` if none.
+
+    On a grant the response also carries the rank/world_size/rendezvous endpoint
+    (``RendezvousAssignment``) the agent needs to launch the rank under torchrun
+    (M5, ADR-005)."""
     assert_node_scope(node_id, node)
     lease = await claim_job_for_node(session, node=node, settings=settings)
+    if lease is None:
+        await session.commit()
+        return ClaimResponse(lease=None, rendezvous=None)
+
+    job = await session.get(Job, lease.job_id)
+    assert job is not None  # the lease was just activated against it
+    rendezvous = rendezvous_assignment(job, lease, settings=settings)
     await session.commit()
-    return ClaimResponse(lease=_lease_out(lease) if lease is not None else None)
+    return ClaimResponse(lease=_lease_out(lease), rendezvous=rendezvous)
 
 
 @router.post("/leases/{lease_id}/renew", response_model=LeaseOut)

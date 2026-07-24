@@ -7,9 +7,10 @@ requesting anything else is rejected at submit time by validating against
 mask an unknown strategy.
 
 ``adaptive`` is DB-backed and audited, so its real placement path lives in
-``services.scheduling.place_job_adaptive`` (the scheduler pass routes to it by
+``services.scheduling.place_job_cohort`` (the scheduler pass routes to it by
 name). It registers here only so the name is validatable/selectable; its
-``select_node`` is deliberately a raising guard (see ``AdaptiveScheduler``).
+``rank_candidates``/``select_node`` are deliberately raising guards (see
+``AdaptiveScheduler``).
 """
 
 from __future__ import annotations

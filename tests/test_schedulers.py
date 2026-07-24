@@ -208,3 +208,35 @@ def test_eligible_candidates_filters_the_set() -> None:
         _job(min_gpu_mem_bytes=None), [ok, off], now=_NOW, stale_seconds=_STALE
     )
     assert [s.node.name for s in elig] == ["ok"]
+
+
+# --- Top-N cohort ranking (M5) -----------------------------------------------
+
+
+def test_least_loaded_rank_candidates_orders_least_loaded_first() -> None:
+    ll = LeastLoadedScheduler()
+    busy = _snap(_node("busy"), _sample(cpu=1, gpu_util=80.0))
+    idle = _snap(_node("idle"), _sample(cpu=1, gpu_util=5.0))
+    mid = _snap(_node("mid"), _sample(cpu=1, gpu_util=40.0))
+    no_tel = _snap(_node("blind"), None)
+    order = ll.rank_candidates(_job(min_gpu_mem_bytes=None), [busy, idle, mid, no_tel])
+    # The first N of this order is a valid top-N cohort: least-loaded first, the
+    # no-telemetry node last (never assumed idle).
+    assert [s.node.name for s in order] == ["idle", "mid", "busy", "blind"]
+    assert [s.node.name for s in order[:2]] == ["idle", "mid"]
+
+
+def test_round_robin_rank_candidates_orders_oldest_assignment_first() -> None:
+    rr = RoundRobinScheduler()
+    a = _node("a", last_assigned_at=_NOW - timedelta(seconds=5))
+    b = _node("b", last_assigned_at=None)  # never assigned -> first
+    c = _node("c", last_assigned_at=_NOW - timedelta(seconds=50))
+    cands = [
+        _snap(a, _sample(cpu=1, gpu_util=1)),
+        _snap(b, _sample(cpu=1, gpu_util=1)),
+        _snap(c, _sample(cpu=1, gpu_util=1)),
+    ]
+    order = rr.rank_candidates(_job(min_gpu_mem_bytes=None), cands)
+    # never-assigned (b), then oldest real timestamp (c), then a.
+    assert [s.node.name for s in order] == ["b", "c", "a"]
+    assert [s.node.name for s in order[:2]] == ["b", "c"]

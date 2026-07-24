@@ -11,6 +11,8 @@ import base64
 import os
 import subprocess
 import sys
+import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,10 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from orchestrator.models.job import Job, JobState
+from orchestrator.models.lease import Lease, LeaseState
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ALEMBIC_INI = REPO_ROOT / "orchestrator" / "alembic.ini"
@@ -250,3 +256,60 @@ async def send_heartbeat(
     )
     resp.raise_for_status()
     return resp.json()
+
+
+# --- Cohort scheduling fixture (M5) ------------------------------------------
+
+_DEFAULT_JOB_SPEC: dict[str, Any] = {
+    "dataset": "mnist",
+    "model": "cnn",
+    "epochs": 1,
+    "batch_size": 32,
+    "learning_rate": 0.01,
+    "world_size": 1,
+    "min_gpu_mem_bytes": None,
+}
+
+
+def schedule_single_rank_job(
+    session: AsyncSession,
+    *,
+    node_id: uuid.UUID,
+    spec: dict[str, Any] | None = None,
+    scheduler_name: str = "round_robin",
+    submitted_by: str = "test",
+    epoch: int = 1,
+) -> Job:
+    """Build a job already SCHEDULED to ``node_id`` as a single-rank cohort.
+
+    Reproduces exactly the state ``services.scheduling.place_job_cohort``
+    produces for a world_size=1 placement: the attempt epoch minted, the node
+    recorded as rendezvous host, and one rank-0 PENDING lease waiting to be
+    claimed. Lets the M2 concurrency/lifecycle tests get a claimable lease
+    without running a whole scheduler pass. Adds rows to ``session`` (does not
+    commit); the caller commits."""
+    job = Job(
+        id=uuid.uuid4(),
+        spec=spec or dict(_DEFAULT_JOB_SPEC),
+        scheduler_name=scheduler_name,
+        state=JobState.SCHEDULED,
+        scheduled_node_id=node_id,
+        rendezvous_node_id=node_id,
+        current_lease_epoch=epoch,
+        submitted_by=submitted_by,
+    )
+    session.add(job)
+    now = datetime.now(UTC)
+    session.add(
+        Lease(
+            id=uuid.uuid4(),
+            job_id=job.id,
+            node_id=node_id,
+            lease_epoch=epoch,
+            rank=0,
+            state=LeaseState.PENDING,
+            granted_at=now,
+            expires_at=now + timedelta(seconds=300),
+        )
+    )
+    return job

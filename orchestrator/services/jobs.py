@@ -146,22 +146,27 @@ async def cancel_job(session: AsyncSession, *, job_id: uuid.UUID) -> Job:
         raise JobNotFoundError(str(job_id))
 
     now = datetime.now(UTC)
-    active = (
+    # Release every non-terminal lease of the job — a multi-rank cohort has one
+    # per rank (PENDING slots not yet claimed and ACTIVE ranks alike). Releasing
+    # (state RELEASED) is not a node failure, so reliability counters are
+    # untouched.
+    non_terminal = (
         await session.execute(
             select(Lease).where(
-                Lease.job_id == job.id, Lease.state == LeaseState.ACTIVE
+                Lease.job_id == job.id,
+                Lease.state.in_((LeaseState.PENDING, LeaseState.ACTIVE)),
             )
         )
-    ).scalar_one_or_none()
-    if active is not None:
-        active.state = LeaseState.RELEASED
-        active.released_at = now
+    ).scalars().all()
+    for lease in non_terminal:
+        lease.state = LeaseState.RELEASED
+        lease.released_at = now
 
     transition_job(
         session,
         job,
         JobState.CANCELLED,
-        message="Job cancelled; any active lease was released.",
+        message="Job cancelled; any active or pending cohort leases were released.",
         now=now,
     )
     return job
@@ -176,6 +181,7 @@ def _lease_out(lease: Lease) -> LeaseOut:
         job_id=lease.job_id,
         node_id=lease.node_id,
         lease_epoch=lease.lease_epoch,
+        rank=lease.rank,
         state=lease.state.value,
         granted_at=lease.granted_at,
         expires_at=lease.expires_at,
