@@ -29,8 +29,9 @@ def _is_real_number(value: object) -> TypeGuard[float | int]:
 
 
 def parse_metric_line(line: str) -> dict[str, Any] | None:
-    """Return ``{"epoch", "loss", "test_accuracy"}`` iff ``line`` is exactly a
-    metric frame; otherwise ``None``."""
+    """Return ``{"epoch", "loss", "test_accuracy", "step"}`` iff ``line`` is
+    exactly a metric frame; otherwise ``None``. ``step`` (M6) is the global
+    optimizer-step counter and is ``None`` when the trainer omits it."""
     try:
         data = json.loads(line)
     except (json.JSONDecodeError, ValueError):
@@ -41,6 +42,7 @@ def parse_metric_line(line: str) -> dict[str, Any] | None:
     epoch = data.get("epoch")
     loss = data.get("loss")
     test_accuracy = data.get("test_accuracy")
+    step = data.get("step")
 
     if not isinstance(epoch, int) or isinstance(epoch, bool):
         return None
@@ -48,11 +50,46 @@ def parse_metric_line(line: str) -> dict[str, Any] | None:
         return None
     if test_accuracy is not None and not _is_real_number(test_accuracy):
         return None
+    if step is not None and (not isinstance(step, int) or isinstance(step, bool)):
+        return None
 
     return {
         "epoch": epoch,
         "loss": float(loss),
         "test_accuracy": float(test_accuracy) if test_accuracy is not None else None,
+        "step": step,
+    }
+
+
+def parse_resume_line(line: str) -> dict[str, Any] | None:
+    """Return ``{"from_step", "from_epoch", "checkpoint_key"}`` iff ``line`` is
+    exactly a resume frame (M6: the trainer loaded a checkpoint and continued);
+    otherwise ``None``.
+
+        {"type": "resume", "from_step": N, "from_epoch": E, "checkpoint_key": "..."}
+    """
+    try:
+        data = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("type") != "resume":
+        return None
+
+    from_step = data.get("from_step")
+    from_epoch = data.get("from_epoch")
+    checkpoint_key = data.get("checkpoint_key")
+
+    if not isinstance(from_step, int) or isinstance(from_step, bool):
+        return None
+    if not isinstance(from_epoch, int) or isinstance(from_epoch, bool):
+        return None
+    if checkpoint_key is not None and not isinstance(checkpoint_key, str):
+        return None
+
+    return {
+        "from_step": from_step,
+        "from_epoch": from_epoch,
+        "checkpoint_key": checkpoint_key,
     }
 
 

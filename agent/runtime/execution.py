@@ -33,7 +33,7 @@ from agent.runtime.docker_launcher import (
     stream_container_logs,
     wait_for_exit,
 )
-from agent.runtime.metrics import parse_final_line, parse_metric_line
+from agent.runtime.metrics import parse_final_line, parse_metric_line, parse_resume_line
 from agent.runtime.stream_client import LeaseStreamClient, http_to_ws_base, stream_url
 
 logger = logging.getLogger("agent.runtime.execution")
@@ -189,6 +189,17 @@ async def run_lease_execution(
                     epoch=metric["epoch"],
                     loss=metric["loss"],
                     test_accuracy=metric["test_accuracy"],
+                    step=metric.get("step"),
+                )
+                continue
+            resume = parse_resume_line(line)
+            if resume is not None:
+                # M6: the trainer loaded a checkpoint and continued — forward it
+                # so the orchestrator records a "resumed from checkpoint" event.
+                await stream.send_resume(
+                    from_step=resume["from_step"],
+                    from_epoch=resume["from_epoch"],
+                    checkpoint_key=resume["checkpoint_key"],
                 )
                 continue
             parsed_final = parse_final_line(line)

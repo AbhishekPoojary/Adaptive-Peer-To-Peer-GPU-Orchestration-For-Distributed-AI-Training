@@ -10,19 +10,73 @@ from __future__ import annotations
 
 import json
 
-from agent.runtime.metrics import parse_final_line, parse_metric_line
+from agent.runtime.metrics import parse_final_line, parse_metric_line, parse_resume_line
 
 
 def test_parses_a_real_metric_line() -> None:
+    line = json.dumps(
+        {"type": "metric", "epoch": 3, "loss": 0.4123, "test_accuracy": 0.552, "step": 780}
+    )
+    parsed = parse_metric_line(line)
+    assert parsed == {"epoch": 3, "loss": 0.4123, "test_accuracy": 0.552, "step": 780}
+
+
+def test_metric_line_without_step_defaults_to_none() -> None:
+    # A pre-M6 metric line (no step) is still valid; step is None.
     line = json.dumps({"type": "metric", "epoch": 3, "loss": 0.4123, "test_accuracy": 0.552})
     parsed = parse_metric_line(line)
-    assert parsed == {"epoch": 3, "loss": 0.4123, "test_accuracy": 0.552}
+    assert parsed == {"epoch": 3, "loss": 0.4123, "test_accuracy": 0.552, "step": None}
 
 
 def test_metric_line_test_accuracy_may_be_null() -> None:
     line = json.dumps({"type": "metric", "epoch": 1, "loss": 1.5, "test_accuracy": None})
     parsed = parse_metric_line(line)
-    assert parsed == {"epoch": 1, "loss": 1.5, "test_accuracy": None}
+    assert parsed == {"epoch": 1, "loss": 1.5, "test_accuracy": None, "step": None}
+
+
+def test_metric_step_must_be_a_real_int() -> None:
+    assert (
+        parse_metric_line(
+            json.dumps({"type": "metric", "epoch": 1, "loss": 0.5, "step": "780"})
+        )
+        is None
+    )
+    assert (
+        parse_metric_line(
+            json.dumps({"type": "metric", "epoch": 1, "loss": 0.5, "step": True})
+        )
+        is None
+    )
+
+
+def test_parses_a_real_resume_line() -> None:
+    line = json.dumps(
+        {
+            "type": "resume",
+            "from_step": 1840,
+            "from_epoch": 3,
+            "checkpoint_key": "checkpoints/job-1/e003-s00001840-abc.pt",
+        }
+    )
+    parsed = parse_resume_line(line)
+    assert parsed == {
+        "from_step": 1840,
+        "from_epoch": 3,
+        "checkpoint_key": "checkpoints/job-1/e003-s00001840-abc.pt",
+    }
+
+
+def test_resume_line_rejects_non_resume_and_bad_types() -> None:
+    assert parse_resume_line(json.dumps({"type": "metric", "epoch": 1, "loss": 0.5})) is None
+    assert (
+        parse_resume_line(json.dumps({"type": "resume", "from_step": "x", "from_epoch": 3}))
+        is None
+    )
+    # A metric line must never be mistaken for a resume line and vice-versa.
+    metric = json.dumps({"type": "metric", "epoch": 1, "loss": 0.5, "step": 10})
+    assert parse_resume_line(metric) is None
+    resume = json.dumps({"type": "resume", "from_step": 5, "from_epoch": 1, "checkpoint_key": "k"})
+    assert parse_metric_line(resume) is None
 
 
 def test_parses_a_real_final_line() -> None:

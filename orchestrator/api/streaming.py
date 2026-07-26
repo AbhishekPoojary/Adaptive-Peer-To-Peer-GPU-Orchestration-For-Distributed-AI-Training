@@ -42,6 +42,7 @@ from orchestrator.core.db import get_session
 from orchestrator.core.security import JWTValidationError, decode_node_jwt
 from orchestrator.models.job import Job
 from orchestrator.models.lease import Lease, LeaseState
+from orchestrator.services.jobs import record_resume_event
 from orchestrator.services.training import record_log_line, record_metric
 
 logger = logging.getLogger("orchestrator.streaming")
@@ -170,10 +171,14 @@ async def _persist_frame(
         epoch = frame.get("epoch")
         loss = frame.get("loss")
         test_accuracy = frame.get("test_accuracy")
+        step = frame.get("step")
         if not isinstance(epoch, int) or not isinstance(loss, int | float):
             logger.warning("dropping malformed metric frame for job=%s: %r", job_id, frame)
             return
         if test_accuracy is not None and not isinstance(test_accuracy, int | float):
+            logger.warning("dropping malformed metric frame for job=%s: %r", job_id, frame)
+            return
+        if step is not None and not isinstance(step, int):
             logger.warning("dropping malformed metric frame for job=%s: %r", job_id, frame)
             return
         await record_metric(
@@ -183,7 +188,30 @@ async def _persist_frame(
             epoch=epoch,
             loss=float(loss),
             test_accuracy=float(test_accuracy) if test_accuracy is not None else None,
+            step=step,
             ts=ts,
+        )
+        await session.commit()
+        return
+
+    if frame_type == "resume":
+        # M6: the trainer loaded a checkpoint and continued from a step > 0. Turn
+        # it into a plain-language JobEvent for the M7 timeline (ADR-006).
+        from_step = frame.get("from_step")
+        from_epoch = frame.get("from_epoch")
+        checkpoint_key = frame.get("checkpoint_key")
+        if not isinstance(from_step, int) or not isinstance(from_epoch, int):
+            logger.warning("dropping malformed resume frame for job=%s: %r", job_id, frame)
+            return
+        if checkpoint_key is not None and not isinstance(checkpoint_key, str):
+            logger.warning("dropping malformed resume frame for job=%s: %r", job_id, frame)
+            return
+        await record_resume_event(
+            session,
+            job_id=job_id,
+            from_step=from_step,
+            from_epoch=from_epoch,
+            checkpoint_key=checkpoint_key,
         )
         await session.commit()
         return

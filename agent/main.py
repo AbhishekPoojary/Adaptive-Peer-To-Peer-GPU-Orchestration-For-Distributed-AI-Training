@@ -669,6 +669,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=os.environ.get("DATASET_CACHE_VOLUME", "gpu-orchestrator-dataset-cache"),
         help="Named Docker volume mounted at /data-cache, created once per node if absent.",
     )
+    # M6 (ADR-006): checkpoint-to-MinIO config passed through to trainer
+    # containers. Defaults come from env so a co-located dev node inherits the
+    # same S3_* the compose stack sets. Absent endpoint/creds → no checkpointing.
+    parser.add_argument(
+        "--s3-endpoint-url",
+        default=os.environ.get("S3_ENDPOINT_URL"),
+        help="S3/MinIO endpoint the trainer writes checkpoints to (M6, ADR-006).",
+    )
+    parser.add_argument(
+        "--s3-access-key", default=os.environ.get("S3_ACCESS_KEY"), help="S3 access key."
+    )
+    parser.add_argument(
+        "--s3-secret-key", default=os.environ.get("S3_SECRET_KEY"), help="S3 secret key."
+    )
+    parser.add_argument(
+        "--s3-bucket-checkpoints",
+        default=os.environ.get("S3_BUCKET_CHECKPOINTS", "checkpoints"),
+        help="S3 bucket for checkpoints.",
+    )
+    parser.add_argument(
+        "--s3-region", default=os.environ.get("S3_REGION", "us-east-1"), help="S3 region."
+    )
+    parser.add_argument(
+        "--checkpoint-every-n-steps",
+        type=int,
+        default=int(os.environ.get("CHECKPOINT_EVERY_N_STEPS", "100")),
+        help="Rank-0 checkpoint cadence in optimizer steps (M6).",
+    )
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args(argv)
 
@@ -738,7 +766,22 @@ async def run(args: argparse.Namespace) -> None:
             memory_limit=args.trainer_memory_limit,
             pids_limit=args.trainer_pids_limit,
             dataset_cache_volume=args.dataset_cache_volume,
+            s3_endpoint_url=args.s3_endpoint_url,
+            s3_access_key=args.s3_access_key,
+            s3_secret_key=args.s3_secret_key,
+            s3_bucket_checkpoints=args.s3_bucket_checkpoints,
+            s3_region=args.s3_region,
+            checkpoint_every_n_steps=args.checkpoint_every_n_steps,
         )
+        if launch_config.checkpointing_enabled():
+            logger.info(
+                "checkpoint-to-MinIO enabled: endpoint=%s bucket=%s every=%d steps",
+                launch_config.s3_endpoint_url,
+                launch_config.s3_bucket_checkpoints,
+                launch_config.checkpoint_every_n_steps,
+            )
+        else:
+            logger.info("checkpoint-to-MinIO not configured; trainer will run without it")
 
         docker_client: docker.DockerClient | None = None
         if args.release_after is None:

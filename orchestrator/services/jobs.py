@@ -130,6 +130,39 @@ async def create_job(
     return job
 
 
+async def record_resume_event(
+    session: AsyncSession,
+    *,
+    job_id: uuid.UUID,
+    from_step: int,
+    from_epoch: int,
+    checkpoint_key: str | None = None,
+) -> bool:
+    """Append a plain-language "resumed from checkpoint" event to a job's
+    timeline (M6, ADR-006). Fed by the WebSocket stream when the trainer reports
+    it loaded a checkpoint and continued from a step > 0. Records a same-state
+    audit event (no transition) so the M7 dashboard timeline reads
+    ``… → reassigned → resumed from checkpoint step N``. Returns ``False`` (a
+    no-op) if the job is unknown. Caller commits.
+    """
+    job = await session.get(Job, job_id)
+    if job is None:
+        return False
+    extra: dict[str, Any] = {"resumed_from_step": from_step, "resumed_from_epoch": from_epoch}
+    if checkpoint_key is not None:
+        extra["checkpoint_key"] = checkpoint_key
+    record_job_event(
+        session,
+        job,
+        from_state=job.state,
+        to_state=job.state,
+        message=f"Resumed from checkpoint at step {from_step} (epoch {from_epoch}).",
+        extra=extra,
+    )
+    await session.flush()
+    return True
+
+
 class JobNotFoundError(Exception):
     """The referenced job does not exist."""
 

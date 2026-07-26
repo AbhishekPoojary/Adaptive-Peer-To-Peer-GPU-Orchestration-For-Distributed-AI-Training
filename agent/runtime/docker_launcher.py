@@ -52,12 +52,34 @@ _TMPFS_OPTS = "rw,noexec,nosuid,size=2g"
 
 @dataclass(frozen=True)
 class TrainerLaunchConfig:
-    """Node-local launch configuration (agent CLI/env — not the job spec)."""
+    """Node-local launch configuration (agent CLI/env — not the job spec).
+
+    The S3/checkpoint fields (M6, ADR-006) are optional: when all of
+    ``s3_endpoint_url``/``s3_access_key``/``s3_secret_key``/``s3_bucket_checkpoints``
+    are set they are passed into the trainer container's env so it checkpoints to
+    (and resumes from) MinIO; when unset the trainer runs without checkpointing,
+    exactly as M4/M5 — and the container env is byte-for-byte the pre-M6 env.
+    """
 
     image: str = DEFAULT_TRAINER_IMAGE
     memory_limit: str = "6g"
     pids_limit: int = 256
     dataset_cache_volume: str = DEFAULT_DATASET_CACHE_VOLUME
+    s3_endpoint_url: str | None = None
+    s3_access_key: str | None = None
+    s3_secret_key: str | None = None
+    s3_bucket_checkpoints: str | None = None
+    s3_region: str = "us-east-1"
+    checkpoint_every_n_steps: int = 100
+
+    def checkpointing_enabled(self) -> bool:
+        """True iff all S3 credentials/endpoint/bucket are present."""
+        return bool(
+            self.s3_endpoint_url
+            and self.s3_access_key
+            and self.s3_secret_key
+            and self.s3_bucket_checkpoints
+        )
 
 
 @dataclass(frozen=True)
@@ -149,6 +171,22 @@ def build_run_kwargs(
         "LEASE_ID": lease_id,
         "LEASE_EPOCH": str(lease_epoch),
     }
+    # M6 (ADR-006): pass S3/MinIO checkpoint config through to the trainer only
+    # when it is fully configured, so a non-checkpointing node's container env is
+    # exactly the pre-M6 env. In the dev co-located topology the endpoint is the
+    # host's published MinIO port (e.g. http://host.docker.internal:9010), so the
+    # trainer container reaches the same MinIO the orchestrator uses.
+    if config.checkpointing_enabled():
+        assert config.s3_endpoint_url is not None  # narrowed by checkpointing_enabled
+        assert config.s3_access_key is not None
+        assert config.s3_secret_key is not None
+        assert config.s3_bucket_checkpoints is not None
+        environment["S3_ENDPOINT_URL"] = config.s3_endpoint_url
+        environment["S3_ACCESS_KEY"] = config.s3_access_key
+        environment["S3_SECRET_KEY"] = config.s3_secret_key
+        environment["S3_BUCKET_CHECKPOINTS"] = config.s3_bucket_checkpoints
+        environment["S3_REGION"] = config.s3_region
+        environment["CHECKPOINT_EVERY_N_STEPS"] = str(config.checkpoint_every_n_steps)
     kwargs: dict[str, Any] = {
         "image": config.image,
         "environment": environment,

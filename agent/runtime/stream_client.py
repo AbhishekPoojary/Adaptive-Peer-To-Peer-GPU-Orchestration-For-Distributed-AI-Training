@@ -70,7 +70,14 @@ class LeaseStreamClient:
     async def send_log(self, *, stream: str, line: str) -> None:
         await self._send({"type": "log", "ts": time.time(), "stream": stream, "line": line})
 
-    async def send_metric(self, *, epoch: int, loss: float, test_accuracy: float | None) -> None:
+    async def send_metric(
+        self,
+        *,
+        epoch: int,
+        loss: float,
+        test_accuracy: float | None,
+        step: int | None = None,
+    ) -> None:
         await self._send(
             {
                 "type": "metric",
@@ -78,6 +85,22 @@ class LeaseStreamClient:
                 "epoch": epoch,
                 "loss": loss,
                 "test_accuracy": test_accuracy,
+                "step": step,
+            }
+        )
+
+    async def send_resume(
+        self, *, from_step: int, from_epoch: int, checkpoint_key: str | None
+    ) -> None:
+        """Forward the trainer's real checkpoint-resume event (M6, ADR-006) so
+        the orchestrator records a "resumed from checkpoint step N" JobEvent."""
+        await self._send(
+            {
+                "type": "resume",
+                "ts": time.time(),
+                "from_step": from_step,
+                "from_epoch": from_epoch,
+                "checkpoint_key": checkpoint_key,
             }
         )
 
