@@ -53,6 +53,7 @@ from agent.leases import (
     held_from_response,
     renew_lease,
 )
+from agent.metrics_server import AgentMetricsState, start_metrics_server
 from agent.runtime.docker_launcher import RendezvousSpec, TrainerLaunchConfig
 from agent.runtime.execution import DockerLaunchError, ExecutionResult, run_lease_execution
 from agent.telemetry.latency import RttEwma, Stopwatch
@@ -698,6 +699,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Rank-0 checkpoint cadence in optimizer steps (M6).",
     )
     parser.add_argument("--log-level", default="INFO")
+    parser.add_argument(
+        "--metrics-port",
+        type=int,
+        default=None,
+        help=(
+            "Expose a Prometheus /metrics HTTP server on this port (real "
+            "heartbeats/RTT/lease-state/GPU gauges only). Off by default — "
+            "no port is opened unless this is set."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -783,6 +794,11 @@ async def run(args: argparse.Namespace) -> None:
         else:
             logger.info("checkpoint-to-MinIO not configured; trainer will run without it")
 
+        metrics_state = AgentMetricsState()
+        if args.metrics_port is not None:
+            start_metrics_server(args.metrics_port, metrics_state)
+            logger.info("metrics server listening on :%d/metrics", args.metrics_port)
+
         docker_client: docker.DockerClient | None = None
         if args.release_after is None:
             try:
@@ -834,6 +850,13 @@ async def run(args: argparse.Namespace) -> None:
                     agent_ewma,
                     body.get("rtt_ewma_ms"),
                 )
+                metrics_state.record_heartbeat_sent(rtt_ewma_ms=agent_ewma)
+                # Same NVML source the heartbeat payload just read from, polled
+                # again here rather than threaded through the payload builder's
+                # return value — a second cheap NVML read per cycle, not a
+                # second data path (CONTRIBUTING.md #2: still real or absent,
+                # never invented).
+                metrics_state.record_gpu_telemetry(collect_gpu_telemetry())
             except httpx.HTTPStatusError as exc:
                 logger.error(
                     "heartbeat rejected (%s): %s", exc.response.status_code, exc.response.text
@@ -855,6 +878,14 @@ async def run(args: argparse.Namespace) -> None:
                 release_after=args.release_after,
                 docker_client=docker_client,
                 launch_config=launch_config,
+            )
+            metrics_state.record_lease_state(
+                lease_active=executing_lease is not None,
+                container_running=(
+                    executing_lease is not None
+                    and executing_lease.task is not None
+                    and not executing_lease.task.done()
+                ),
             )
 
             await asyncio.sleep(args.heartbeat_interval_seconds)
