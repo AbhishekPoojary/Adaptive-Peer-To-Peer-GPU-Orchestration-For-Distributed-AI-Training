@@ -1,7 +1,8 @@
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap } from "./client";
 import { POLL_INTERVAL_MS } from "./nodes";
-import type { JobSubmitRequest } from "./types";
+import type { JobSubmitRequest, TrainingLogLine } from "./types";
 
 export function useJobsQuery() {
   return useQuery({
@@ -58,7 +59,13 @@ export function useSchedulingDecisionsQuery(jobId: string | undefined) {
   });
 }
 
-export function useJobMetricsQuery(jobId: string | undefined) {
+/**
+ * `pollWhileLive`: keep polling only while the job is in a non-terminal
+ * state (the job detail page passes `!isTerminalJobState(job.state)`) — once
+ * a job finishes there is nothing new to fetch, so polling stops rather than
+ * hitting the API forever for a page left open.
+ */
+export function useJobMetricsQuery(jobId: string | undefined, pollWhileLive: boolean) {
   return useQuery({
     queryKey: ["jobs", jobId, "metrics"],
     queryFn: async () => {
@@ -68,8 +75,87 @@ export function useJobMetricsQuery(jobId: string | undefined) {
       );
     },
     enabled: Boolean(jobId),
-    refetchInterval: POLL_INTERVAL_MS,
+    refetchInterval: pollWhileLive ? POLL_INTERVAL_MS : false,
   });
+}
+
+// --- Live log streaming (M7): cursor-based polling ---------------------------
+
+const LOG_POLL_INTERVAL_MS = 1500;
+/** Generous first page: covers a whole short demo run's transcript in one
+ * request; later pages only ever carry what's new since the last cursor. */
+const LOG_PAGE_SIZE = 500;
+
+export interface UseJobLogsResult {
+  /** All lines fetched so far, oldest first. Reset whenever `jobId` changes. */
+  lines: TrainingLogLine[];
+  /** True on the very first fetch only (never re-flashes empty on later polls). */
+  isLoading: boolean;
+  /** Set when the most recent poll failed; cleared the moment a poll succeeds
+   * again. The UI renders this as a quiet "reconnecting…" note, never a hard
+   * error, since the accumulated lines are still shown and polling keeps
+   * retrying on its own schedule. */
+  isReconnecting: boolean;
+}
+
+/**
+ * Poll `GET /jobs/{id}/logs` with a cursor, accumulating only genuinely new
+ * lines client-side. Stops polling once `pollWhileLive` is false (the job
+ * reached a terminal state) — the transcript up to that point stays visible.
+ *
+ * Assumes the caller remounts this hook's owning component when `jobId`
+ * changes (App.tsx keys the job detail route by `:jobId`) — so there is no
+ * "reset accumulated state when the job changes" bookkeeping here; a fresh
+ * `jobId` always means a fresh component instance and fresh initial state.
+ */
+export function useJobLogs(
+  jobId: string | undefined,
+  pollWhileLive: boolean,
+): UseJobLogsResult {
+  const [lines, setLines] = useState<TrainingLogLine[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isReconnecting, setIsReconnecting] = useState(false);
+  const cursorRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!jobId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    async function poll() {
+      try {
+        const body = unwrap(
+          await api.GET("/jobs/{job_id}/logs", {
+            params: {
+              path: { job_id: jobId as string },
+              query: { after: cursorRef.current ?? undefined, limit: LOG_PAGE_SIZE },
+            },
+          }),
+        );
+        if (cancelled) return;
+        if (body.lines.length > 0) {
+          setLines((prev) => [...prev, ...body.lines]);
+        }
+        cursorRef.current = body.next_after ?? cursorRef.current;
+        setIsReconnecting(false);
+      } catch {
+        if (!cancelled) setIsReconnecting(true);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+      if (!cancelled && pollWhileLive) {
+        timer = setTimeout(() => void poll(), LOG_POLL_INTERVAL_MS);
+      }
+    }
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [jobId, pollWhileLive]);
+
+  return { lines, isLoading, isReconnecting };
 }
 
 export function useSubmitJobMutation() {
