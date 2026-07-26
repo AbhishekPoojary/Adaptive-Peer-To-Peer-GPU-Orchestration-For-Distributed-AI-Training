@@ -10,8 +10,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml ./
+COPY pyproject.toml README.md ./
 COPY orchestrator ./orchestrator
+# agent/ and installer/ are not imported by the running server; they are
+# served as static/bundled artifacts by orchestrator/api/installer.py so a new
+# peer can `curl .../install.sh | bash` and download this exact agent build
+# without the repo needing a public git remote (M7).
+COPY agent ./agent
+COPY installer ./installer
 
 RUN pip install --no-cache-dir ".[server]"
 
