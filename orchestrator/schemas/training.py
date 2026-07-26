@@ -56,7 +56,31 @@ class TrainingMetricListResponse(BaseModel):
     metrics: list[TrainingMetricOut]
 
 
+class TrainingLogLineOut(BaseModel):
+    """One real stdout/stderr line from the trainer container's transcript."""
+
+    id: int
+    ts: datetime
+    stream: Literal["stdout", "stderr"]
+    line: str
+
+
+class TrainingLogLineListResponse(BaseModel):
+    """Body of GET /jobs/{job_id}/logs — a page of this job's real log transcript.
+
+    ``next_after`` is the cursor to pass as ``after`` on the next poll so only
+    newly-arrived lines are fetched; it is the id of the last line in this page,
+    or the request's own ``after`` (unchanged) when the page was empty — never
+    fabricated when there is nothing new yet.
+    """
+
+    lines: list[TrainingLogLineOut]
+    next_after: int | None
+
+
 __all__ = [
+    "TrainingLogLineListResponse",
+    "TrainingLogLineOut",
     "TrainingMetricListResponse",
     "TrainingMetricOut",
     "TrainingResultIn",

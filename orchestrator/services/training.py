@@ -97,6 +97,27 @@ async def _trim_log_lines(session: AsyncSession, *, job_id: uuid.UUID) -> None:
     )
 
 
+#: Default/max page size for GET /jobs/{id}/logs — mirrors the per-job
+#: retention cap so one page can always cover the whole live transcript.
+LOG_LINES_DEFAULT_LIMIT = 500
+LOG_LINES_MAX_LIMIT = LOG_LINE_RETENTION_PER_JOB
+
+
+async def list_log_lines(
+    session: AsyncSession, *, job_id: uuid.UUID, after: int | None, limit: int
+) -> list[TrainingLogLine]:
+    """This job's real log lines with ``id > after``, oldest first, capped at
+    ``limit``. ``after=None`` starts from the beginning of the retained
+    transcript. Cursor-based so a poller passes back the last id it saw and
+    only ever receives lines it hasn't seen yet."""
+    stmt = select(TrainingLogLine).where(TrainingLogLine.job_id == job_id)
+    if after is not None:
+        stmt = stmt.where(TrainingLogLine.id > after)
+    stmt = stmt.order_by(TrainingLogLine.id).limit(limit)
+    rows = (await session.execute(stmt)).scalars().all()
+    return list(rows)
+
+
 async def list_metrics(session: AsyncSession, *, job_id: uuid.UUID) -> list[TrainingMetric]:
     """This job's real metric rows, oldest first — the loss/accuracy curve."""
     rows = (

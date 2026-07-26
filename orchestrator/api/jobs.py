@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.api.deps import get_settings_dep
@@ -22,7 +22,12 @@ from orchestrator.schemas.job import (
     JobSubmitRequest,
 )
 from orchestrator.schemas.scheduling import SchedulingDecisionListResponse
-from orchestrator.schemas.training import TrainingMetricListResponse, TrainingMetricOut
+from orchestrator.schemas.training import (
+    TrainingLogLineListResponse,
+    TrainingLogLineOut,
+    TrainingMetricListResponse,
+    TrainingMetricOut,
+)
 from orchestrator.services.jobs import (
     IllegalTransitionError,
     JobNotFoundError,
@@ -33,7 +38,12 @@ from orchestrator.services.jobs import (
 )
 from orchestrator.services.loops import trigger_scheduler_pass
 from orchestrator.services.scheduling import list_scheduling_decisions
-from orchestrator.services.training import list_metrics
+from orchestrator.services.training import (
+    LOG_LINES_DEFAULT_LIMIT,
+    LOG_LINES_MAX_LIMIT,
+    list_log_lines,
+    list_metrics,
+)
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -154,6 +164,40 @@ async def get_job_metrics(
             )
             for m in rows
         ]
+    )
+
+
+@router.get("/{job_id}/logs", response_model=TrainingLogLineListResponse)
+async def get_job_logs(
+    job_id: uuid.UUID,
+    after: int | None = Query(
+        default=None,
+        ge=0,
+        description="Return only lines with id > after (cursor). Omit to start "
+        "from the beginning of the retained transcript.",
+    ),
+    limit: int = Query(default=LOG_LINES_DEFAULT_LIMIT, ge=1, le=LOG_LINES_MAX_LIMIT),
+    session: AsyncSession = Depends(get_session),
+) -> TrainingLogLineListResponse:
+    """This job's real stdout/stderr transcript, cursor-paginated.
+
+    Fed exclusively by the WebSocket log stream (ADR-002) as the trainer
+    container actually produces output; empty for a job that hasn't started
+    executing. Poll with ``after=<last id you saw>`` to fetch only new lines.
+    404 only if the job itself is unknown.
+
+    # TODO(M8): user auth — unauthenticated for dev.
+    """
+    if await get_job_detail(session, job_id=job_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown job")
+    rows = await list_log_lines(session, job_id=job_id, after=after, limit=limit)
+    next_after = rows[-1].id if rows else after
+    return TrainingLogLineListResponse(
+        lines=[
+            TrainingLogLineOut(id=r.id, ts=r.ts, stream=r.stream, line=r.line)  # type: ignore[arg-type]
+            for r in rows
+        ],
+        next_after=next_after,
     )
 
 
