@@ -104,18 +104,43 @@ class Settings(BaseSettings):
     training_backend: str = "gloo"
 
     # --- Background loops (M2) ---
-    # The orchestrator runs two periodic asyncio loops: a scheduler pass that
-    # places QUEUED/REASSIGNED jobs, and a sweep that expires overdue leases.
-    # Intervals are how often each wakes; a submit also triggers an immediate
-    # scheduler pass so placement isn't gated on the loop cadence.
+    # The orchestrator runs three periodic asyncio loops: a scheduler pass that
+    # places QUEUED/REASSIGNED jobs, a sweep that expires overdue leases, and the
+    # M6 φ-accrual failure detector. Intervals are how often each wakes; a submit
+    # (and a detector-declared failure) also triggers an immediate scheduler pass
+    # so placement isn't gated on the loop cadence.
     scheduler_pass_interval_seconds: float = 3.0
     lease_sweep_interval_seconds: float = 3.0
-    # Master switch for the background loops. Disabled in tests so scheduling
-    # and sweeping are driven deterministically by the test, not a wall clock.
+    # Master switch for the background loops. Disabled in tests so scheduling,
+    # sweeping, and failure detection are driven deterministically by the test,
+    # not a wall clock.
     enable_background_loops: bool = True
 
-    # --- Failure detection (ADR-004) ---
+    # --- Failure detection (ADR-004, M6 φ-accrual detector) ---
+    # How often the detector loop evaluates every ONLINE node's liveness. Kept
+    # short (1 s) so detection latency is dominated by the 5 s floor, not the
+    # tick; this is the shipped value, not a demo-only tuning.
+    failure_detector_interval_seconds: float = 1.0
+    # Hard floor: no node is ever declared failed with less than this many
+    # seconds of silence, regardless of what the φ math would allow (ADR-004).
     heartbeat_floor_seconds: float = 5.0
+    # φ suspicion threshold to declare a node failed. φ = -log10(P(gap this late
+    # under the node's own recent interval distribution)); 3.0 ≈ "≤0.1% likely".
+    phi_accrual_threshold: float = 3.0
+    # Rolling window of most-recent heartbeat inter-arrival intervals fitted to
+    # a Normal for the φ computation.
+    phi_accrual_window_samples: int = 20
+    # Floor on the fitted interval stddev (seconds): prevents divide-by-zero and
+    # over-sensitivity on a node with near-constant intervals (standard φ-accrual
+    # guard). Not a fabricated value — a documented numerical safety bound.
+    phi_accrual_min_std_seconds: float = 0.5
+    # Minimum number of observed intervals before the φ distribution is trusted.
+    # Below this a freshly enrolled node uses the bootstrap silence fallback
+    # rather than a fabricated distribution.
+    phi_accrual_min_intervals: int = 3
+    # Bootstrap fallback: with too little history to fit a distribution, declare
+    # failed only after this much continuous silence (still ≥ the 5 s floor).
+    phi_accrual_bootstrap_silence_seconds: float = 10.0
 
     # --- Read API (M1) ---
     # A node is reported `heartbeat_stale: true` when now - last_heartbeat_at
