@@ -43,7 +43,11 @@ export function Submit() {
   const submitMutation = useSubmitJobMutation();
 
   const [dataset, setDataset] = useState<(typeof DATASETS)[number]>("cifar10");
-  const [model, setModel] = useState("resnet18");
+  // "cnn" (the trainer's real SmallCNN — see trainer/train.py) is the only
+  // architecture actually implemented; defaulting to a name it doesn't
+  // recognize (e.g. "resnet18") would train fine but silently substitute
+  // SmallCNN anyway, which is honest in the logs but a confusing default.
+  const [model, setModel] = useState("cnn");
   const [epochs, setEpochs] = useState("5");
   const [batchSize, setBatchSize] = useState("32");
   const [learningRate, setLearningRate] = useState("0.01");
@@ -137,10 +141,9 @@ export function Submit() {
       <div>
         <h1 className="text-lg font-semibold text-primary">Submit a training job</h1>
         <p className="text-sm text-secondary">
-          Queues a real job against the fleet. M4 (execution) isn't built yet — the
-          job will sit in whatever real state the scheduler and lease loop put it
-          in (QUEUED, SCHEDULED, LEASED, or cycling LEASED/REASSIGNED if a lease
-          expires), not a simulated training run.
+          Queues a real job against the fleet. Once a peer picks it up it runs
+          real training (real dataset, real backprop) inside a container on
+          that machine — you'll land on the job page to watch it happen.
         </p>
       </div>
 
@@ -166,7 +169,7 @@ export function Submit() {
               id="model"
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder="resnet18"
+              placeholder="cnn"
               maxLength={128}
               required
             />
@@ -296,6 +299,14 @@ export function Submit() {
             </>
           )}
         </div>
+
+        {eligibleCount !== null && Number.isInteger(Number(worldSize)) && Number(worldSize) > eligibleCount && (
+          <div className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-primary">
+            This job needs {worldSize} peers but only {eligibleCount} are eligible right
+            now. It will still be submitted, but it will sit queued until enough
+            peers are online and free — it will not block or fail on submit.
+          </div>
+        )}
 
         {formError && (
           <div className="rounded-md border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-primary">
