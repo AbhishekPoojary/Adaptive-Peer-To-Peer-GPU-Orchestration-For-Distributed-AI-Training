@@ -1,14 +1,16 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { ServerOff } from "lucide-react";
+import { Plus, ServerOff } from "lucide-react";
 import { useNodesQuery } from "@/api/nodes";
 import type { NodeSummary } from "@/api/types";
+import { AddNodeModal } from "@/components/AddNodeModal";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
 import { StatusPill } from "@/components/StatusPill";
 import { UpdatedAgo } from "@/components/UpdatedAgo";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { formatBytes, formatPercent, formatRelativeTime } from "@/lib/format";
 
 function hardwareSummary(node: NodeSummary): string {
@@ -33,10 +35,26 @@ function telemetrySummary(node: NodeSummary): string {
 export function NodesList() {
   const navigate = useNavigate();
   const query = useNodesQuery();
+  const [addNodeOpen, setAddNodeOpen] = useState(false);
+
+  const addNodeButton = (
+    <Button size="sm" onClick={() => setAddNodeOpen(true)}>
+      <Plus className="size-3.5" aria-hidden="true" />
+      Add a node
+    </Button>
+  );
+  const addNodeModal = (
+    <AddNodeModal
+      key={addNodeOpen ? "open" : "closed"}
+      open={addNodeOpen}
+      onOpenChange={setAddNodeOpen}
+      existingNodes={query.data?.nodes ?? []}
+    />
+  );
 
   if (query.isPending) {
     return (
-      <PageShell title="Nodes">
+      <PageShell title="Nodes" right={addNodeButton}>
         <DataTable
           columns={columns}
           rows={[]}
@@ -44,14 +62,16 @@ export function NodesList() {
           isLoading
           skeletonRows={4}
         />
+        {addNodeModal}
       </PageShell>
     );
   }
 
   if (query.isError) {
     return (
-      <PageShell title="Nodes">
+      <PageShell title="Nodes" right={addNodeButton}>
         <ErrorState error={query.error} onRetry={() => query.refetch()} />
+        {addNodeModal}
       </PageShell>
     );
   }
@@ -62,7 +82,10 @@ export function NodesList() {
     <PageShell
       title="Nodes"
       right={
-        <UpdatedAgo dataUpdatedAt={query.dataUpdatedAt} isFetching={query.isFetching} />
+        <div className="flex items-center gap-3">
+          <UpdatedAgo dataUpdatedAt={query.dataUpdatedAt} isFetching={query.isFetching} />
+          {addNodeButton}
+        </div>
       }
     >
       {nodes.length === 0 ? (
@@ -72,17 +95,9 @@ export function NodesList() {
           description={
             <div className="flex flex-col gap-2 text-left">
               <p>
-                A peer joins the fleet by running the agent with a one-time
-                enrollment token. Mint a token first (admin-only), then run:
-              </p>
-              <code className="block overflow-x-auto rounded bg-elevated px-2.5 py-2 text-left font-data text-xs text-primary">
-                python -m agent --orchestrator http://localhost:8090
-                --enrollment-token &lt;ENROLLMENT_TOKEN&gt;
-              </code>
-              <p className="text-xs text-tertiary">
-                Minting a token and a guided "Add a node" flow with live-connect
-                feedback lands in M7 — this is a preview of the real command, not
-                a working wizard yet.
+                A peer joins the fleet by running one command on their machine —
+                click "Add a node" above to mint a one-time enrollment token and
+                get that command.
               </p>
             </div>
           }
@@ -95,6 +110,7 @@ export function NodesList() {
           onRowClick={(n) => navigate(`/nodes/${n.id}`)}
         />
       )}
+      {addNodeModal}
     </PageShell>
   );
 }

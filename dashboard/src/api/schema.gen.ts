@@ -24,6 +24,71 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Metrics
+         * @description Real counters (incremented at their event's call site) plus gauges
+         *     freshly computed from the live database — never a cached or invented
+         *     value.
+         */
+        get: operations["get_metrics_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/install.sh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Install Script
+         * @description Serve the real bootstrap script. 404s honestly if it isn't present on
+         *     this deployment rather than fabricating a body.
+         */
+        get: operations["get_install_script_install_sh_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agent-bundle.tar.gz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Bundle
+         * @description Package the live ``agent/`` source + ``pyproject.toml`` this process is
+         *     actually running into a gzipped tarball, built in memory per request (the
+         *     agent package is a few dozen small .py files — negligible cost).
+         */
+        get: operations["get_agent_bundle_agent_bundle_tar_gz_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/enrollment-tokens": {
         parameters: {
             query?: never;
@@ -283,6 +348,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/jobs/{job_id}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Logs
+         * @description This job's real stdout/stderr transcript, cursor-paginated.
+         *
+         *     Fed exclusively by the WebSocket log stream (ADR-002) as the trainer
+         *     container actually produces output; empty for a job that hasn't started
+         *     executing. Poll with ``after=<last id you saw>`` to fetch only new lines.
+         *     404 only if the job itself is unknown.
+         *
+         *     # TODO(M8): user auth — unauthenticated for dev.
+         */
+        get: operations["get_job_logs_jobs__job_id__logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/jobs/{job_id}/cancel": {
         parameters: {
             query?: never;
@@ -316,7 +408,11 @@ export interface paths {
         put?: never;
         /**
          * Claim Lease
-         * @description Claim one job scheduled to this node, or return ``lease: null`` if none.
+         * @description Claim this node's assigned rank slot, or return ``lease: null`` if none.
+         *
+         *     On a grant the response also carries the rank/world_size/rendezvous endpoint
+         *     (``RendezvousAssignment``) the agent needs to launch the rank under torchrun
+         *     (M5, ADR-005).
          */
         post: operations["claim_lease_nodes__node_id__leases_claim_post"];
         delete?: never;
@@ -427,9 +523,12 @@ export interface components {
          *
          *     ``lease`` is the granted lease, or ``null`` when there was no work scheduled
          *     to this node right now (a clean empty-handed poll, not an error).
+         *     ``rendezvous`` accompanies a granted lease with the rank/world_size/endpoint
+         *     the agent needs to launch it (M5); ``null`` when ``lease`` is ``null``.
          */
         ClaimResponse: {
             lease: components["schemas"]["LeaseOut"] | null;
+            rendezvous?: components["schemas"]["RendezvousAssignment"] | null;
         };
         /**
          * EnrollmentTokenCreateRequest
@@ -753,6 +852,8 @@ export interface components {
             node_id: string;
             /** Lease Epoch */
             lease_epoch: number;
+            /** Rank */
+            rank: number;
             /** State */
             state: string;
             /**
@@ -868,6 +969,38 @@ export interface components {
             /** Lease Failure Count */
             lease_failure_count: number;
             latest_telemetry: components["schemas"]["TelemetrySampleOut"] | null;
+        };
+        /**
+         * RendezvousAssignment
+         * @description How a claimed rank joins its training cohort (ADR-005, M5).
+         *
+         *     Everything an agent needs to launch its rank under ``torchrun`` with real
+         *     c10d rendezvous. ``world_size == 1`` marks the single-process path: the
+         *     agent runs the trainer directly (no torchrun), preserving M4 behaviour, and
+         *     the rendezvous fields are unused. For ``world_size > 1`` every rank dials the
+         *     same ``endpoint`` (``--rdzv-endpoint``) with the same ``rdzv_id``
+         *     (``--rdzv-id``); the rendezvous host (rank 0, ``is_rendezvous_host``) is the
+         *     one whose container is reachable at that endpoint.
+         */
+        RendezvousAssignment: {
+            /** Rank */
+            rank: number;
+            /** World Size */
+            world_size: number;
+            /** Is Rendezvous Host */
+            is_rendezvous_host: boolean;
+            /** Backend */
+            backend: string;
+            /** Endpoint */
+            endpoint: string;
+            /** Rdzv Id */
+            rdzv_id: string;
+            /** Network */
+            network: string;
+            /** Host Alias */
+            host_alias: string;
+            /** Max Restarts */
+            max_restarts: number;
         };
         /**
          * SchedulingCandidateOut
@@ -999,6 +1132,41 @@ export interface components {
             expires_in: number;
         };
         /**
+         * TrainingLogLineListResponse
+         * @description Body of GET /jobs/{job_id}/logs — a page of this job's real log transcript.
+         *
+         *     ``next_after`` is the cursor to pass as ``after`` on the next poll so only
+         *     newly-arrived lines are fetched; it is the id of the last line in this page,
+         *     or the request's own ``after`` (unchanged) when the page was empty — never
+         *     fabricated when there is nothing new yet.
+         */
+        TrainingLogLineListResponse: {
+            /** Lines */
+            lines: components["schemas"]["TrainingLogLineOut"][];
+            /** Next After */
+            next_after: number | null;
+        };
+        /**
+         * TrainingLogLineOut
+         * @description One real stdout/stderr line from the trainer container's transcript.
+         */
+        TrainingLogLineOut: {
+            /** Id */
+            id: number;
+            /**
+             * Ts
+             * Format: date-time
+             */
+            ts: string;
+            /**
+             * Stream
+             * @enum {string}
+             */
+            stream: "stdout" | "stderr";
+            /** Line */
+            line: string;
+        };
+        /**
          * TrainingMetricListResponse
          * @description Body of GET /jobs/{job_id}/metrics — this job's real loss/accuracy curve.
          */
@@ -1097,6 +1265,66 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+        };
+    };
+    get_metrics_metrics_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_install_script_install_sh_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    get_agent_bundle_agent_bundle_tar_gz_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -1459,6 +1687,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrainingMetricListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_logs_jobs__job_id__logs_get: {
+        parameters: {
+            query?: {
+                /** @description Return only lines with id > after (cursor). Omit to start from the beginning of the retained transcript. */
+                after?: number | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrainingLogLineListResponse"];
                 };
             };
             /** @description Validation Error */

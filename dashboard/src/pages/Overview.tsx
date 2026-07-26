@@ -1,14 +1,18 @@
-import { Gauge, ListTodo, Server, Zap } from "lucide-react";
+import { useState } from "react";
+import { Gauge, ListTodo, Plus, Server, Zap } from "lucide-react";
 import { useNodesQuery } from "@/api/nodes";
 import { useJobsQuery } from "@/api/jobs";
 import { QUEUE_DEPTH_STATES } from "@/api/types";
+import { AddNodeModal } from "@/components/AddNodeModal";
 import { StatTile } from "@/components/StatTile";
 import { ErrorState } from "@/components/ErrorState";
 import { UpdatedAgo } from "@/components/UpdatedAgo";
+import { Button } from "@/components/ui/button";
 
 export function Overview() {
   const nodesQuery = useNodesQuery();
   const jobsQuery = useJobsQuery();
+  const [addNodeOpen, setAddNodeOpen] = useState(false);
 
   const isLoading = nodesQuery.isPending || jobsQuery.isPending;
   const error = nodesQuery.error ?? jobsQuery.error;
@@ -44,12 +48,18 @@ export function Overview() {
             Live aggregate counts from the node registry and job queue.
           </p>
         </div>
-        {nodesQuery.dataUpdatedAt > 0 && (
-          <UpdatedAgo
-            dataUpdatedAt={nodesQuery.dataUpdatedAt}
-            isFetching={nodesQuery.isFetching || jobsQuery.isFetching}
-          />
-        )}
+        <div className="flex items-center gap-3">
+          {nodesQuery.dataUpdatedAt > 0 && (
+            <UpdatedAgo
+              dataUpdatedAt={nodesQuery.dataUpdatedAt}
+              isFetching={nodesQuery.isFetching || jobsQuery.isFetching}
+            />
+          )}
+          <Button size="sm" onClick={() => setAddNodeOpen(true)}>
+            <Plus className="size-3.5" aria-hidden="true" />
+            Add a node
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -91,6 +101,13 @@ export function Overview() {
           to queue the first training job.
         </p>
       )}
+
+      <AddNodeModal
+        key={addNodeOpen ? "open" : "closed"}
+        open={addNodeOpen}
+        onOpenChange={setAddNodeOpen}
+        existingNodes={nodes}
+      />
     </div>
   );
 }

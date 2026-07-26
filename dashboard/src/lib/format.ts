@@ -29,6 +29,18 @@ export function formatTemperature(value: number | null | undefined): string {
   return `${value.toFixed(0)}°C`;
 }
 
+/** Wall-clock "has this ISO timestamp already passed?" check — kept as a
+ * dedicated helper (mirroring formatRelativeTime) so the one impure
+ * `Date.now()` read lives in one reviewed place rather than inline in a
+ * component render body. Callers that need this to stay live (e.g. a token
+ * expiry indicator) re-render on their own tick, same as `UpdatedAgo`. */
+export function isPast(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  return Date.now() >= date.getTime();
+}
+
 export function formatTimestamp(value: string | null | undefined): string {
   if (!value) return "—";
   const date = new Date(value);
@@ -37,6 +49,19 @@ export function formatTimestamp(value: string | null | undefined): string {
     year: "numeric",
     month: "short",
     day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+/** Compact "HH:MM:SS" for dense per-line log timestamps (formatTimestamp's
+ * full date is too wide to repeat on every line of a scrolling transcript). */
+export function formatClockTime(value: string | null | undefined): string {
+  if (!value) return "--:--:--";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--:--:--";
+  return date.toLocaleTimeString(undefined, {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",

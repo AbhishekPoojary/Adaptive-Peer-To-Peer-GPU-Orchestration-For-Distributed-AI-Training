@@ -18,6 +18,10 @@ export type SchedulingDecision = components["schemas"]["SchedulingDecisionOut"];
 export type SchedulingCandidate = components["schemas"]["SchedulingCandidateOut"];
 
 export type TrainingMetric = components["schemas"]["TrainingMetricOut"];
+export type TrainingLogLine = components["schemas"]["TrainingLogLineOut"];
+
+export type EnrollmentTokenCreateResponse =
+  components["schemas"]["EnrollmentTokenCreateResponse"];
 
 /**
  * `Job(Summary|Detail).result` is free-form JSONB on the backend (M4): null
