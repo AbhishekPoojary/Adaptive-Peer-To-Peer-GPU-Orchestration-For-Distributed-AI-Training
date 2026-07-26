@@ -42,14 +42,27 @@ file (CONTRIBUTING.md rule 4). Trains on GPU when available (single-process, or
 DDP with the nccl backend), otherwise CPU with an explicit, honest log line —
 GPU use is never claimed when it did not happen.
 
+Checkpointing / resume (M6, ADR-006): when S3/MinIO is configured (the
+``S3_ENDPOINT_URL`` + credentials env vars are present), rank 0 writes a real
+model+optimizer checkpoint to MinIO every ``CHECKPOINT_EVERY_N_STEPS`` steps and
+at each epoch boundary, via an atomic blob-put + versioned manifest (see
+``trainer/checkpoint.py``). On startup, if this ``JOB_ID`` already has a
+checkpoint (i.e. this is a reassigned attempt), every rank restores from it and
+continues from the saved epoch/step instead of starting fresh. With S3 unset the
+trainer runs exactly as M4/M5 — no checkpointing, no resume.
+
 Machine-readable contract (rank-0 stdout, one exact JSON line per event —
-nothing else on stdout may match this shape):
-    per epoch:  {"type": "metric", "epoch": N, "loss": F, "test_accuracy": F}
+nothing else on stdout may match these shapes):
+    per epoch:  {"type": "metric", "epoch": N, "loss": F, "test_accuracy": F,
+                 "step": N}
+    on resume:  {"type": "resume", "from_step": N, "from_epoch": N,
+                 "checkpoint_key": "..."}
     on success: {"type": "final", "epochs_completed": N, "final_loss": F,
                  "final_test_accuracy": F, "device": "cuda"|"cpu"}
 All other output (progress, torch/cuda info, download progress) is ordinary
 human-readable log lines to stdout/stderr; the agent forwards everything but
-only lines parsing as the exact metric/final JSON shape are treated specially.
+only lines parsing as the exact metric/resume/final JSON shape are treated
+specially.
 
 On any unhandled exception this exits non-zero with a clear stderr message —
 never a fake success.
@@ -57,6 +70,7 @@ never a fake success.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import sys
@@ -71,6 +85,8 @@ import torch.nn.functional as F  # noqa: N812 - idiomatic PyTorch import alias
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import datasets, transforms
+
+import checkpoint as ckpt
 
 # --- Dataset-specific real normalization stats (standard, published values,
 # not invented) and channel/class shapes. -------------------------------------
@@ -125,10 +141,33 @@ def _log(message: str) -> None:
     print(f"[train] {message}", flush=True)
 
 
-def _emit_metric(*, epoch: int, loss: float, test_accuracy: float) -> None:
+def _emit_metric(*, epoch: int, loss: float, test_accuracy: float, step: int) -> None:
     print(
         json.dumps(
-            {"type": "metric", "epoch": epoch, "loss": loss, "test_accuracy": test_accuracy}
+            {
+                "type": "metric",
+                "epoch": epoch,
+                "loss": loss,
+                "test_accuracy": test_accuracy,
+                "step": step,
+            }
+        ),
+        flush=True,
+    )
+
+
+def _emit_resume(*, from_step: int, from_epoch: int, checkpoint_key: str) -> None:
+    """Machine-readable line the agent turns into a "resumed from checkpoint"
+    JobEvent (M6, ADR-006). Emitted once, only when a real checkpoint was
+    loaded and training continues from a step > 0."""
+    print(
+        json.dumps(
+            {
+                "type": "resume",
+                "from_step": from_step,
+                "from_epoch": from_epoch,
+                "checkpoint_key": checkpoint_key,
+            }
         ),
         flush=True,
     )
@@ -274,6 +313,53 @@ def _epoch_mean_loss(
     return summed_loss / max(summed_batches, 1.0)
 
 
+def _evaluate_accuracy(
+    eval_model: nn.Module,
+    test_loader: DataLoader,
+    device: torch.device,
+    *,
+    pin_memory: bool,
+) -> tuple[int, int, float]:
+    """Run one held-out eval pass; return (correct, total, accuracy). Real
+    forward passes only — no fabricated metric."""
+    eval_model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for images, labels in test_loader:
+            images = images.to(device, non_blocking=pin_memory)
+            labels = labels.to(device, non_blocking=pin_memory)
+            outputs = eval_model(images)
+            predictions = outputs.argmax(dim=1)
+            correct += int((predictions == labels).sum().item())
+            total += labels.size(0)
+    accuracy = correct / total if total > 0 else 0.0
+    return correct, total, accuracy
+
+
+def _serialize_checkpoint(
+    base_model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    *,
+    epoch: int,
+    step: int,
+    world_size: int,
+) -> bytes:
+    """torch.save the real model + optimizer state (+ resume position) to bytes."""
+    buffer = io.BytesIO()
+    torch.save(
+        {
+            "model": base_model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "epoch": epoch,
+            "step": step,
+            "world_size": world_size,
+        },
+        buffer,
+    )
+    return buffer.getvalue()
+
+
 def main() -> None:
     dataset_name = _require_env("DATASET").lower()
     if dataset_name not in ("cifar10", "mnist"):
@@ -288,6 +374,10 @@ def main() -> None:
     lease_epoch = os.environ.get("LEASE_EPOCH", "unknown")
     cache_dir = os.environ.get("TORCH_DATA_CACHE", "/data-cache")
     num_workers = int(os.environ.get("NUM_WORKERS", "2"))
+    # M6 checkpointing (ADR-006): a real S3/MinIO store when configured, else
+    # None → the M4/M5 no-checkpoint path, unchanged. Cadence in optimizer steps.
+    checkpoint_store = ckpt.S3ObjectStore.from_env(dict(os.environ))
+    checkpoint_every_n_steps = int(os.environ.get("CHECKPOINT_EVERY_N_STEPS", "100"))
 
     if epochs < 1:
         raise RuntimeError(f"EPOCHS must be >= 1, got {epochs}")
@@ -381,6 +471,44 @@ def main() -> None:
     )
 
     base_model = SmallCNN(in_channels=in_channels, num_classes=num_classes).to(device)
+    optimizer = torch.optim.Adam(base_model.parameters(), lr=learning_rate)
+    criterion = nn.CrossEntropyLoss()
+
+    # --- Resume (M6, ADR-006): before wrapping in DDP, restore model+optimizer
+    # state from the latest checkpoint if this job_id has one (i.e. this is a
+    # reassigned attempt). Every rank reads the same checkpoint — reads are safe
+    # for all ranks; ADR-006 restricts only *writes* to rank 0. A first attempt
+    # (no manifest) starts fresh, exactly as M4/M5.
+    start_epoch = 1
+    global_step = 0
+    resumed_from_loss: float | None = None
+    if checkpoint_store is not None:
+        entry = None
+        try:
+            entry = ckpt.latest_entry(checkpoint_store, job_id)
+        except Exception as exc:  # noqa: BLE001 - a checkpoint-read failure must not be a fake success
+            log(f"checkpoint: could not read manifest for job={job_id} ({exc}); starting fresh")
+        if entry is not None:
+            blob = checkpoint_store.get_bytes(entry.key)
+            state = torch.load(io.BytesIO(blob), map_location=device)
+            base_model.load_state_dict(state["model"])
+            optimizer.load_state_dict(state["optimizer"])
+            start_epoch = int(entry.epoch)
+            global_step = int(entry.step)
+            resumed_from_loss = entry.loss
+            log(
+                f"checkpoint: RESUMED from {entry.key} — start_epoch={start_epoch} "
+                f"global_step={global_step} (loss at checkpoint={entry.loss})"
+            )
+            if dist_config.is_main:
+                _emit_resume(
+                    from_step=global_step, from_epoch=start_epoch, checkpoint_key=entry.key
+                )
+        else:
+            log(f"checkpoint: no prior checkpoint for job={job_id}; starting fresh (first attempt)")
+    else:
+        log("checkpoint: S3/MinIO not configured; running without checkpoint/resume")
+
     model: nn.Module
     if dist_config.distributed:
         # DDP all-reduces gradients across ranks every backward — the model-
@@ -389,13 +517,37 @@ def main() -> None:
         model = DistributedDataParallel(base_model, device_ids=device_ids)
     else:
         model = base_model
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    criterion = nn.CrossEntropyLoss()
+
+    def save_checkpoint_now(*, epoch_to_resume: int, loss: float | None) -> None:
+        """Rank-0-only atomic checkpoint write (ADR-006 single-writer)."""
+        if not dist_config.is_main or checkpoint_store is None:
+            return
+        blob = _serialize_checkpoint(
+            base_model, optimizer, epoch=epoch_to_resume, step=global_step,
+            world_size=dist_config.world_size,
+        )
+        try:
+            entry = ckpt.save_checkpoint(
+                checkpoint_store,
+                job_id=job_id,
+                blob=blob,
+                step=global_step,
+                epoch=epoch_to_resume,
+                world_size=dist_config.world_size,
+                lease_epoch=int(lease_epoch) if lease_epoch.isdigit() else None,
+                loss=loss,
+            )
+            log(
+                f"checkpoint: wrote {entry.key} "
+                f"(step={global_step}, resume_epoch={epoch_to_resume})"
+            )
+        except Exception as exc:  # noqa: BLE001 - a checkpoint write failure must be honest, not fatal
+            log(f"checkpoint: WRITE FAILED at step {global_step} ({exc}); training continues")
 
     final_loss = float("nan")
     final_test_accuracy = 0.0
 
-    for epoch in range(1, epochs + 1):
+    for epoch in range(start_epoch, epochs + 1):
         if train_sampler is not None:
             train_sampler.set_epoch(epoch)  # reshuffle shards deterministically per epoch
         model.train()
@@ -414,6 +566,12 @@ def main() -> None:
 
             running_loss += loss.item()
             n_batches += 1
+            global_step += 1
+            # Fine-grained checkpoint every N steps so at most N steps of work is
+            # ever lost. Resume position is the current epoch (re-run from its
+            # start with the checkpointed weights).
+            if checkpoint_every_n_steps > 0 and global_step % checkpoint_every_n_steps == 0:
+                save_checkpoint_now(epoch_to_resume=epoch, loss=loss.item())
 
         mean_loss = _epoch_mean_loss(running_loss, n_batches, dist_config, device)
 
@@ -421,25 +579,17 @@ def main() -> None:
         # after gradient sync, so rank 0's eval is the cohort's true accuracy).
         if dist_config.is_main:
             eval_model = model.module if isinstance(model, DistributedDataParallel) else model
-            eval_model.eval()
-            correct = 0
-            total = 0
-            with torch.no_grad():
-                for images, labels in test_loader:
-                    images = images.to(device, non_blocking=pin_memory)
-                    labels = labels.to(device, non_blocking=pin_memory)
-                    outputs = eval_model(images)
-                    predictions = outputs.argmax(dim=1)
-                    correct += int((predictions == labels).sum().item())
-                    total += labels.size(0)
-            test_accuracy = correct / total if total > 0 else 0.0
-
+            correct, total, test_accuracy = _evaluate_accuracy(
+                eval_model, test_loader, device, pin_memory=pin_memory
+            )
             log(
                 f"epoch {epoch}/{epochs} done in {time.monotonic() - epoch_t0:.1f}s: "
                 f"train_loss={mean_loss:.4f} test_accuracy={test_accuracy:.4f} "
-                f"({correct}/{total})"
+                f"({correct}/{total}) global_step={global_step}"
             )
-            _emit_metric(epoch=epoch, loss=mean_loss, test_accuracy=test_accuracy)
+            _emit_metric(
+                epoch=epoch, loss=mean_loss, test_accuracy=test_accuracy, step=global_step
+            )
             final_loss = mean_loss
             final_test_accuracy = test_accuracy
         else:
@@ -447,6 +597,25 @@ def main() -> None:
                 f"epoch {epoch}/{epochs} done in {time.monotonic() - epoch_t0:.1f}s: "
                 f"train_loss={mean_loss:.4f} (rank>0 trains silently, no eval/report)"
             )
+        # End-of-epoch checkpoint: resume position is the *next* epoch, so a
+        # resume never re-runs a fully completed epoch.
+        save_checkpoint_now(epoch_to_resume=epoch + 1, loss=mean_loss)
+
+    # Edge case: resumed at start_epoch > epochs (the previous attempt finished
+    # every epoch and checkpointed resume_epoch=epochs+1, then died before
+    # emitting its final line). The loop ran zero times but the model is fully
+    # trained — do one honest eval so we never report accuracy 0 for it.
+    if dist_config.is_main and start_epoch > epochs:
+        eval_model = model.module if isinstance(model, DistributedDataParallel) else model
+        _, _, final_test_accuracy = _evaluate_accuracy(
+            eval_model, test_loader, device, pin_memory=pin_memory
+        )
+        if resumed_from_loss is not None:
+            final_loss = resumed_from_loss
+        log(
+            f"resumed past the final epoch; evaluated the restored model: "
+            f"test_accuracy={final_test_accuracy:.4f}"
+        )
 
     if dist_config.distributed:
         dist.barrier()  # every rank reaches the end before the group is destroyed
