@@ -466,6 +466,61 @@ async def fail_lease(
 _REASSIGNABLE = (JobState.LEASED, JobState.RUNNING, JobState.SCHEDULED)
 
 
+async def reassign_job_attempt(
+    session: AsyncSession,
+    *,
+    job: Job,
+    failed_leases: list[Lease],
+    now: datetime,
+    message: str,
+    extra: dict[str, Any] | None = None,
+) -> bool:
+    """Tear down a doomed attempt and requeue the job — the single reassignment
+    code path shared by the TTL-expiry sweep (:func:`sweep_expired_leases`) and
+    the M6 φ-accrual failure detector
+    (``services.failure_detection.run_failure_detection_pass``). Two triggers,
+    one implementation — never duplicated.
+
+    ``failed_leases`` are current-epoch leases whose nodes are at fault (they
+    timed out, or their node was declared offline): each → ``EXPIRED`` with the
+    node's ``lease_failure_count`` += 1 (a real reliability signal, ADR-009).
+    Their expiry is the retryable path — distinct from an agent-reported
+    ``fail_lease`` (which is terminal). The rest of the attempt's cohort is
+    ``RELEASED`` (no fault, reliability untouched). The job → ``REASSIGNED`` with
+    cohort/rendezvous wiring cleared, so a later scheduler pass re-selects nodes
+    at a fresh epoch — the ``ONLINE``-only hard filter (ADR-009) keeps the
+    just-failed node out until it heartbeats again.
+
+    Returns ``True`` iff the job was moved to ``REASSIGNED`` (``False`` when it
+    was no longer in a reassignable state — e.g. a sibling already ended it).
+    Caller commits.
+    """
+    for lease in failed_leases:
+        lease.state = LeaseState.EXPIRED
+        # A timeout / detected drop at the current epoch is this node's real
+        # reliability failure (matches the historical sweep behaviour).
+        await session.execute(
+            update(Node)
+            .where(Node.id == lease.node_id)
+            .values(lease_failure_count=Node.lease_failure_count + 1)
+        )
+    await _release_cohort_siblings(
+        session,
+        job=job,
+        epoch=job.current_lease_epoch,
+        exclude_lease_ids={lease.id for lease in failed_leases},
+        now=now,
+    )
+    if job.state not in _REASSIGNABLE:
+        return False
+    transition_job(
+        session, job, JobState.REASSIGNED, message=message, extra=extra, now=now
+    )
+    job.scheduled_node_id = None
+    job.rendezvous_node_id = None
+    return True
+
+
 async def sweep_expired_leases(
     session: AsyncSession, *, settings: Settings
 ) -> int:
@@ -519,46 +574,39 @@ async def sweep_expired_leases(
             lease for lease in overdue_leases
             if lease.lease_epoch == job.current_lease_epoch
         ]
-        for lease in overdue_leases:
+        # Defensive: expire any leftover stale-epoch overdue rows (superseded
+        # attempts) — a cleanup only, no reliability hit, no reassignment.
+        stale_overdue = [
+            lease for lease in overdue_leases
+            if lease.lease_epoch != job.current_lease_epoch
+        ]
+        for lease in stale_overdue:
             lease.state = LeaseState.EXPIRED
             expired_count += 1
-            # Only a timeout at the current epoch is this node's reliability
-            # failure; a leftover stale-epoch row (defensive) is just cleaned up.
-            if lease.lease_epoch == job.current_lease_epoch:
-                await session.execute(
-                    update(Node)
-                    .where(Node.id == lease.node_id)
-                    .values(lease_failure_count=Node.lease_failure_count + 1)
-                )
 
         if not current_overdue:
             continue
-        await _release_cohort_siblings(
+        expired_count += len(current_overdue)
+        # Reuse the one shared reassignment code path (also used by the M6
+        # φ-accrual detector): expire the timed-out leases with a reliability
+        # hit, release the cohort, and requeue the job under a fresh epoch.
+        n_timed_out = len(current_overdue)
+        await reassign_job_attempt(
             session,
             job=job,
-            epoch=job.current_lease_epoch,
-            exclude_lease_ids={lease.id for lease in current_overdue},
+            failed_leases=current_overdue,
             now=now,
+            message=(
+                f"{n_timed_out} cohort lease(s) expired without progress; "
+                "the whole attempt was torn down and requeued for "
+                "rescheduling under a new lease epoch."
+            ),
+            extra={
+                "expired_ranks": sorted(lease.rank for lease in current_overdue),
+                "lease_epoch": job.current_lease_epoch,
+                "trigger": "lease-ttl-sweep",
+            },
         )
-        if job.state in _REASSIGNABLE:
-            n_timed_out = len(current_overdue)
-            transition_job(
-                session,
-                job,
-                JobState.REASSIGNED,
-                message=(
-                    f"{n_timed_out} cohort lease(s) expired without progress; "
-                    "the whole attempt was torn down and requeued for "
-                    "rescheduling under a new lease epoch."
-                ),
-                extra={
-                    "expired_ranks": sorted(lease.rank for lease in current_overdue),
-                    "lease_epoch": job.current_lease_epoch,
-                },
-                now=now,
-            )
-            job.scheduled_node_id = None
-            job.rendezvous_node_id = None
 
     await session.flush()
     return expired_count

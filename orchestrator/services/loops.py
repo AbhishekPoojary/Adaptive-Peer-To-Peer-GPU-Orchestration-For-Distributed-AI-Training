@@ -18,6 +18,7 @@ import logging
 
 from orchestrator.core.config import Settings
 from orchestrator.core.db import session_scope
+from orchestrator.services.failure_detection import run_failure_detection_pass
 from orchestrator.services.leases import sweep_expired_leases
 from orchestrator.services.scheduling import run_scheduler_pass
 
@@ -67,11 +68,44 @@ async def _sweep_loop(settings: Settings) -> None:
             logger.exception("lease expiry sweep failed; will retry next interval")
 
 
+async def _failure_detector_loop(settings: Settings) -> None:
+    """The M6 φ-accrual failure detector (ADR-004): declare silent ONLINE nodes
+    OFFLINE and immediately reassign their jobs — faster than the lease-TTL
+    sweep. A declared failure triggers an immediate scheduler pass so the
+    reassigned job is re-placed without waiting for the scheduler cadence, which
+    is what keeps total recovery inside the 15 s target."""
+    interval = settings.failure_detector_interval_seconds
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            async with session_scope() as session:
+                declared = await run_failure_detection_pass(session, settings=settings)
+                await session.commit()
+            if declared:
+                for d in declared:
+                    logger.warning(
+                        "failure detector declared node %s OFFLINE: %s; reassigned %d job(s)",
+                        d.node_name,
+                        d.suspicion.reason,
+                        len(d.reassigned_job_ids),
+                    )
+                # Re-place the just-reassigned jobs now, not on the next cadence.
+                await trigger_scheduler_pass(settings)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("failure detection pass failed; will retry next interval")
+
+
 def start_background_loops(settings: Settings) -> list[asyncio.Task[None]]:
-    """Start the scheduler and sweep loops. Returns the created tasks."""
+    """Start the scheduler, sweep, and failure-detector loops. Returns the
+    created tasks."""
     return [
         asyncio.create_task(_scheduler_loop(settings), name="scheduler-loop"),
         asyncio.create_task(_sweep_loop(settings), name="lease-sweep-loop"),
+        asyncio.create_task(
+            _failure_detector_loop(settings), name="failure-detector-loop"
+        ),
     ]
 
 
