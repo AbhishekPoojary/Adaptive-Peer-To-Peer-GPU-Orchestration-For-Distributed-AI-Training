@@ -39,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
 from orchestrator.core.config import Settings
+from orchestrator.core.metrics import jobs_placed_total, scheduling_decisions_total
 from orchestrator.models.job import Job, JobState
 from orchestrator.models.lease import Lease, LeaseState
 from orchestrator.models.node import Node, NodeTelemetrySample
@@ -213,6 +214,7 @@ def _persist_decision(
         selected_node_id=rendezvous_id,
     )
     session.add(decision)
+    scheduling_decisions_total.inc()
     for cand in scored:
         session.add(
             SchedulingDecisionCandidate(
@@ -400,6 +402,7 @@ async def place_job_cohort(
         },
         now=now,
     )
+    jobs_placed_total.inc()
     return members
 
 

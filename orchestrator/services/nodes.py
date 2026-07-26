@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from orchestrator.core.config import Settings
+from orchestrator.core.metrics import heartbeats_received_total
 from orchestrator.core.security import load_ed25519_public_key
 from orchestrator.models.node import Node, NodeStatus, NodeTelemetrySample
 from orchestrator.schemas.node import (
@@ -138,6 +139,7 @@ async def record_heartbeat(
     # Receiving a heartbeat is direct evidence the node is reachable right now.
     node.status = NodeStatus.ONLINE
     await session.flush()
+    heartbeats_received_total.inc()
 
     return HeartbeatResult(
         server_time=received_at,

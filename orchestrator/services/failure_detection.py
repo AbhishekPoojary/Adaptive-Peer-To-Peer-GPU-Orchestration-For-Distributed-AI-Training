@@ -41,6 +41,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.core.config import Settings
+from orchestrator.core.metrics import failure_detections_total
 from orchestrator.models.job import Job
 from orchestrator.models.lease import Lease, LeaseState
 from orchestrator.models.node import Node, NodeStatus, NodeTelemetrySample
@@ -317,6 +318,7 @@ async def run_failure_detection_pass(
                 reassigned_job_ids=reassigned,
             )
         )
+        failure_detections_total.inc()
 
     await session.flush()
     return declarations

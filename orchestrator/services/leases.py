@@ -28,6 +28,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.core.config import Settings
+from orchestrator.core.metrics import lease_expiries_total
 from orchestrator.models.job import Job, JobState
 from orchestrator.models.lease import Lease, LeaseState
 from orchestrator.models.node import Node
@@ -609,4 +610,6 @@ async def sweep_expired_leases(
         )
 
     await session.flush()
+    if expired_count:
+        lease_expiries_total.inc(expired_count)
     return expired_count

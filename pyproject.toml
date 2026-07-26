@@ -20,6 +20,7 @@ server = [
     "alembic==1.14.0",
     "pyjwt==2.10.1",
     "cryptography==44.0.0",
+    "prometheus-client==0.21.1",
 ]
 agent = [
     "psutil==6.1.1",
@@ -28,6 +29,7 @@ agent = [
     "cryptography==44.0.0",
     "nvidia-ml-py==12.560.30",
     "docker==7.1.0",
+    "prometheus-client==0.21.1",
 ]
 trainer = [
     "torch==2.5.1",

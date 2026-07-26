@@ -9,8 +9,10 @@ from fastapi import FastAPI
 
 from orchestrator.api.auth import router as auth_router
 from orchestrator.api.health import router as health_router
+from orchestrator.api.installer import router as installer_router
 from orchestrator.api.jobs import router as jobs_router
 from orchestrator.api.leases import router as leases_router
+from orchestrator.api.metrics import router as metrics_router
 from orchestrator.api.nodes import router as nodes_router
 from orchestrator.api.streaming import router as streaming_router
 from orchestrator.core.config import Settings, get_settings
@@ -65,6 +67,8 @@ def create_app() -> FastAPI:
     """Application factory."""
     app = FastAPI(title="GPU Orchestrator", version="0.1.0", lifespan=lifespan)
     app.include_router(health_router)
+    app.include_router(metrics_router)
+    app.include_router(installer_router)
     app.include_router(auth_router)
     app.include_router(nodes_router)
     app.include_router(jobs_router)
