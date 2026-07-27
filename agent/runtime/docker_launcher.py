@@ -112,6 +112,8 @@ class SupportsLogs(Protocol):
 
     def wait(self) -> dict[str, Any]: ...
 
+    def stop(self, **kwargs: Any) -> None: ...
+
     @property
     def id(self) -> str: ...
 
@@ -351,3 +353,29 @@ def wait_for_exit(container: SupportsLogs) -> int:
     """Block until the container exits; return its real exit code."""
     result = container.wait()
     return int(result.get("StatusCode", 1))
+
+
+def stop_container(container: SupportsLogs, *, timeout: int = 10) -> bool:
+    """Stop a trainer container we are abandoning. Returns True if the stop was
+    issued cleanly, False if it could not be (already gone, daemon unreachable).
+
+    Used when this agent loses the lease the container was running under (the
+    job was cancelled, or the attempt was fenced out and reassigned). Leaving it
+    running would keep this node occupied on work the orchestrator has already
+    given to someone else, so it would sit unable to claim anything new while
+    the scheduler kept offering it leases that expire unclaimed.
+
+    Never raises: abandoning is best-effort cleanup on a path that is already
+    handling a failure, and the container is launched with ``--rm``, so it may
+    legitimately have exited and been removed before we get here.
+    """
+    try:
+        container.stop(timeout=timeout)
+        return True
+    except Exception as exc:  # noqa: BLE001 - best-effort cleanup, never fatal
+        logger.warning(
+            "could not stop abandoned container %s: %s",
+            getattr(container, "id", "?"),
+            exc,
+        )
+        return False

@@ -32,6 +32,7 @@ import logging
 import os
 import sys
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -587,15 +588,22 @@ async def _service_lease(
                 " — trainer still running" if task is not None else " — still just holding",
             )
         except httpx.HTTPStatusError as exc:
-            # 409 = fenced/expired: we lost the lease. A running container's
-            # eventual report will itself be correctly rejected once it
-            # finishes — that is the right fencing outcome, not a bug to
-            # paper over here.
+            # 409 = fenced/expired: we lost this lease. Epoch fencing already
+            # guarantees a late report from this run would be rejected, so the
+            # orchestrator's data is safe either way — but leaving the container
+            # running would keep this node busy on work that now belongs to
+            # someone else, so it could not claim anything new while the
+            # scheduler kept offering it slots that expire unclaimed. Abandon it.
             logger.warning(
-                "lease id=%s renew rejected (%s): job was likely reassigned",
+                "lease id=%s renew rejected (%s): job was reassigned — abandoning this attempt",
                 held.lease_id,
                 exc.response.status_code,
             )
+            if task is not None and not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+            return None
         except httpx.HTTPError as exc:
             logger.error("lease renew failed (network): %s", exc)
     return executing

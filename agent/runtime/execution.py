@@ -30,6 +30,7 @@ from agent.runtime.docker_launcher import (
     ensure_dataset_cache_volume,
     ensure_rendezvous_network,
     launch_trainer_container,
+    stop_container,
     stream_container_logs,
     wait_for_exit,
 )
@@ -172,6 +173,52 @@ async def run_lease_execution(
     final: dict[str, Any] | None = None
     loop = asyncio.get_running_loop()
 
+    try:
+        return await _stream_to_completion(
+            stream_url_=ws_url,
+            access_token=access_token,
+            line_queue=line_queue,
+            exit_code_queue=exit_code_queue,
+            tail_thread=tail_thread,
+            wait_thread_handle=wait_thread_handle,
+            last_metric=last_metric,
+            final=final,
+            loop=loop,
+        )
+    except asyncio.CancelledError:
+        # We lost the lease this container was running under (cancelled job, or
+        # fenced out and reassigned). Stop it so this node stops being occupied
+        # by work that now belongs to someone else. Best-effort, then re-raise
+        # so the caller still sees the cancellation.
+        logger.info(
+            "execution cancelled for lease=%s job=%s — stopping abandoned container %s",
+            lease_id,
+            job_id,
+            getattr(container, "id", "?"),
+        )
+        await asyncio.to_thread(stop_container, container)
+        raise
+
+
+async def _stream_to_completion(
+    *,
+    stream_url_: str,
+    access_token: str,
+    line_queue: queue.Queue[Any],
+    exit_code_queue: queue.Queue[int],
+    tail_thread: threading.Thread,
+    wait_thread_handle: threading.Thread,
+    last_metric: dict[str, Any] | None,
+    final: dict[str, Any] | None,
+    loop: asyncio.AbstractEventLoop,
+) -> ExecutionResult:
+    """Pump the container's real output to the orchestrator until it exits.
+
+    Split out of :func:`run_lease_execution` so the cancellation handler there
+    wraps the whole pump — including the blocking exit-code wait — rather than
+    only the log loop.
+    """
+    ws_url = stream_url_
     async with LeaseStreamClient(url=ws_url, access_token=access_token) as stream:
         while True:
             item = await loop.run_in_executor(None, line_queue.get)

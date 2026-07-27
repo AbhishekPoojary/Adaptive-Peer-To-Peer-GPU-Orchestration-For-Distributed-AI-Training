@@ -302,7 +302,8 @@ export function Submit() {
 
         {eligibleCount !== null && Number.isInteger(Number(worldSize)) && Number(worldSize) > eligibleCount && (
           <div className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-primary">
-            This job needs {worldSize} peers but only {eligibleCount} are eligible right
+            This job needs {worldSize} {Number(worldSize) === 1 ? "peer" : "peers"} but
+            only {eligibleCount} {eligibleCount === 1 ? "is" : "are"} eligible right
             now. It will still be submitted, but it will sit queued until enough
             peers are online and free — it will not block or fail on submit.
           </div>
@@ -316,7 +317,7 @@ export function Submit() {
 
         <div className="flex justify-end">
           <Button type="submit" disabled={submitMutation.isPending}>
-            {submitMutation.isPending ? "Submitting…" : "Submit job"}
+            {submitMutation.isPending ? "Starting…" : "Start training"}
           </Button>
         </div>
       </form>
