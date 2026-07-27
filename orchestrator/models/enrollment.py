@@ -37,5 +37,12 @@ class EnrollmentToken(Base):
     used_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Set when an admin explicitly withdraws a token before it is used or ages
+    # out (M8). Deliberately distinct from used_at and expires_at so the audit
+    # trail records *which* of the three ended the token's life, rather than
+    # collapsing "revoked" into a fake early expiry.
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # Free-text operator label (who/what this token was minted for).
     created_by: Mapped[str] = mapped_column(String(255), nullable=False)

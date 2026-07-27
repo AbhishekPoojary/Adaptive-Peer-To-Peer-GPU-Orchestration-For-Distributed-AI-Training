@@ -31,7 +31,7 @@ _SPEC = {
 
 def _submit_body(scheduler_name: str | None = None, **spec_overrides: object) -> dict[str, object]:
     spec = {**_SPEC, **spec_overrides}
-    body: dict[str, object] = {"spec": spec, "submitted_by": "pytest"}
+    body: dict[str, object] = {"spec": spec}
     if scheduler_name is not None:
         body["scheduler_name"] = scheduler_name
     return body

@@ -54,7 +54,6 @@ export function Submit() {
   const [worldSize, setWorldSize] = useState("1");
   const [minGpuMemBytes, setMinGpuMemBytes] = useState("");
   const [schedulerName, setSchedulerName] = useState<(typeof SCHEDULERS)[number]>("adaptive");
-  const [submittedBy, setSubmittedBy] = useState("dashboard-operator");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -86,7 +85,6 @@ export function Submit() {
 
   function validate(): string | null {
     if (!model.trim()) return "Model is required.";
-    if (!submittedBy.trim()) return "Submitted by is required.";
     const e = Number(epochs);
     if (!Number.isInteger(e) || e < 1) return "Epochs must be a whole number >= 1.";
     const bs = Number(batchSize);
@@ -124,7 +122,6 @@ export function Submit() {
         min_gpu_mem_bytes: minGpuMemBytes.trim() === "" ? null : Number(minGpuMemBytes),
       },
       scheduler_name: schedulerName,
-      submitted_by: submittedBy.trim(),
     };
 
     try {
@@ -240,16 +237,6 @@ export function Submit() {
               ))}
             </SelectContent>
           </Select>
-        </Field>
-
-        <Field label="Submitted by" htmlFor="submitted_by">
-          <Input
-            id="submitted_by"
-            value={submittedBy}
-            onChange={(e) => setSubmittedBy(e.target.value)}
-            maxLength={255}
-            required
-          />
         </Field>
 
         <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>

@@ -1,19 +1,34 @@
 """Node endpoints: enrollment, authenticated self-scoped heartbeat, and the
 read-only fleet/detail views the dashboard polls.
 
-# TODO(M8): read-side auth. GET /nodes and GET /nodes/{id} are unauthenticated
-# for dev convenience; hardening (M8) must gate them behind real auth before
-# any non-dev deployment.
+Three different auth regimes meet in this one router, which is why the
+dependency is declared per-route here rather than router-wide as in
+``api/jobs.py``:
+
+* ``POST /nodes/register`` is authenticated by the one-time **enrollment
+  token** in the body (ADR-008) — a node has no JWT yet at this point. Rate
+  limited, since the token is the thing being guessed.
+* ``POST /nodes/{id}/heartbeat`` requires that **node's own** JWT.
+* ``GET /nodes`` and ``GET /nodes/{id}`` are dashboard reads and require a
+  **user** token (ADR-012). Node telemetry is hardware and utilization data
+  about other people's laptops; it is not public.
 """
 
 from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.api.deps import assert_node_scope, get_settings_dep, require_node_auth
+from orchestrator.api.deps import (
+    assert_node_scope,
+    enforce_rate_limit,
+    get_node_auth_limiter,
+    get_settings_dep,
+    require_node_auth,
+    require_user,
+)
 from orchestrator.core.config import Settings
 from orchestrator.core.db import get_session
 from orchestrator.core.security import PublicKeyError, create_node_jwt
@@ -44,11 +59,13 @@ router = APIRouter(prefix="/nodes", tags=["nodes"])
     response_model=NodeRegisterResponse,
 )
 async def register(
+    request: Request,
     body: NodeRegisterRequest,
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings_dep),
 ) -> NodeRegisterResponse:
     """Enroll a node: consume the token, persist the node, return a first JWT."""
+    enforce_rate_limit(get_node_auth_limiter(), request, bucket="register")
     try:
         node = await register_node(session, req=body, settings=settings)
     except PublicKeyError as exc:
@@ -63,6 +80,14 @@ async def register(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="enrollment token already used",
+            ) from exc
+        if exc.outcome is TokenClaimOutcome.REVOKED:
+            # 403, not 401: the token is genuine and the caller presented it
+            # correctly — an admin withdrew it. Saying "invalid" would send an
+            # honest operator hunting for a typo.
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="enrollment token has been revoked",
             ) from exc
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -106,20 +131,21 @@ async def heartbeat(
     )
 
 
-@router.get("", response_model=NodeListResponse)
+@router.get(
+    "", response_model=NodeListResponse, dependencies=[Depends(require_user)]
+)
 async def list_nodes_endpoint(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings_dep),
 ) -> NodeListResponse:
-    """List every enrolled node with its latest telemetry sample.
-
-    # TODO(M8): read-side auth — unauthenticated for dev.
-    """
+    """List every enrolled node with its latest telemetry sample."""
     nodes = await list_nodes(session, settings=settings)
     return NodeListResponse(nodes=nodes)
 
 
-@router.get("/{node_id}", response_model=NodeDetailResponse)
+@router.get(
+    "/{node_id}", response_model=NodeDetailResponse, dependencies=[Depends(require_user)]
+)
 async def get_node_endpoint(
     node_id: uuid.UUID,
     samples: int | None = Query(

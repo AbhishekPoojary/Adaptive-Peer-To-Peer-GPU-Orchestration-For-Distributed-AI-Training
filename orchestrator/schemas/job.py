@@ -40,13 +40,17 @@ class JobSubmitRequest(BaseModel):
     ``scheduler_name`` is optional; when omitted the server's configured
     ``SCHEDULER_STRATEGY`` default is used. Whatever is chosen must be a
     registered scheduler (validated in the handler).
+
+    There is deliberately no ``submitted_by`` field. Attribution is taken from
+    the authenticated user's token (ADR-012 §4); because this model forbids
+    extra fields, a client still sending the old field gets a loud 422 rather
+    than silently having its claimed identity ignored.
     """
 
     model_config = _FORBID
 
     spec: JobSpec
     scheduler_name: str | None = Field(default=None, max_length=32)
-    submitted_by: str = Field(min_length=1, max_length=255)
 
 
 class JobEventOut(BaseModel):

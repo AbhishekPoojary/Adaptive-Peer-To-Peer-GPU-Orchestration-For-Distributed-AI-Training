@@ -51,6 +51,21 @@ class Settings(BaseSettings):
     # Challenge-response nonce lifetime for POST /auth/token/refresh.
     auth_nonce_ttl_seconds: int = 120
 
+    # --- Human operator auth (ADR-012, M8) ---
+    # TTL of a user (aud="user") access token. Shorter than a node's because a
+    # human token is held in a browser; revocation is bounded by this window.
+    user_access_token_ttl_seconds: int = 900
+    # Fixed-window rate limits on the credential endpoints, per client IP.
+    # These bound password/nonce guessing; they are per-process, so a
+    # multi-replica deployment multiplies them (see ADR-012 §7).
+    login_rate_limit_attempts: int = 10
+    login_rate_limit_window_seconds: float = 60.0
+    # Node-facing credential endpoints (challenge, token refresh, register).
+    # Higher than login: a fleet of agents legitimately refreshes on a timer,
+    # and the secret here is a 256-bit key, not a password.
+    node_auth_rate_limit_attempts: int = 60
+    node_auth_rate_limit_window_seconds: float = 60.0
+
     # --- Telemetry / RTT (ADR-004) ---
     # Smoothing factor for the round-trip-time EWMA the heartbeat handler
     # maintains from agent-measured RTT. Never used to invent an RTT — only to

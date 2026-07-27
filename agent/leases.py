@@ -66,9 +66,10 @@ async def claim_lease(
     client: httpx.AsyncClient, *, orchestrator: str, node_id: str, access_token: str
 ) -> dict[str, Any] | None:
     """Poll for a rank slot assigned to this node. Returns the full claim
-    response (``{"lease": ..., "rendezvous": ...}``) on a grant, or ``None`` on
-    an empty-handed poll. The ``rendezvous`` block (M5) carries the
-    rank/world_size/endpoint the caller needs to launch the rank under torchrun.
+    response (``{"lease": ..., "rendezvous": ..., "job_spec": ...}``) on a
+    grant, or ``None`` on an empty-handed poll. The ``rendezvous`` block (M5)
+    carries the rank/world_size/endpoint the caller needs to launch the rank
+    under torchrun, and ``job_spec`` (M8) the validated training spec.
     """
     resp = await client.post(
         f"{orchestrator}/nodes/{node_id}/leases/claim",
@@ -148,13 +149,26 @@ async def fail_lease(
     return data
 
 
-async def fetch_job_spec(
-    client: httpx.AsyncClient, *, orchestrator: str, job_id: str
-) -> dict[str, Any]:
-    """Fetch a job's validated spec (dataset/model/epochs/batch_size/
-    learning_rate/...) via the existing read-only ``GET /jobs/{id}`` (dev-mode
-    unauthenticated per M2/M8-TODO) — no new endpoint invented for this."""
-    resp = await client.get(f"{orchestrator}/jobs/{job_id}")
-    resp.raise_for_status()
-    spec: dict[str, Any] = resp.json()["spec"]
+class MissingJobSpecError(Exception):
+    """A grant arrived without the job spec needed to launch the trainer."""
+
+
+def job_spec_from_claim(claim: dict[str, Any]) -> dict[str, Any]:
+    """Read the granted job's spec out of the claim response (M8).
+
+    Until M8 this was a separate ``GET /jobs/{id}`` call. That endpoint is now
+    human-only (ADR-012) and correctly rejects a node token, so the spec ships
+    with the claim instead — which is also the better-scoped arrangement: the
+    node receives the spec for the one job it was just granted rather than read
+    access to every job in the fleet.
+
+    Raises :class:`MissingJobSpecError` rather than defaulting: launching a
+    trainer on a guessed spec would train the wrong thing and report the result
+    as if it were the requested one.
+    """
+    spec = claim.get("job_spec")
+    if not isinstance(spec, dict):
+        raise MissingJobSpecError(
+            "claim response carried no job_spec; cannot launch a trainer without it"
+        )
     return spec

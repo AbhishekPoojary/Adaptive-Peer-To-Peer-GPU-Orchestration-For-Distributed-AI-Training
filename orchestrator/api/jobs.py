@@ -1,8 +1,13 @@
 """Job endpoints: submit, list, detail, cancel.
 
-# TODO(M8): user auth. Submit/read/cancel are unauthenticated for dev
-# convenience; hardening (M8) must gate them behind real user auth before any
-# non-dev deployment.
+Every route here is human-facing and requires an authenticated user (ADR-012).
+The dependency is declared on the *router*, not per-route, so a route added
+later is gated by default — the failure mode of the per-route form is a new
+endpoint silently shipping open, and that is exactly how this surface came to
+be unauthenticated in the first place.
+
+Node-facing lease reporting lives in ``api/leases.py`` under node auth; a node
+token is rejected here (wrong JWT audience) and vice versa.
 """
 
 from __future__ import annotations
@@ -12,9 +17,10 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.api.deps import get_settings_dep
+from orchestrator.api.deps import get_settings_dep, require_user
 from orchestrator.core.config import Settings
 from orchestrator.core.db import get_session
+from orchestrator.models.user import User
 from orchestrator.schedulers.registry import is_registered, registered_names
 from orchestrator.schemas.job import (
     JobDetailResponse,
@@ -45,12 +51,15 @@ from orchestrator.services.training import (
     list_metrics,
 )
 
-router = APIRouter(prefix="/jobs", tags=["jobs"])
+router = APIRouter(
+    prefix="/jobs", tags=["jobs"], dependencies=[Depends(require_user)]
+)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=JobDetailResponse)
 async def submit_job(
     body: JobSubmitRequest,
+    user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings_dep),
 ) -> JobDetailResponse:
@@ -60,7 +69,9 @@ async def submit_job(
     default; either way it must be a registered strategy (``adaptive`` is not
     registered until M3, so it is rejected here).
 
-    # TODO(M8): user auth — unauthenticated for dev.
+    Attribution comes from the authenticated token, not the request body
+    (ADR-012 §4). A caller cannot claim to be someone else, so the dashboard's
+    "submitted by" column is now evidence rather than decoration.
     """
     scheduler_name = body.scheduler_name or settings.scheduler_strategy
     if not is_registered(scheduler_name):
@@ -72,7 +83,12 @@ async def submit_job(
             ),
         )
 
-    job = await create_job(session, req=body, scheduler_name=scheduler_name)
+    job = await create_job(
+        session,
+        req=body,
+        scheduler_name=scheduler_name,
+        submitted_by=user.username,
+    )
     await session.commit()
 
     # Place it now rather than waiting for the periodic loop. Its own session/txn.
@@ -89,10 +105,7 @@ async def submit_job(
 async def list_jobs_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> JobListResponse:
-    """List every job, newest first.
-
-    # TODO(M8): user auth — unauthenticated for dev.
-    """
+    """List every job, newest first."""
     return JobListResponse(jobs=await list_jobs(session))
 
 
@@ -101,10 +114,7 @@ async def get_job_endpoint(
     job_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
 ) -> JobDetailResponse:
-    """One job with its full event timeline and leases.
-
-    # TODO(M8): user auth — unauthenticated for dev.
-    """
+    """One job with its full event timeline and leases."""
     detail = await get_job_detail(session, job_id=job_id)
     if detail is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown job")
@@ -125,8 +135,6 @@ async def get_job_scheduling_decisions(
     with the weights used and the per-candidate L/R/D/S breakdown that explains
     the pick. Empty for a job placed by a baseline scheduler (only ``adaptive``
     records decisions) or never scheduled. 404 only if the job itself is unknown.
-
-    # TODO(M8): user auth — unauthenticated for dev.
     """
     if await get_job_detail(session, job_id=job_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown job")
@@ -144,8 +152,6 @@ async def get_job_metrics(
     Fed exclusively by the WebSocket log/metric stream as a real training run
     reports them; empty for a job that hasn't trained yet. 404 only if the job
     itself is unknown.
-
-    # TODO(M8): user auth — unauthenticated for dev.
     """
     if await get_job_detail(session, job_id=job_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown job")
@@ -185,8 +191,6 @@ async def get_job_logs(
     container actually produces output; empty for a job that hasn't started
     executing. Poll with ``after=<last id you saw>`` to fetch only new lines.
     404 only if the job itself is unknown.
-
-    # TODO(M8): user auth — unauthenticated for dev.
     """
     if await get_job_detail(session, job_id=job_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown job")
@@ -206,10 +210,7 @@ async def cancel_job_endpoint(
     job_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
 ) -> JobDetailResponse:
-    """Cancel a non-terminal job, releasing any ACTIVE lease.
-
-    # TODO(M8): user auth — unauthenticated for dev.
-    """
+    """Cancel a non-terminal job, releasing any ACTIVE lease."""
     try:
         await cancel_job(session, job_id=job_id)
     except JobNotFoundError as exc:

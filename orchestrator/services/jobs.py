@@ -102,18 +102,25 @@ def transition_job(
 
 
 async def create_job(
-    session: AsyncSession, *, req: JobSubmitRequest, scheduler_name: str
+    session: AsyncSession,
+    *,
+    req: JobSubmitRequest,
+    scheduler_name: str,
+    submitted_by: str,
 ) -> Job:
     """Create a QUEUED job with its first audit event. Caller commits.
 
     ``scheduler_name`` is the already-validated effective strategy (the request
-    value or the server default).
+    value or the server default). ``submitted_by`` is the *authenticated*
+    username passed down by the API layer (ADR-012 §4) — deliberately a
+    required argument rather than a read of ``req.submitted_by``, so this
+    cannot silently fall back to a client-asserted identity.
     """
     job = Job(
         spec=req.spec.model_dump(),
         scheduler_name=scheduler_name,
         state=JobState.QUEUED,
-        submitted_by=req.submitted_by,
+        submitted_by=submitted_by,
     )
     session.add(job)
     await session.flush()
@@ -122,7 +129,7 @@ async def create_job(
         job,
         from_state=None,
         to_state=JobState.QUEUED,
-        message=f"Job submitted by {req.submitted_by}; queued for scheduling.",
+        message=f"Job submitted by {submitted_by}; queued for scheduling.",
         extra={"scheduler_name": scheduler_name},
     )
     await session.flush()

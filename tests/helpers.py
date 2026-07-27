@@ -23,14 +23,32 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from orchestrator.core.security import create_user_jwt, hash_password
 from orchestrator.models.job import Job, JobState
 from orchestrator.models.lease import Lease, LeaseState
+from orchestrator.models.user import User, UserRole
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ALEMBIC_INI = REPO_ROOT / "orchestrator" / "alembic.ini"
 
 # Admin key the DB-backed API client is configured with.
 TEST_ADMIN_KEY = "test-admin-key"
+# JWT signing key the DB-backed API client is configured with. Set explicitly
+# (rather than relying on the dev default) so a test can mint a token that the
+# app will actually accept.
+TEST_JWT_KEY = "test-jwt-signing-key"
+
+# Credentials for the users the api_client fixture seeds. Long enough to clear
+# services.users.MIN_PASSWORD_LENGTH.
+TEST_OPERATOR_USERNAME = "pytest-operator"
+TEST_ADMIN_USERNAME = "pytest-admin"
+TEST_USER_PASSWORD = "pytest-password-1234"
+
+#: The scrypt hash of TEST_USER_PASSWORD, computed once at import instead of
+#: once per test. scrypt is deliberately slow (~50-100 ms); paying that in
+#: every one of ~200 tests' setup would add minutes to the suite for no extra
+#: coverage. The KDF itself is covered directly in tests/test_user_auth.py.
+_TEST_PASSWORD_HASH = hash_password(TEST_USER_PASSWORD)
 
 ALL_TABLES = (
     "scheduling_decision_candidates",
@@ -44,6 +62,7 @@ ALL_TABLES = (
     "auth_challenges",
     "nodes",
     "enrollment_tokens",
+    "users",
 )
 
 
@@ -214,8 +233,62 @@ async def register_new_node(
 
 
 def auth_headers(token: str) -> dict[str, str]:
-    """Bearer auth header for a node's access token."""
+    """Bearer auth header for an access token (node or user)."""
     return {"Authorization": f"Bearer {token}"}
+
+
+# --- Human operator accounts (ADR-012) ---------------------------------------
+
+
+async def seed_user(
+    session: AsyncSession, *, username: str, role: UserRole
+) -> User:
+    """Insert a user with the pre-computed test password hash. Commits.
+
+    Deliberately bypasses ``services.users.create_user`` so setup does not pay
+    the scrypt cost per test — the row it writes is byte-for-byte what
+    ``create_user`` would have written for the same password.
+    """
+    user = User(
+        id=uuid.uuid4(),
+        username=username,
+        password_hash=_TEST_PASSWORD_HASH,
+        role=role,
+    )
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+def user_token(user: User) -> str:
+    """Mint a real ``aud="user"`` JWT for a seeded account.
+
+    Uses the same production code path the login endpoint uses, so tests carry
+    a genuine token rather than a hand-assembled one; the password->token
+    exchange itself is covered in tests/test_user_auth.py.
+    """
+    return create_user_jwt(
+        user_id=str(user.id),
+        username=user.username,
+        role=user.role.value,
+        signing_key=TEST_JWT_KEY,
+        ttl_seconds=900,
+    )
+
+
+async def login(
+    client: AsyncClient,
+    *,
+    username: str = TEST_OPERATOR_USERNAME,
+    password: str = TEST_USER_PASSWORD,
+) -> dict[str, Any]:
+    """Exercise the real POST /auth/login and return the parsed response."""
+    resp = await client.post(
+        "/auth/login", json={"username": username, "password": password}
+    )
+    resp.raise_for_status()
+    return dict(resp.json())
 
 
 async def send_heartbeat(

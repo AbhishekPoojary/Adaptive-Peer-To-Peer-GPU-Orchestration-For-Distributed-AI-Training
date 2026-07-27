@@ -88,18 +88,22 @@ async def claim_lease(
 
     On a grant the response also carries the rank/world_size/rendezvous endpoint
     (``RendezvousAssignment``) the agent needs to launch the rank under torchrun
-    (M5, ADR-005)."""
+    (M5, ADR-005), and the job's spec — which since M8 is the agent's only route
+    to it, ``GET /jobs/{id}`` having become human-only (ADR-012)."""
     assert_node_scope(node_id, node)
     lease = await claim_job_for_node(session, node=node, settings=settings)
     if lease is None:
         await session.commit()
-        return ClaimResponse(lease=None, rendezvous=None)
+        return ClaimResponse(lease=None, rendezvous=None, job_spec=None)
 
     job = await session.get(Job, lease.job_id)
     assert job is not None  # the lease was just activated against it
     rendezvous = rendezvous_assignment(job, lease, settings=settings)
+    job_spec = dict(job.spec)
     await session.commit()
-    return ClaimResponse(lease=_lease_out(lease), rendezvous=rendezvous)
+    return ClaimResponse(
+        lease=_lease_out(lease), rendezvous=rendezvous, job_spec=job_spec
+    )
 
 
 @router.post("/leases/{lease_id}/renew", response_model=LeaseOut)

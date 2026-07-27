@@ -28,6 +28,18 @@ class TokenClaimOutcome(enum.Enum):
     NOT_FOUND = "not_found"
     EXPIRED = "expired"
     ALREADY_USED = "already_used"
+    REVOKED = "revoked"
+
+
+class TokenRevokeOutcome(enum.Enum):
+    """Result of an admin revoking a token — maps to distinct HTTP codes."""
+
+    REVOKED = "revoked"
+    NOT_FOUND = "not_found"
+    # The token already enrolled a node. Revoking it now would not remove that
+    # node's access, so this is reported as a conflict rather than a success.
+    ALREADY_USED = "already_used"
+    ALREADY_REVOKED = "already_revoked"
 
 
 async def create_enrollment_token(
@@ -60,6 +72,11 @@ async def claim_enrollment_token(
     Returns ``(CLAIMED, token_id)`` on success. On failure, classifies why by
     reading the (now committed) row so the API can distinguish an unknown token
     (401) from one already used by a racing enrollment (409).
+
+    ``revoked_at IS NULL`` is part of the atomic predicate, not a check done
+    afterwards: revocation has to win the same row-lock race that single-use
+    does, or a token revoked concurrently with an enrollment would still let
+    that enrollment through.
     """
     token_hash = hash_token(raw_token)
     stmt = (
@@ -67,6 +84,7 @@ async def claim_enrollment_token(
         .where(
             EnrollmentToken.token_hash == token_hash,
             EnrollmentToken.used_at.is_(None),
+            EnrollmentToken.revoked_at.is_(None),
             EnrollmentToken.expires_at > func.now(),
         )
         .values(used_at=func.now())
@@ -86,4 +104,52 @@ async def claim_enrollment_token(
         return TokenClaimOutcome.NOT_FOUND, None
     if existing.used_at is not None:
         return TokenClaimOutcome.ALREADY_USED, None
+    if existing.revoked_at is not None:
+        return TokenClaimOutcome.REVOKED, None
     return TokenClaimOutcome.EXPIRED, None
+
+
+async def list_enrollment_tokens(
+    session: AsyncSession, *, limit: int = 100
+) -> list[EnrollmentToken]:
+    """Return recently minted tokens, newest first, for the admin view.
+
+    Only ever exposes metadata — ``token_hash`` is not returned by the API
+    schema, and the raw token exists exactly once, in the mint response.
+    """
+    result = await session.execute(
+        select(EnrollmentToken)
+        .order_by(EnrollmentToken.created_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def revoke_enrollment_token(
+    session: AsyncSession, *, token_id: uuid.UUID
+) -> TokenRevokeOutcome:
+    """Withdraw an unused token. Does not commit — the caller owns the txn.
+
+    Revoking an already-used token is reported as ``ALREADY_USED`` rather than
+    silently succeeding: the node it enrolled is already in the fleet, and
+    saying "revoked" would imply an access removal that did not happen.
+    """
+    stmt = (
+        update(EnrollmentToken)
+        .where(
+            EnrollmentToken.id == token_id,
+            EnrollmentToken.used_at.is_(None),
+            EnrollmentToken.revoked_at.is_(None),
+        )
+        .values(revoked_at=func.now())
+        .returning(EnrollmentToken.id)
+    )
+    if (await session.execute(stmt)).scalar_one_or_none() is not None:
+        return TokenRevokeOutcome.REVOKED
+
+    existing = await session.get(EnrollmentToken, token_id)
+    if existing is None:
+        return TokenRevokeOutcome.NOT_FOUND
+    if existing.used_at is not None:
+        return TokenRevokeOutcome.ALREADY_USED
+    return TokenRevokeOutcome.ALREADY_REVOKED

@@ -47,11 +47,12 @@ from agent import __version__ as _agent_version
 from agent.leases import (
     RELEASE_REASON,
     HeldLease,
+    MissingJobSpecError,
     claim_lease,
     complete_lease,
     fail_lease,
-    fetch_job_spec,
     held_from_response,
+    job_spec_from_claim,
     renew_lease,
 )
 from agent.metrics_server import AgentMetricsState, start_metrics_server
@@ -470,18 +471,16 @@ async def _service_lease(
             return None
 
         try:
-            job_spec = await fetch_job_spec(
-                client, orchestrator=orchestrator, job_id=held.job_id
-            )
-        except httpx.HTTPError as exc:
-            logger.error("could not fetch job spec for job=%s: %s", held.job_id, exc)
+            job_spec = job_spec_from_claim(claimed)
+        except MissingJobSpecError as exc:
+            logger.error("no job spec in the grant for job=%s: %s", held.job_id, exc)
             await _report_result(
                 client,
                 orchestrator=orchestrator,
                 held=held,
                 access_token=access_token,
                 result=None,
-                failure_reason=f"could not fetch job spec: {exc}",
+                failure_reason=str(exc),
             )
             return None
 

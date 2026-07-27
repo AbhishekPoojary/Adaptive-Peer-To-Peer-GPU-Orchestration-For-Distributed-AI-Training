@@ -1,7 +1,9 @@
 import { useState } from "react";
-import { Outlet } from "react-router-dom";
+import { Outlet, useNavigate } from "react-router-dom";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { Menu, X } from "lucide-react";
+import { LogOut, Menu, X } from "lucide-react";
+import { useLogout } from "@/api/auth";
+import { getUser } from "@/api/session";
 import { SidebarNav } from "@/components/layout/Sidebar";
 import { Toaster } from "@/components/ui/toaster";
 
@@ -21,6 +23,7 @@ export function AppShell() {
       <aside className="hidden md:flex md:w-[220px] md:shrink-0 md:flex-col md:border-r md:border-hairline md:bg-panel">
         <Brand />
         <SidebarNav />
+        <SessionFooter />
       </aside>
 
       {/* Mobile top bar, <768px */}
@@ -57,6 +60,7 @@ export function AppShell() {
               </DialogPrimitive.Close>
             </div>
             <SidebarNav onNavigate={() => setDrawerOpen(false)} />
+            <SessionFooter />
           </DialogPrimitive.Content>
         </DialogPrimitive.Portal>
       </DialogPrimitive.Root>
@@ -68,6 +72,43 @@ export function AppShell() {
       </main>
 
       <Toaster />
+    </div>
+  );
+}
+
+/**
+ * Who you're signed in as, and the way out.
+ *
+ * Shows the role alongside the username because it changes what the UI offers
+ * (only an ADMIN can mint enrollment tokens) — without it, an operator hitting
+ * a 403 on "Add a node" would have no way to tell why.
+ */
+function SessionFooter() {
+  const user = getUser();
+  const logout = useLogout();
+  const navigate = useNavigate();
+
+  if (!user) return null;
+
+  return (
+    <div className="mt-auto border-t border-hairline p-2">
+      <div className="px-1.5 pb-1.5">
+        <div className="truncate text-sm font-medium text-primary" title={user.username}>
+          {user.username}
+        </div>
+        <div className="text-xs text-tertiary">{user.role.toLowerCase()}</div>
+      </div>
+      <button
+        type="button"
+        onClick={() => {
+          logout();
+          navigate("/login", { replace: true });
+        }}
+        className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium text-secondary outline-none transition-colors hover:bg-elevated hover:text-primary focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none"
+      >
+        <LogOut className="size-4 shrink-0" aria-hidden="true" />
+        Sign out
+      </button>
     </div>
   );
 }

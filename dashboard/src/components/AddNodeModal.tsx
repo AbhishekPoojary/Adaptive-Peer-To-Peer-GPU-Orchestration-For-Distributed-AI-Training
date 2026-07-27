@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, RefreshCw } from "lucide-react";
-import { hasAdminKeyConfigured, useCreateEnrollmentTokenMutation } from "@/api/auth";
+import { useCreateEnrollmentTokenMutation } from "@/api/auth";
+import { isAdmin } from "@/api/session";
 import { ApiError } from "@/api/client";
 import { useWatchForNewNodeQuery } from "@/api/nodes";
 import type { NodeSummary } from "@/api/types";
@@ -125,10 +126,11 @@ export function AddNodeModal({ open, onOpenChange, existingNodes }: AddNodeModal
         </DialogHeader>
 
         <div className="flex flex-col gap-3">
-          {!hasAdminKeyConfigured() && (
+          {!isAdmin() && (
             <div className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-primary">
-              This dashboard build has no admin key configured, so it can't mint an
-              enrollment token. See <code className="font-data">dashboard/.env.example</code>.
+              Adding a node needs an admin account, and you're signed in as an
+              operator. Ask whoever runs the fleet to enroll the machine, or to
+              give your account the admin role.
             </div>
           )}
 

@@ -17,14 +17,17 @@ from httpx import AsyncClient
 
 from orchestrator.core.security import create_node_jwt, hash_token
 from tests.helpers import (
+    TEST_ADMIN_KEY,
+    TEST_JWT_KEY,
     asyncpg_dsn,
+    auth_headers,
     generate_node_keypair,
     mint_enrollment_token,
     register_new_node,
     sample_hardware,
 )
 
-_JWT_KEY = "dev-only-change-me"  # matches Settings default used by the test app
+_JWT_KEY = TEST_JWT_KEY  # the key the test app is configured with (conftest)
 
 
 @pytest.mark.asyncio
@@ -197,16 +200,52 @@ async def test_malformed_telemetry_rejected(
 
 
 @pytest.mark.asyncio
-async def test_admin_key_required_for_token_minting(api_client: AsyncClient) -> None:
-    """The enrollment-token endpoint rejects a missing/wrong admin key (401)."""
-    resp = await api_client.post("/auth/enrollment-tokens", json={"created_by": "x"})
-    assert resp.status_code == 401
-    resp = await api_client.post(
-        "/auth/enrollment-tokens",
-        json={"created_by": "x"},
-        headers={"X-Admin-Key": "wrong"},
+async def test_token_minting_requires_admin_credentials(
+    anon_client: AsyncClient,
+) -> None:
+    """Minting accepts the static admin key **or** an ADMIN user token, and
+    nothing else (ADR-012 §6).
+
+    Run against ``anon_client`` so each case carries exactly the credential
+    under test — the default ``api_client`` would silently add an operator
+    token and turn the "no credentials" case into the "wrong role" case.
+    """
+    body = {"created_by": "x"}
+
+    # No credentials at all.
+    resp = await anon_client.post("/auth/enrollment-tokens", json=body)
+    assert resp.status_code == 401, resp.text
+
+    # A wrong admin key is rejected without falling through to user auth.
+    resp = await anon_client.post(
+        "/auth/enrollment-tokens", json=body, headers={"X-Admin-Key": "wrong"}
     )
-    assert resp.status_code == 401
+    assert resp.status_code == 401, resp.text
+
+    # A genuine, authenticated user who simply lacks the role: 403, not 401.
+    # The distinction matters — 401 would tell them to log in again, which
+    # would not help.
+    resp = await anon_client.post(
+        "/auth/enrollment-tokens",
+        json=body,
+        headers=auth_headers(anon_client.operator_token),  # type: ignore[attr-defined]
+    )
+    assert resp.status_code == 403, resp.text
+
+    # The static admin key still works: CLI bootstrap before any user exists.
+    resp = await anon_client.post(
+        "/auth/enrollment-tokens", json=body, headers={"X-Admin-Key": TEST_ADMIN_KEY}
+    )
+    assert resp.status_code == 201, resp.text
+
+    # And so does an ADMIN user token — the path the dashboard uses now that
+    # it no longer holds the admin key at all.
+    resp = await anon_client.post(
+        "/auth/enrollment-tokens",
+        json=body,
+        headers=auth_headers(anon_client.admin_token),  # type: ignore[attr-defined]
+    )
+    assert resp.status_code == 201, resp.text
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,7 @@
 import { createBrowserRouter, RouterProvider, useParams } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
+import { RequireAuth } from "@/components/RequireAuth";
+import { Login } from "@/pages/Login";
 import { Overview } from "@/pages/Overview";
 import { NodesList } from "@/pages/NodesList";
 import { NodeDetail } from "@/pages/NodeDetail";
@@ -26,8 +28,15 @@ function JobDetailRoute() {
  * loaders/actions here, per ADR-011's routing decision.
  */
 const router = createBrowserRouter([
+  // Outside the shell and the guard: an unauthenticated visitor must be able
+  // to reach the sign-in form, and it has no sidebar to navigate from.
+  { path: "/login", element: <Login /> },
   {
-    element: <AppShell />,
+    element: (
+      <RequireAuth>
+        <AppShell />
+      </RequireAuth>
+    ),
     children: [
       { index: true, element: <Overview /> },
       { path: "nodes", element: <NodesList /> },

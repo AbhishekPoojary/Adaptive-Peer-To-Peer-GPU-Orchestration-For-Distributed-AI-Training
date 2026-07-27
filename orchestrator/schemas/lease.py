@@ -8,6 +8,8 @@ contract rather than something inferred server-side.
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from orchestrator.schemas.job import LeaseOut
@@ -53,10 +55,19 @@ class ClaimResponse(BaseModel):
     to this node right now (a clean empty-handed poll, not an error).
     ``rendezvous`` accompanies a granted lease with the rank/world_size/endpoint
     the agent needs to launch it (M5); ``null`` when ``lease`` is ``null``.
+
+    ``job_spec`` is the granted job's validated spec. It travels with the claim
+    (M8) because the agent needs it to launch the trainer and there is no other
+    way for it to get it: ``GET /jobs/{id}`` is now human-only (ADR-012), and a
+    node token is correctly rejected there. Returning it here keeps the
+    authorization honest — a node receives the spec for the one job it was just
+    granted, rather than being handed read access to every job in the fleet —
+    and removes a round trip on the claim path.
     """
 
     lease: LeaseOut | None
     rendezvous: RendezvousAssignment | None = None
+    job_spec: dict[str, Any] | None = None
 
 
 class LeaseEpochRequest(BaseModel):

@@ -96,13 +96,84 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Enrollment Tokens Endpoint
+         * @description List minted tokens, newest first. Metadata only — never the secret.
+         */
+        get: operations["list_enrollment_tokens_endpoint_auth_enrollment_tokens_get"];
         put?: never;
         /**
          * Create Enrollment Token Endpoint
          * @description Mint a single-use enrollment token. Returns the raw token exactly once.
          */
         post: operations["create_enrollment_token_endpoint_auth_enrollment_tokens_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/enrollment-tokens/{token_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Enrollment Token Endpoint
+         * @description Withdraw an unused token so it can never enroll a node.
+         *
+         *     Returns the token's resulting state rather than an empty 204, so the
+         *     caller sees the committed truth (including the revocation timestamp)
+         *     instead of inferring it.
+         */
+        post: operations["revoke_enrollment_token_endpoint_auth_enrollment_tokens__token_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Login
+         * @description Exchange a username and password for a short-lived user access token.
+         */
+        post: operations["login_auth_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Me
+         * @description Return the account the presented user token belongs to.
+         *
+         *     The dashboard calls this on load to decide whether a stored token is still
+         *     good, rather than trusting a locally cached copy of the user.
+         */
+        get: operations["me_auth_me_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -203,8 +274,6 @@ export interface paths {
         /**
          * List Nodes Endpoint
          * @description List every enrolled node with its latest telemetry sample.
-         *
-         *     # TODO(M8): read-side auth — unauthenticated for dev.
          */
         get: operations["list_nodes_endpoint_nodes_get"];
         put?: never;
@@ -251,8 +320,6 @@ export interface paths {
         /**
          * List Jobs Endpoint
          * @description List every job, newest first.
-         *
-         *     # TODO(M8): user auth — unauthenticated for dev.
          */
         get: operations["list_jobs_endpoint_jobs_get"];
         put?: never;
@@ -264,7 +331,9 @@ export interface paths {
          *     default; either way it must be a registered strategy (``adaptive`` is not
          *     registered until M3, so it is rejected here).
          *
-         *     # TODO(M8): user auth — unauthenticated for dev.
+         *     Attribution comes from the authenticated token, not the request body
+         *     (ADR-012 §4). A caller cannot claim to be someone else, so the dashboard's
+         *     "submitted by" column is now evidence rather than decoration.
          */
         post: operations["submit_job_jobs_post"];
         delete?: never;
@@ -283,8 +352,6 @@ export interface paths {
         /**
          * Get Job Endpoint
          * @description One job with its full event timeline and leases.
-         *
-         *     # TODO(M8): user auth — unauthenticated for dev.
          */
         get: operations["get_job_endpoint_jobs__job_id__get"];
         put?: never;
@@ -310,8 +377,6 @@ export interface paths {
          *     with the weights used and the per-candidate L/R/D/S breakdown that explains
          *     the pick. Empty for a job placed by a baseline scheduler (only ``adaptive``
          *     records decisions) or never scheduled. 404 only if the job itself is unknown.
-         *
-         *     # TODO(M8): user auth — unauthenticated for dev.
          */
         get: operations["get_job_scheduling_decisions_jobs__job_id__scheduling_decisions_get"];
         put?: never;
@@ -336,8 +401,6 @@ export interface paths {
          *     Fed exclusively by the WebSocket log/metric stream as a real training run
          *     reports them; empty for a job that hasn't trained yet. 404 only if the job
          *     itself is unknown.
-         *
-         *     # TODO(M8): user auth — unauthenticated for dev.
          */
         get: operations["get_job_metrics_jobs__job_id__metrics_get"];
         put?: never;
@@ -363,8 +426,6 @@ export interface paths {
          *     container actually produces output; empty for a job that hasn't started
          *     executing. Poll with ``after=<last id you saw>`` to fetch only new lines.
          *     404 only if the job itself is unknown.
-         *
-         *     # TODO(M8): user auth — unauthenticated for dev.
          */
         get: operations["get_job_logs_jobs__job_id__logs_get"];
         put?: never;
@@ -387,8 +448,6 @@ export interface paths {
         /**
          * Cancel Job Endpoint
          * @description Cancel a non-terminal job, releasing any ACTIVE lease.
-         *
-         *     # TODO(M8): user auth — unauthenticated for dev.
          */
         post: operations["cancel_job_endpoint_jobs__job_id__cancel_post"];
         delete?: never;
@@ -562,6 +621,47 @@ export interface components {
              * Format: date-time
              */
             expires_at: string;
+        };
+        /**
+         * EnrollmentTokenListResponse
+         * @description Body of GET /auth/enrollment-tokens.
+         */
+        EnrollmentTokenListResponse: {
+            /** Tokens */
+            tokens: components["schemas"]["EnrollmentTokenOut"][];
+        };
+        /**
+         * EnrollmentTokenOut
+         * @description Metadata for one minted token in the admin list view.
+         *
+         *     Carries no ``token`` and no ``token_hash``: the raw value existed exactly
+         *     once, in the mint response, and the hash is a credential-equivalent lookup
+         *     key that has no business leaving the database.
+         */
+        EnrollmentTokenOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Created By */
+            created_by: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Used At */
+            used_at: string | null;
+            /** Revoked At */
+            revoked_at: string | null;
+            /** Status */
+            status: string;
         };
         /**
          * GpuInfo
@@ -755,13 +855,16 @@ export interface components {
          *     ``scheduler_name`` is optional; when omitted the server's configured
          *     ``SCHEDULER_STRATEGY`` default is used. Whatever is chosen must be a
          *     registered scheduler (validated in the handler).
+         *
+         *     There is deliberately no ``submitted_by`` field. Attribution is taken from
+         *     the authenticated user's token (ADR-012 §4); because this model forbids
+         *     extra fields, a client still sending the old field gets a loud 422 rather
+         *     than silently having its claimed identity ignored.
          */
         JobSubmitRequest: {
             spec: components["schemas"]["JobSpec"];
             /** Scheduler Name */
             scheduler_name?: string | null;
-            /** Submitted By */
-            submitted_by: string;
         };
         /**
          * JobSummary
@@ -870,6 +973,36 @@ export interface components {
             renewed_at: string | null;
             /** Released At */
             released_at: string | null;
+        };
+        /**
+         * LoginRequest
+         * @description Body of POST /auth/login.
+         */
+        LoginRequest: {
+            /** Username */
+            username: string;
+            /** Password */
+            password: string;
+        };
+        /**
+         * LoginResponse
+         * @description A freshly issued user access token plus who it belongs to.
+         *
+         *     The dashboard renders its admin affordances from ``user.role``; the server
+         *     re-checks the role on every privileged call regardless, so a tampered
+         *     client can reveal a button but not use it.
+         */
+        LoginResponse: {
+            /** Access Token */
+            access_token: string;
+            /**
+             * Token Type
+             * @default bearer
+             */
+            token_type: string;
+            /** Expires In */
+            expires_in: number;
+            user: components["schemas"]["UserOut"];
         };
         /**
          * NodeDetailResponse
@@ -1229,6 +1362,28 @@ export interface components {
             /** Device */
             device?: ("cuda" | "cpu") | null;
         };
+        /**
+         * UserOut
+         * @description A user account as returned to clients. Never includes the hash.
+         */
+        UserOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Username */
+            username: string;
+            /** Role */
+            role: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Last Login At */
+            last_login_at: string | null;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -1329,11 +1484,44 @@ export interface operations {
             };
         };
     };
+    list_enrollment_tokens_endpoint_auth_enrollment_tokens_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Admin-Key"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrollmentTokenListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_enrollment_token_endpoint_auth_enrollment_tokens_post: {
         parameters: {
             query?: never;
             header?: {
                 "X-Admin-Key"?: string | null;
+                authorization?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -1351,6 +1539,104 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnrollmentTokenCreateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_enrollment_token_endpoint_auth_enrollment_tokens__token_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Admin-Key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                token_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrollmentTokenOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    login_auth_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    me_auth_me_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserOut"];
                 };
             };
             /** @description Validation Error */
@@ -1503,7 +1789,9 @@ export interface operations {
     list_nodes_endpoint_nodes_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1518,6 +1806,15 @@ export interface operations {
                     "application/json": components["schemas"]["NodeListResponse"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     get_node_endpoint_nodes__node_id__get: {
@@ -1526,7 +1823,9 @@ export interface operations {
                 /** @description Number of recent telemetry samples to include (capped). */
                 samples?: number | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 node_id: string;
             };
@@ -1557,7 +1856,9 @@ export interface operations {
     list_jobs_endpoint_jobs_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1572,12 +1873,23 @@ export interface operations {
                     "application/json": components["schemas"]["JobListResponse"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     submit_job_jobs_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1610,7 +1922,9 @@ export interface operations {
     get_job_endpoint_jobs__job_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 job_id: string;
             };
@@ -1641,7 +1955,9 @@ export interface operations {
     get_job_scheduling_decisions_jobs__job_id__scheduling_decisions_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 job_id: string;
             };
@@ -1672,7 +1988,9 @@ export interface operations {
     get_job_metrics_jobs__job_id__metrics_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 job_id: string;
             };
@@ -1707,7 +2025,9 @@ export interface operations {
                 after?: number | null;
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 job_id: string;
             };
@@ -1738,7 +2058,9 @@ export interface operations {
     cancel_job_endpoint_jobs__job_id__cancel_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 job_id: string;
             };

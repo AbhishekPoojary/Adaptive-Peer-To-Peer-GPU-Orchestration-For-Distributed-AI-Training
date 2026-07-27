@@ -403,7 +403,6 @@ async def test_adaptive_end_to_end_over_http(api_client: AsyncClient) -> None:
             "spec": {"dataset": "mnist", "model": "m", "epochs": 1, "batch_size": 8,
                      "learning_rate": 0.1, "world_size": 1, "min_gpu_mem_bytes": 4 * _GB},
             "scheduler_name": "adaptive",
-            "submitted_by": "e2e",
         },
     )
     assert submit.status_code == 201
@@ -447,7 +446,6 @@ async def test_baseline_scheduler_writes_no_decision(
             "spec": {"dataset": "mnist", "model": "m", "epochs": 1, "batch_size": 8,
                      "learning_rate": 0.1, "world_size": 1, "min_gpu_mem_bytes": None},
             "scheduler_name": "least_loaded",
-            "submitted_by": "baseline",
         },
     )
     job_id = submit.json()["id"]

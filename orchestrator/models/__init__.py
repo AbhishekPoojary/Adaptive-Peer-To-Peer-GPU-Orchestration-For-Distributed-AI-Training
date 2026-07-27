@@ -24,6 +24,7 @@ from orchestrator.models.scheduling import (
     SchedulingDecisionCandidate,
 )
 from orchestrator.models.training import TrainingLogLine, TrainingMetric
+from orchestrator.models.user import User, UserRole
 
 __all__ = [
     "AuthChallenge",
@@ -40,6 +41,8 @@ __all__ = [
     "SchedulingDecisionCandidate",
     "TrainingLogLine",
     "TrainingMetric",
+    "User",
+    "UserRole",
     "can_transition",
     "is_terminal",
 ]

@@ -1,5 +1,6 @@
 import createClient from "openapi-fetch";
 import type { paths } from "./schema.gen";
+import { clearSession, getToken } from "./session";
 
 /**
  * Typed fetch client generated against the live orchestrator schema
@@ -15,6 +16,35 @@ import type { paths } from "./schema.gen";
  * See ADR-011.
  */
 export const api = createClient<paths>({ baseUrl: "/api" });
+
+/**
+ * Attach the operator's bearer token to every request, and treat a 401 as
+ * "this session is over" (ADR-012).
+ *
+ * Centralized in middleware rather than per-hook on purpose: the M8 audit
+ * found that the surface had drifted open one endpoint at a time precisely
+ * because each call site decided its own auth. A request that forgets its
+ * credential here is not possible.
+ *
+ * `/auth/login` is exempt from the 401 handling — a wrong password is a form
+ * error to show the user, not an expired session to sign them out of.
+ */
+api.use({
+  onRequest({ request }) {
+    const token = getToken();
+    if (token) request.headers.set("Authorization", `Bearer ${token}`);
+    return request;
+  },
+  onResponse({ request, response }) {
+    if (response.status === 401 && !request.url.endsWith("/auth/login")) {
+      // The token expired or was revoked server-side. Drop it so the route
+      // guard redirects to the login page instead of the UI silently showing
+      // stale data behind a dead session.
+      clearSession();
+    }
+    return response;
+  },
+});
 
 /** Narrow, honest error shape for the UI layer — never a raw stack trace. */
 export class ApiError extends Error {

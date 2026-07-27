@@ -68,3 +68,64 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+
+
+class EnrollmentTokenOut(BaseModel):
+    """Metadata for one minted token in the admin list view.
+
+    Carries no ``token`` and no ``token_hash``: the raw value existed exactly
+    once, in the mint response, and the hash is a credential-equivalent lookup
+    key that has no business leaving the database.
+    """
+
+    id: uuid.UUID
+    created_by: str
+    created_at: datetime
+    expires_at: datetime
+    used_at: datetime | None
+    revoked_at: datetime | None
+    #: Derived server-side from the three timestamps and the clock, so clients
+    #: don't each re-implement the precedence and disagree about it.
+    status: str
+
+
+class EnrollmentTokenListResponse(BaseModel):
+    """Body of GET /auth/enrollment-tokens."""
+
+    tokens: list[EnrollmentTokenOut]
+
+
+# --- Human operator auth (ADR-012) -------------------------------------------
+
+
+class LoginRequest(BaseModel):
+    """Body of POST /auth/login."""
+
+    model_config = _FORBID
+
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class UserOut(BaseModel):
+    """A user account as returned to clients. Never includes the hash."""
+
+    id: uuid.UUID
+    username: str
+    role: str
+    created_at: datetime
+    last_login_at: datetime | None
+
+
+class LoginResponse(BaseModel):
+    """A freshly issued user access token plus who it belongs to.
+
+    The dashboard renders its admin affordances from ``user.role``; the server
+    re-checks the role on every privileged call regardless, so a tampered
+    client can reveal a button but not use it.
+    """
+
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: UserOut

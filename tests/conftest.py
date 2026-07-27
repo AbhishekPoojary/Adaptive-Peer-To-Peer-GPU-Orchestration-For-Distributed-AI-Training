@@ -19,17 +19,24 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from orchestrator.api.deps import reset_rate_limiters
 from orchestrator.core import db as db_module
 from orchestrator.core.config import get_settings
 from orchestrator.core.db import dispose_engine
 from orchestrator.main import create_app
+from orchestrator.models.user import UserRole
 from tests.helpers import (
     TEST_ADMIN_KEY,
+    TEST_ADMIN_USERNAME,
+    TEST_JWT_KEY,
+    TEST_OPERATOR_USERNAME,
     asyncpg_dsn,
     base_test_url,
     create_database,
     drop_database,
+    seed_user,
     truncate_all,
+    user_token,
     with_dbname,
 )
 
@@ -85,24 +92,64 @@ def migrated_db_url() -> Iterator[str]:
 
 
 @pytest_asyncio.fixture
-async def api_client(
+async def anon_client(
     migrated_db_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> AsyncGenerator[AsyncClient, None]:
-    """FastAPI app bound to the migrated test DB, truncated before each test."""
+    """FastAPI app bound to the migrated test DB, truncated, **no credential**.
+
+    Seeds the operator and admin accounts (so ``api_client`` and the negative
+    tests share one setup path) but attaches no Authorization header. This is
+    the client for proving an endpoint rejects anonymous callers.
+    """
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("ADMIN_API_KEY", TEST_ADMIN_KEY)
+    monkeypatch.setenv("JWT_SIGNING_KEY", TEST_JWT_KEY)
     monkeypatch.setenv("APP_ENV", "dev")
     get_settings.cache_clear()
     db_module._engine = None
     db_module._sessionmaker = None
+    # Limiter windows are process-global; without this a test that deliberately
+    # trips the limit would leak 429s into whichever test ran next.
+    reset_rate_limiters()
 
     await truncate_all(asyncpg_dsn(migrated_db_url))
+
+    from orchestrator.core.db import get_sessionmaker
+
+    maker = get_sessionmaker()
+    async with maker() as setup_session:
+        operator = await seed_user(
+            setup_session, username=TEST_OPERATOR_USERNAME, role=UserRole.OPERATOR
+        )
+        admin = await seed_user(
+            setup_session, username=TEST_ADMIN_USERNAME, role=UserRole.ADMIN
+        )
 
     app = create_app()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Stashed so api_client and admin-token tests can read them without
+        # re-querying; not sent unless a test opts in.
+        client.operator_token = user_token(operator)  # type: ignore[attr-defined]
+        client.admin_token = user_token(admin)  # type: ignore[attr-defined]
         yield client
     await dispose_engine()
+    reset_rate_limiters()
+
+
+@pytest_asyncio.fixture
+async def api_client(anon_client: AsyncClient) -> AsyncGenerator[AsyncClient, None]:
+    """The default client: authenticated as a seeded OPERATOR (ADR-012).
+
+    Set as a *client-level* default header, which httpx lets a per-request
+    header override — so the node-auth tests that pass their own
+    ``Authorization`` still exercise node auth, and a user token reaching a
+    node-scoped endpoint is correctly rejected on audience.
+    """
+    anon_client.headers["Authorization"] = (
+        f"Bearer {anon_client.operator_token}"  # type: ignore[attr-defined]
+    )
+    yield anon_client
 
 
 @pytest_asyncio.fixture
