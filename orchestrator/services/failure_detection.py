@@ -238,6 +238,13 @@ async def _reassign_node_jobs(
         ]
         if not current:
             continue
+        # Every current-epoch lease this node holds is passed as *failed*,
+        # including a PENDING slot it had not claimed yet — deliberately unlike
+        # the TTL sweep, which never penalises an unclaimed offer. The
+        # difference is the evidence: here the node has been declared dead from
+        # its own recorded heartbeat history (φ-accrual, ADR-004), so the fault
+        # is established independently of the lease's state. See
+        # docs/adr/ADR-003-addendum.md.
         did = await reassign_job_attempt(
             session,
             job=job,

@@ -53,15 +53,32 @@ if TYPE_CHECKING:
 class LeaseState(enum.Enum):
     """Lifecycle state of a lease.
 
-    ``ACTIVE`` leases are renewable and hold the job. ``EXPIRED`` (TTL elapsed,
-    swept), ``RELEASED`` (cancelled out from under it), ``COMPLETED`` and
-    ``FAILED`` are terminal. ``PENDING`` is reserved for a future two-phase
-    grant; M2 grants leases ``ACTIVE`` directly.
+    Non-terminal: ``PENDING`` — a cohort slot the scheduler reserved for a node
+    that has not claimed it yet (M5) — and ``ACTIVE``, a claimed, renewable
+    lease the node is really working under.
+
+    The terminal states record *what actually happened*, and the distinction
+    between them is the reliability model itself (ADR-009; see
+    ``docs/adr/ADR-003-addendum.md`` for the expiry semantics):
+
+    * ``COMPLETED`` — the node finished the work. Its node's success.
+    * ``FAILED`` — the node took the work and reported a real failure. Its
+      node's failure.
+    * ``EXPIRED`` — an **ACTIVE** lease passed its TTL without renewal: the node
+      took work on and stopped making progress. Its node's failure.
+    * ``UNCLAIMED`` — a **PENDING** slot passed its TTL without ever being
+      claimed. The scheduler *offered* work that was never picked up, so no node
+      ever took it on: the offer is withdrawn and the job rescheduled, and the
+      node's reliability is untouched. Distinct from ``EXPIRED`` precisely
+      because "never picked up the offer" is not "dropped work it had taken".
+    * ``RELEASED`` — the lease was torn down out from under a blameless node
+      (job cancellation, or a cohort sibling failing). No reliability effect.
     """
 
     PENDING = "PENDING"
     ACTIVE = "ACTIVE"
     EXPIRED = "EXPIRED"
+    UNCLAIMED = "UNCLAIMED"
     RELEASED = "RELEASED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"

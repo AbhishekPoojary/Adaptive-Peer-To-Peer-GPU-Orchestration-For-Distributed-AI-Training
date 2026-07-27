@@ -87,6 +87,10 @@ export const LEASE_STATES = [
   "PENDING",
   "ACTIVE",
   "EXPIRED",
+  // An offer that lapsed before the node ever claimed it. Distinct from
+  // EXPIRED (which is a node that dropped work it had taken on) and carries no
+  // reliability penalty — see docs/adr/ADR-003-addendum.md.
+  "UNCLAIMED",
   "RELEASED",
   "COMPLETED",
   "FAILED",

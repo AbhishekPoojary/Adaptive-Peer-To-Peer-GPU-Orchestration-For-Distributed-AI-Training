@@ -63,8 +63,18 @@ failure_detections_total = Counter(
 
 lease_expiries_total = Counter(
     "orchestrator_lease_expiries_total",
-    "Total leases expired by the TTL sweep (a rank that stopped renewing or "
-    "never claimed in time).",
+    "Total ACTIVE leases expired by the TTL sweep: a rank that took work on and "
+    "stopped renewing. Counts only leases whose node is at fault — an offer that "
+    "was never claimed is orchestrator_lease_offers_unclaimed_total instead.",
+    registry=REGISTRY,
+)
+
+lease_offers_unclaimed_total = Counter(
+    "orchestrator_lease_offers_unclaimed_total",
+    "Total PENDING cohort slots that lapsed without ever being claimed. This is "
+    "a scheduling-efficiency signal (offers going to agents that cannot take "
+    "them), not a node-reliability signal — no failure is attributed for it "
+    "(ADR-003 addendum).",
     registry=REGISTRY,
 )
 

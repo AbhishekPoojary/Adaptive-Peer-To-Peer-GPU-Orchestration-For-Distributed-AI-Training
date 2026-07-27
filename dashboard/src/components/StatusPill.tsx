@@ -50,6 +50,9 @@ const LEASE_STATE: Record<string, StatusSpec> = {
   PENDING: { label: "Pending", variant: "warn", icon: Clock },
   ACTIVE: { label: "Active", variant: "active", icon: PlayCircle },
   EXPIRED: { label: "Expired", variant: "bad", icon: XCircle },
+  // Neutral, not "bad": the offer lapsed unclaimed, which costs the node
+  // nothing (docs/adr/ADR-003-addendum.md).
+  UNCLAIMED: { label: "Unclaimed", variant: "neutral", icon: Clock },
   RELEASED: { label: "Released", variant: "neutral", icon: Ban },
   COMPLETED: { label: "Completed", variant: "good", icon: CheckCircle2 },
   FAILED: { label: "Failed", variant: "bad", icon: XCircle },

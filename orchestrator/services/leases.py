@@ -13,9 +13,12 @@ application locking:
   nothing.
 
 Reliability counters are updated here from real outcomes only: ``+1`` success on
-complete, ``+1`` failure on fail and on expiry. The service flushes; the caller
-commits (the claim/renew/complete/fail HTTP handlers commit; the sweep runner
-commits).
+complete, ``+1`` failure on fail and on the expiry of an *ACTIVE* lease. A
+PENDING slot that was offered and never claimed is **not** a node failure — it
+ends ``UNCLAIMED`` with reliability untouched (see
+:func:`sweep_expired_leases` and ``docs/adr/ADR-003-addendum.md``). The service
+flushes; the caller commits (the claim/renew/complete/fail HTTP handlers commit;
+the sweep runner commits).
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.core.config import Settings
-from orchestrator.core.metrics import lease_expiries_total
+from orchestrator.core.metrics import lease_expiries_total, lease_offers_unclaimed_total
 from orchestrator.models.job import Job, JobState
 from orchestrator.models.lease import Lease, LeaseState
 from orchestrator.models.node import Node
@@ -475,6 +478,7 @@ async def reassign_job_attempt(
     now: datetime,
     message: str,
     extra: dict[str, Any] | None = None,
+    unclaimed_leases: list[Lease] | None = None,
 ) -> bool:
     """Tear down a doomed attempt and requeue the job — the single reassignment
     code path shared by the TTL-expiry sweep (:func:`sweep_expired_leases`) and
@@ -482,20 +486,31 @@ async def reassign_job_attempt(
     (``services.failure_detection.run_failure_detection_pass``). Two triggers,
     one implementation — never duplicated.
 
-    ``failed_leases`` are current-epoch leases whose nodes are at fault (they
-    timed out, or their node was declared offline): each → ``EXPIRED`` with the
-    node's ``lease_failure_count`` += 1 (a real reliability signal, ADR-009).
-    Their expiry is the retryable path — distinct from an agent-reported
-    ``fail_lease`` (which is terminal). The rest of the attempt's cohort is
-    ``RELEASED`` (no fault, reliability untouched). The job → ``REASSIGNED`` with
-    cohort/rendezvous wiring cleared, so a later scheduler pass re-selects nodes
-    at a fresh epoch — the ``ONLINE``-only hard filter (ADR-009) keeps the
-    just-failed node out until it heartbeats again.
+    ``failed_leases`` are current-epoch leases whose nodes are at fault (an
+    ACTIVE lease timed out, or the node was declared offline by the φ-accrual
+    detector): each → ``EXPIRED`` with the node's ``lease_failure_count`` += 1 (a
+    real reliability signal, ADR-009). Their expiry is the retryable path —
+    distinct from an agent-reported ``fail_lease`` (which is terminal).
+
+    ``unclaimed_leases`` are current-epoch PENDING slots that were *offered* and
+    never claimed: each → ``UNCLAIMED`` with **no** reliability effect. Nobody
+    took that work on, so nobody can have dropped it — penalising it would
+    manufacture failures for a healthy node whose agent was merely busy or
+    slow to poll (ADR-003 addendum). The two lists are kept separate rather than
+    inferred from ``Lease.state`` inside this function so each caller states its
+    own fault attribution explicitly.
+
+    The rest of the attempt's cohort is ``RELEASED`` (no fault, reliability
+    untouched). The job → ``REASSIGNED`` with cohort/rendezvous wiring cleared,
+    so a later scheduler pass re-selects nodes at a fresh epoch — the
+    ``ONLINE``-only hard filter (ADR-009) keeps the just-failed node out until it
+    heartbeats again.
 
     Returns ``True`` iff the job was moved to ``REASSIGNED`` (``False`` when it
     was no longer in a reassignable state — e.g. a sibling already ended it).
     Caller commits.
     """
+    unclaimed = unclaimed_leases or []
     for lease in failed_leases:
         lease.state = LeaseState.EXPIRED
         # A timeout / detected drop at the current epoch is this node's real
@@ -505,11 +520,16 @@ async def reassign_job_attempt(
             .where(Node.id == lease.node_id)
             .values(lease_failure_count=Node.lease_failure_count + 1)
         )
+    for lease in unclaimed:
+        # Terminal, retryable, and blameless: the offer lapsed. No counter moves,
+        # and UNCLAIMED is excluded from the lease-history reliability inputs the
+        # adaptive scheduler reads (services.scheduling._reliability_inputs).
+        lease.state = LeaseState.UNCLAIMED
     await _release_cohort_siblings(
         session,
         job=job,
         epoch=job.current_lease_epoch,
-        exclude_lease_ids={lease.id for lease in failed_leases},
+        exclude_lease_ids={lease.id for lease in (*failed_leases, *unclaimed)},
         now=now,
     )
     if job.state not in _REASSIGNABLE:
@@ -522,22 +542,79 @@ async def reassign_job_attempt(
     return True
 
 
+async def _node_names(
+    session: AsyncSession, node_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    """Real node names for a set of ids, so timeline messages can name the node
+    that did not pick up its work instead of printing a UUID."""
+    if not node_ids:
+        return {}
+    rows = (
+        await session.execute(select(Node.id, Node.name).where(Node.id.in_(node_ids)))
+    ).all()
+    return {node_id: name for node_id, name in rows}
+
+
+def _overdue_message(
+    *,
+    timed_out: list[Lease],
+    unclaimed: list[Lease],
+    names: dict[uuid.UUID, str],
+    ttl_seconds: int,
+) -> str:
+    """The job-timeline sentence for one swept attempt.
+
+    Two genuinely different events, so two different sentences — a reader of the
+    timeline must be able to tell "the node dropped work it had taken" from "the
+    node never picked the work up", because only the first is that node's fault.
+    """
+    parts: list[str] = []
+    if timed_out:
+        parts.append(
+            f"{len(timed_out)} cohort lease(s) expired without progress; "
+            "the whole attempt was torn down and requeued for "
+            "rescheduling under a new lease epoch."
+        )
+    if unclaimed:
+        who = ", ".join(
+            sorted({names.get(lease.node_id, str(lease.node_id)) for lease in unclaimed})
+        )
+        parts.append(
+            f"{who} did not pick up the work in time (the offer went unclaimed "
+            f"for its {ttl_seconds}s lease TTL); rescheduling. No reliability "
+            "penalty: the node never took this work on."
+        )
+    return " ".join(parts)
+
+
 async def sweep_expired_leases(
     session: AsyncSession, *, settings: Settings
 ) -> int:
-    """Expire overdue cohort leases and reassign the whole attempt. Returns the
-    number of leases expired. Caller commits.
+    """Sweep overdue cohort leases and reassign the whole attempt. Returns the
+    number of leases swept. Caller commits.
 
-    "Overdue" is an ACTIVE lease past its TTL (a rank that stopped renewing) *or*
-    a PENDING slot past its TTL (a rank that never claimed) — both mean a cohort
-    member failed to make progress. Each overdue lease at the job's current
-    epoch → EXPIRED with the node's ``lease_failure_count`` += 1 (a timeout is a
-    real reliability signal, ADR-009). The rest of that attempt's cohort is then
-    torn down (siblings RELEASED, no reliability hit — the drop was not their
-    fault) and the job → REASSIGNED with its cohort/rendezvous wiring cleared, so
-    a later pass re-selects N nodes under a fresh epoch (ADR-005: one rank
-    dropping fails the whole attempt in M5; in-flight single-rank replacement is
-    M6). Locked ``SKIP LOCKED`` so a concurrent sweep never double-processes.
+    "Overdue" covers two events that look alike and mean opposite things — the
+    distinction is the point of this function (ADR-003 addendum):
+
+    * an **ACTIVE** lease past its TTL: a rank that took the work on and stopped
+      renewing → ``EXPIRED`` with that node's ``lease_failure_count`` += 1. A
+      node that stops making progress on work it holds is a real reliability
+      signal (ADR-009).
+    * a **PENDING** slot past its TTL: a rank that never claimed → ``UNCLAIMED``
+      with **no** reliability effect. The scheduler offered work that was not
+      picked up; that can be the node's fault (a dead agent) or the system's (an
+      agent still busy with earlier work, or a claim-poll/TTL race), and we
+      cannot tell which from this event alone — so it earns no penalty. A
+      genuinely dead node is caught by the φ-accrual detector (ADR-004), which
+      declares it OFFLINE from its *own* recorded evidence (missed heartbeats)
+      and penalises it there.
+
+    The rest of that attempt's cohort is then torn down (siblings RELEASED, no
+    reliability hit — the drop was not their fault) and the job → REASSIGNED with
+    its cohort/rendezvous wiring cleared, so a later pass re-selects N nodes
+    under a fresh epoch (ADR-005: one rank dropping fails the whole attempt in
+    M5; in-flight single-rank replacement is M6). Locked ``SKIP LOCKED`` so a
+    concurrent sweep never double-processes.
     """
     now = datetime.now(UTC)
     overdue = (
@@ -560,7 +637,10 @@ async def sweep_expired_leases(
     for lease in overdue:
         by_job.setdefault(lease.job_id, []).append(lease)
 
-    expired_count = 0
+    names = await _node_names(session, [lease.node_id for lease in overdue])
+    swept_count = 0
+    timed_out_count = 0
+    unclaimed_count = 0
     for job_id, overdue_leases in by_job.items():
         job = (
             await session.execute(
@@ -575,41 +655,71 @@ async def sweep_expired_leases(
             lease for lease in overdue_leases
             if lease.lease_epoch == job.current_lease_epoch
         ]
-        # Defensive: expire any leftover stale-epoch overdue rows (superseded
-        # attempts) — a cleanup only, no reliability hit, no reassignment.
+        # Defensive: clear any leftover stale-epoch overdue rows (superseded
+        # attempts) — a cleanup only, no reliability hit, no reassignment. Each
+        # row still lands in the terminal state that describes what really
+        # happened to it, so the reliability inputs stay honest.
         stale_overdue = [
             lease for lease in overdue_leases
             if lease.lease_epoch != job.current_lease_epoch
         ]
         for lease in stale_overdue:
-            lease.state = LeaseState.EXPIRED
-            expired_count += 1
+            if lease.state is LeaseState.PENDING:
+                lease.state = LeaseState.UNCLAIMED
+                unclaimed_count += 1
+            else:
+                lease.state = LeaseState.EXPIRED
+                timed_out_count += 1
+            swept_count += 1
 
         if not current_overdue:
             continue
-        expired_count += len(current_overdue)
+        swept_count += len(current_overdue)
+        # THE distinction (see this function's docstring): a lease that was
+        # ACTIVE when it lapsed is the node's failure; a slot still PENDING when
+        # it lapsed was never picked up and is nobody's failure.
+        timed_out = [
+            lease for lease in current_overdue if lease.state is LeaseState.ACTIVE
+        ]
+        unclaimed = [
+            lease for lease in current_overdue if lease.state is LeaseState.PENDING
+        ]
+        timed_out_count += len(timed_out)
+        unclaimed_count += len(unclaimed)
         # Reuse the one shared reassignment code path (also used by the M6
         # φ-accrual detector): expire the timed-out leases with a reliability
-        # hit, release the cohort, and requeue the job under a fresh epoch.
-        n_timed_out = len(current_overdue)
+        # hit, mark the unclaimed offers UNCLAIMED without one, release the rest
+        # of the cohort, and requeue the job under a fresh epoch.
         await reassign_job_attempt(
             session,
             job=job,
-            failed_leases=current_overdue,
+            failed_leases=timed_out,
+            unclaimed_leases=unclaimed,
             now=now,
-            message=(
-                f"{n_timed_out} cohort lease(s) expired without progress; "
-                "the whole attempt was torn down and requeued for "
-                "rescheduling under a new lease epoch."
+            message=_overdue_message(
+                timed_out=timed_out,
+                unclaimed=unclaimed,
+                names=names,
+                ttl_seconds=settings.lease_ttl_seconds,
             ),
             extra={
-                "expired_ranks": sorted(lease.rank for lease in current_overdue),
+                "expired_ranks": sorted(lease.rank for lease in timed_out),
+                "unclaimed_ranks": sorted(lease.rank for lease in unclaimed),
+                "unclaimed_nodes": sorted(
+                    names.get(lease.node_id, str(lease.node_id)) for lease in unclaimed
+                ),
                 "lease_epoch": job.current_lease_epoch,
                 "trigger": "lease-ttl-sweep",
             },
         )
 
     await session.flush()
-    if expired_count:
-        lease_expiries_total.inc(expired_count)
-    return expired_count
+    # Two counters for two events: an expiry is a node that dropped work it
+    # held; an unclaimed offer is not, and conflating them in
+    # orchestrator_lease_expiries_total made a busy agent look like a flapping
+    # one on the dashboard.
+    if timed_out_count:
+        lease_expiries_total.inc(timed_out_count)
+    if unclaimed_count:
+        lease_offers_unclaimed_total.inc(unclaimed_count)
+    return swept_count

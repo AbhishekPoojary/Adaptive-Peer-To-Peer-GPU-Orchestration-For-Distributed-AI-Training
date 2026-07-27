@@ -68,9 +68,18 @@ logger = logging.getLogger("orchestrator.scheduling")
 # Job states that are awaiting (re)placement by a scheduler pass.
 _PLACEABLE = (JobState.QUEUED, JobState.REASSIGNED)
 
-# Lease outcomes that count toward reliability. COMPLETED is a success;
-# FAILED and EXPIRED are failures. RELEASED (a cancellation) is deliberately
-# excluded — it is not a node's fault, matching services.jobs.cancel_job.
+# Lease outcomes that count toward reliability. COMPLETED is a success; FAILED
+# (the node reported a real failure) and EXPIRED (the node held an ACTIVE lease
+# and stopped making progress) are failures.
+#
+# Two terminal states are deliberately excluded because neither is evidence
+# about the node: RELEASED (a cancellation or a cohort sibling's failure, per
+# services.jobs.cancel_job) and UNCLAIMED (an offered PENDING slot that was
+# never picked up — nobody took that work on, so nobody dropped it; see
+# services.leases.sweep_expired_leases and docs/adr/ADR-003-addendum.md).
+# This is the authoritative R_i input: the flat Node counters are a display
+# metric, so excluding UNCLAIMED *here* is what actually keeps the adaptive
+# scheduler's reliability term honest.
 _SUCCESS_STATES = (LeaseState.COMPLETED,)
 _FAILURE_STATES = (LeaseState.FAILED, LeaseState.EXPIRED)
 _RELIABILITY_STATES = (*_SUCCESS_STATES, *_FAILURE_STATES)
@@ -337,8 +346,10 @@ async def place_job_cohort(
                 rank=member.rank,
                 state=LeaseState.PENDING,
                 granted_at=now,
-                # A PENDING slot not claimed within the TTL is swept exactly like
-                # an unrenewed ACTIVE lease → the whole attempt is reassigned.
+                # A PENDING slot not claimed within the TTL is swept and the
+                # attempt reassigned — but it ends UNCLAIMED, not EXPIRED: an
+                # offer nobody picked up is not a node failure (ADR-003
+                # addendum, services.leases.sweep_expired_leases).
                 expires_at=now + ttl,
             )
         )
