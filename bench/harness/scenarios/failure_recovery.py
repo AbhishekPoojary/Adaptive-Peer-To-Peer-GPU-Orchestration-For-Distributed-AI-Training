@@ -1,23 +1,40 @@
-"""How long does the system really take to recover from a killed trainer?
+"""How long does the system really take to recover when a peer disappears?
 
-Measures the end-to-end fault-tolerance path with a real failure: a running
-trainer container is killed with ``docker kill`` — a real SIGKILL to a real
-training process — and the harness measures, by wall clock, how long the
-orchestrator takes to notice, reassign, and drive the job to a real completion
-with a real final accuracy.
+Measures the end-to-end fault-tolerance path with a real failure: the agent
+process holding a running job is SIGKILLed, with no chance to release its lease
+or say anything to the orchestrator. Recovery must therefore come from the
+orchestrator noticing silence on its own — φ-accrual detection (ADR-004), lease
+expiry, reassignment to another peer, and a real completion with a real final
+accuracy.
 
-Nothing is simulated. There is no failure flag, no injected exception, and no
-``time.sleep`` standing in for the recovery (CONTRIBUTING.md rules 4 and 6).
+Nothing is simulated. No failure flag, no injected exception, no ``time.sleep``
+standing in for the recovery (CONTRIBUTING.md rules 4 and 6).
 
-The measurement is deliberately end-to-end rather than a sum of internal
-stages: what a user experiences is "my job still finished, and it cost me this
-much time", and that is a single number nobody has to trust an internal metric
-to believe. The recorded event timeline is included alongside it so the stages
-*are* inspectable.
+Why the agent and not the trainer container
+-------------------------------------------
+An earlier version of this scenario killed the trainer container instead. That
+measured nothing, and the first run said so: the job went straight to ``FAILED``
+at lease epoch 1 with ``trainer exited with code 137``, never reassigned.
 
-Two agents run so the reassignment has somewhere to go. On one host they are
-not independent machines (ADR-013), but recovery latency does not depend on
-that: detection is driven by heartbeat silence and lease TTL, both real here.
+That is correct behaviour, not a bug. The system deliberately separates two
+cases (``services/leases.py``, ADR-005):
+
+* a **reported** training failure — the agent watched the trainer exit nonzero
+  and said so — is **terminal**. Retrying a job whose spec is broken would burn
+  the whole fleet in a loop, so failures surface instead of being masked.
+* a **dropped node** — heartbeat silence, lease expires — is the retryable
+  case, and goes ``REASSIGNED``.
+
+Killing the container exercises the first path, which is designed not to
+recover. Killing the agent exercises the second, which is the fault tolerance
+this project actually claims. The scenario was wrong; the system was right.
+
+A known tension, recorded rather than resolved here: exit code 137 is
+``SIGKILL``, which on a 4 GB laptop GPU is quite often the OOM killer — a
+*node-specific* failure that a larger peer might survive. The current design
+cannot distinguish that from a genuinely broken job spec, so it treats both as
+terminal. Bounded retry with failure classification would be a real improvement
+and a real design change; it is out of scope for M9, which measures what exists.
 """
 
 from __future__ import annotations
@@ -34,6 +51,8 @@ logger = logging.getLogger("bench.failure_recovery")
 
 NAME = "failure_recovery"
 
+_TERMINAL = {"COMPLETED", "FAILED", "CANCELLED"}
+
 
 async def run(
     *,
@@ -45,29 +64,44 @@ async def run(
     spec = dict(config["job_spec"])
     job_timeout = float(config.get("job_timeout_seconds", 900.0))
     recovery_timeout = float(config.get("recovery_timeout_seconds", 900.0))
+    warmup = float(config.get("warmup_seconds", 20.0))
     scheduler = str(config.get("scheduler", "adaptive"))
 
-    await fleet.start_agent("recovery-a")
-    await fleet.start_agent("recovery-b")
+    agent_a = await fleet.start_agent("recovery-a")
+    agent_b = await fleet.start_agent("recovery-b")
     await client.wait_for_online_nodes(count=2, timeout_seconds=120.0)
+    by_node = {
+        agent_a.node_id: agent_a,
+        agent_b.node_id: agent_b,
+    }
 
     job = await client.submit(spec=spec, scheduler_name=scheduler)
     job_id = job["id"]
     logger.info("submitted job %s under %s", job_id[:8], scheduler)
 
+    # Wait for real training to actually be under way before killing anything,
+    # so recovery has something to recover *from*.
     container = await await_trainer_container(job_id=job_id, timeout_seconds=job_timeout)
     running = await client.job(job_id)
     original_node = running.get("scheduled_node_id")
+    victim = by_node.get(original_node)
+    if victim is None:
+        raise RuntimeError(
+            f"job {job_id[:8]} was placed on node {original_node}, which is not "
+            f"one of this run's agents — another agent is running against this "
+            f"orchestrator and would confound the measurement"
+        )
 
-    # Let real training make real progress before killing it, so recovery has
-    # something to recover *from* rather than restarting a job that had barely
-    # begun.
-    warmup = float(config.get("warmup_seconds", 20.0))
-    logger.info("letting job %s train for %.0fs before the kill", job_id[:8], warmup)
+    logger.info(
+        "job %s running on %s; letting it train for %.0fs",
+        job_id[:8],
+        victim.node_name,
+        warmup,
+    )
     deadline = time.monotonic() + warmup
     while time.monotonic() < deadline:
         state = (await client.job(job_id))["state"]
-        if state in {"COMPLETED", "FAILED", "CANCELLED"}:
+        if state in _TERMINAL:
             raise RuntimeError(
                 f"job {job_id[:8]} reached {state} during warmup — it finished "
                 f"before the failure could be induced, so nothing was measured. "
@@ -76,12 +110,22 @@ async def run(
         await asyncio.sleep(1.0)
 
     killed_at = time.monotonic()
-    if not kill_container(container):
-        raise RuntimeError(
-            f"could not kill container {container[:12]}; refusing to report a "
-            f"recovery from a failure that never happened"
-        )
-    logger.info("killed container %s; measuring recovery", container[:12])
+    fleet.kill_agent(victim)
+    # Take the trainer down with the agent. On a real peer that vanishes — lid
+    # closed, power lost — the container goes with the machine. Here only the
+    # agent process died, so without this the orphaned trainer would keep
+    # holding the one GPU that the *recovering* rank now needs, turning a
+    # recovery measurement into a measurement of GPU contention. Killing it is
+    # the faithful simulation, not a favour to the system: nobody is left alive
+    # to report the exit, so the orchestrator still has to detect the loss on
+    # its own.
+    kill_container(container)
+    logger.info(
+        "SIGKILLed agent %s (%s) and its trainer %s; measuring recovery",
+        victim.label,
+        victim.node_name,
+        container[:12],
+    )
 
     completed, _elapsed = await client.wait_for_job_state(
         job_id, states={"COMPLETED"}, timeout_seconds=recovery_timeout
@@ -97,16 +141,20 @@ async def run(
         )
 
     final_node = completed.get("scheduled_node_id")
+    survivor = by_node.get(final_node)
     return {
         "job_id": job_id,
         "scheduler": scheduler,
-        "killed_container_id": container[:12],
+        "failure_mode": "SIGKILL of the agent process holding the lease",
         "warmup_seconds": warmup,
-        # The headline: real wall-clock from SIGKILL to a real completed job.
+        # The headline: real wall-clock from the peer vanishing to a real
+        # completed job with a real accuracy.
         "recovery_seconds": round(recovery_seconds, 2),
-        "original_node_id": original_node,
-        "final_node_id": final_node,
-        "reassigned_to_different_node": bool(
+        "killed_node_id": original_node,
+        "killed_node_name": victim.node_name,
+        "completed_node_id": final_node,
+        "completed_node_name": survivor.node_name if survivor else "unknown",
+        "reassigned_to_a_different_node": bool(
             original_node is not None and final_node != original_node
         ),
         "final_lease_epoch": completed["current_lease_epoch"],
@@ -114,7 +162,8 @@ async def run(
         "final_loss": result.get("final_loss"),
         "epochs_completed": result.get("epochs_completed"),
         "device": result.get("device"),
-        # The stage-by-stage record, so the single number above is inspectable.
+        # The stage-by-stage record, so the single number above is inspectable:
+        # detection, expiry, reassignment, re-lease, and completion each appear.
         "event_timeline": [
             {
                 "ts": event["ts"],

@@ -1,25 +1,33 @@
 {
   "_description": [
-    "Real wall-clock recovery from a real SIGKILL to a running trainer.",
-    "The job trains for warmup_seconds first so recovery has something to",
-    "recover from, then its container is killed with docker kill and the",
-    "harness measures how long the system takes to reach a real COMPLETED",
-    "state with a real final accuracy.",
-    "epochs is deliberately > 1 so the job outlives the warmup; a job that",
-    "finished before the kill would measure nothing, and the scenario fails",
-    "loudly rather than reporting that."
+    "Real wall-clock recovery from a peer that vanishes mid-job.",
+    "The agent holding a running lease is SIGKILLed with no chance to release",
+    "it, and its trainer container is killed too — on a peer that really",
+    "disappears, the container goes with the machine. Nobody is left alive to",
+    "report anything, so the orchestrator has to detect the loss itself via",
+    "phi-accrual heartbeat silence (ADR-004), expire the lease, and reassign.",
+    "",
+    "Deliberately NOT a docker kill of the trainer alone: that is a *reported*",
+    "failure, which services/leases.py makes terminal by design so a broken job",
+    "spec cannot loop across the fleet. Killing the container measured a job",
+    "going straight to FAILED at epoch 1 and recovering nothing. The retryable",
+    "case is a dropped node, and that is what this measures.",
+    "",
+    "epochs is > 1 so the job outlives the warmup; a job that finished before",
+    "the kill would measure nothing, and the scenario fails loudly rather than",
+    "reporting that."
   ],
   "job_spec": {
     "dataset": "mnist",
     "model": "cnn",
-    "epochs": 3,
+    "epochs": 4,
     "batch_size": 64,
     "learning_rate": 0.01,
     "world_size": 1,
     "min_gpu_mem_bytes": null
   },
   "scheduler": "adaptive",
-  "warmup_seconds": 20,
+  "warmup_seconds": 25,
   "job_timeout_seconds": 900,
   "recovery_timeout_seconds": 900
 }

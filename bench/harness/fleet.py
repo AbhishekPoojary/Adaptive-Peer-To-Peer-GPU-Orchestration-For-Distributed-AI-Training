@@ -220,6 +220,20 @@ class Fleet:
                 )
             await asyncio.sleep(1.0)
 
+    def kill_agent(self, agent: AgentProcess) -> None:
+        """SIGKILL an agent with no chance to release its lease.
+
+        Distinct from :meth:`stop_agent`, which terminates gracefully. This is
+        the honest simulation of a peer *disappearing* — laptop lid closed,
+        wifi dropped, process OOM-killed — because the agent gets no
+        opportunity to tell the orchestrator anything. Recovery therefore has
+        to come from the orchestrator noticing silence on its own (ADR-004's
+        φ-accrual detector), which is exactly the path under test.
+        """
+        if agent.alive:
+            agent.process.kill()
+            agent.process.wait(timeout=15)
+
     def stop_all(self) -> None:
         for agent in self.agents:
             agent.stop()
