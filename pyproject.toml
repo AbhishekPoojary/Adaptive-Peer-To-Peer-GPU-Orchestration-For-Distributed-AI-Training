@@ -34,8 +34,15 @@ agent = [
 trainer = [
     "torch==2.5.1",
 ]
+bench = [
+    # The M9 harness validates every artifact against bench/schema.json before
+    # writing it, so a malformed report cannot reach bench/report/.
+    "jsonschema==4.26.0",
+    "httpx==0.28.1",
+    "psutil==6.1.1",
+]
 dev = [
-    "gpu-orchestrator[server,agent]",
+    "gpu-orchestrator[server,agent,bench]",
     "pytest==8.3.4",
     "pytest-asyncio==0.25.0",
     "httpx==0.28.1",
@@ -48,7 +55,7 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["orchestrator*", "agent*"]
+include = ["orchestrator*", "agent*", "bench*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -59,14 +66,14 @@ addopts = "-ra"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["orchestrator", "agent", "trainer", "tests"]
+src = ["orchestrator", "agent", "trainer", "bench", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "N"]
 ignore = []
 
 [tool.ruff.lint.isort]
-known-first-party = ["orchestrator", "agent", "trainer"]
+known-first-party = ["orchestrator", "agent", "trainer", "bench"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency markers are the canonical exception to B008: calling

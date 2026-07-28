@@ -1,0 +1,25 @@
+{
+  "_description": [
+    "Real wall-clock recovery from a real SIGKILL to a running trainer.",
+    "The job trains for warmup_seconds first so recovery has something to",
+    "recover from, then its container is killed with docker kill and the",
+    "harness measures how long the system takes to reach a real COMPLETED",
+    "state with a real final accuracy.",
+    "epochs is deliberately > 1 so the job outlives the warmup; a job that",
+    "finished before the kill would measure nothing, and the scenario fails",
+    "loudly rather than reporting that."
+  ],
+  "job_spec": {
+    "dataset": "mnist",
+    "model": "cnn",
+    "epochs": 3,
+    "batch_size": 64,
+    "learning_rate": 0.01,
+    "world_size": 1,
+    "min_gpu_mem_bytes": null
+  },
+  "scheduler": "adaptive",
+  "warmup_seconds": 20,
+  "job_timeout_seconds": 900,
+  "recovery_timeout_seconds": 900
+}

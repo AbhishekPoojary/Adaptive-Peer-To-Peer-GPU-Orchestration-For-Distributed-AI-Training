@@ -1,0 +1,27 @@
+{
+  "_description": [
+    "Does the adaptive scheduler route around a node that has really failed?",
+    "Two agents on one host: their load and latency are identical by",
+    "construction (ADR-013), so recorded lease history is the only term that",
+    "can differ — which makes an idle-but-unreliable node the discriminating",
+    "case between adaptive and the baselines.",
+    "Phase 1 builds real history (docker kill for failures, real completed",
+    "MNIST training for successes) with each node running alone so every",
+    "outcome is unambiguously its own. Phase 2 measures placement share."
+  ],
+  "job_spec": {
+    "dataset": "mnist",
+    "model": "cnn",
+    "epochs": 1,
+    "batch_size": 64,
+    "learning_rate": 0.01,
+    "world_size": 1,
+    "min_gpu_mem_bytes": null
+  },
+  "degraded_failures": 3,
+  "healthy_successes": 2,
+  "placement_trials": 6,
+  "schedulers": ["adaptive", "least_loaded", "round_robin"],
+  "job_timeout_seconds": 600,
+  "trial_timeout_seconds": 120
+}

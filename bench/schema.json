@@ -3,7 +3,14 @@
   "title": "Benchmark report artifact",
   "description": "Every benchmark run must produce an artifact matching this schema. Numbers are machine-written by the bench harness only — never hand-typed (see CONTRIBUTING.md #6).",
   "type": "object",
-  "required": ["timestamp_utc", "git_sha", "hardware", "scenario", "results"],
+  "required": [
+    "timestamp_utc",
+    "git_sha",
+    "hardware",
+    "scenario",
+    "results",
+    "limitations"
+  ],
   "properties": {
     "timestamp_utc": {
       "type": "string",
@@ -29,6 +36,34 @@
     "results": {
       "type": "object",
       "description": "Scenario-specific measured metrics only."
-    }
+    },
+    "limitations": {
+      "type": "object",
+      "description": "What this run did NOT exercise, machine-written from the observed fleet (ADR-013). Required so a reader taking only the JSON cannot mistake a partial validation for a complete one.",
+      "required": [
+        "load_term_differentiable",
+        "latency_term_differentiable",
+        "notes"
+      ],
+      "properties": {
+        "load_term_differentiable": {
+          "type": "boolean",
+          "description": "False when all agents shared one physical host, where host-wide psutil/NVML readings make every node's reported load identical by construction — so the alpha*L term of S_i was untested."
+        },
+        "latency_term_differentiable": {
+          "type": "boolean",
+          "description": "False when all agents dialed loopback, so measured RTT differs only by noise and the gamma*D term of S_i was untested."
+        },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "provisional": {
+      "type": "boolean",
+      "description": "Present and true only when the run came from a dirty worktree, meaning git_sha does not fully describe the code that ran."
+    },
+    "provisional_reason": { "type": "string" }
   }
 }

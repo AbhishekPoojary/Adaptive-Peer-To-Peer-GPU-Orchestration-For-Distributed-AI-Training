@@ -192,6 +192,19 @@ def build_run_kwargs(
     kwargs: dict[str, Any] = {
         "image": config.image,
         "environment": environment,
+        # Identifying labels so a running trainer can be traced back to the
+        # lease that launched it from `docker ps` alone. Load-bearing for the
+        # M9 benchmark, which induces failures by killing one specific job's
+        # container (CONTRIBUTING.md rule 6: real failures, not simulated
+        # flags) and must not kill a bystander to do it. Also the fastest way
+        # to answer "what is this container and who asked for it" during an
+        # incident.
+        "labels": {
+            "gpu-orchestrator.role": "trainer",
+            "gpu-orchestrator.job_id": job_id,
+            "gpu-orchestrator.lease_id": lease_id,
+            "gpu-orchestrator.lease_epoch": str(lease_epoch),
+        },
         "detach": True,
         "remove": True,  # --rm
         "cap_drop": ["ALL"],
