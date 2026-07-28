@@ -311,6 +311,8 @@ async def place_job_cohort(
             beta=settings.scheduler_beta_reliability,
             gamma=settings.scheduler_gamma_latency,
             wilson_z=settings.reliability_wilson_z,
+            load_significant_spread=settings.scheduler_load_significant_spread,
+            latency_significant_spread_ms=settings.scheduler_latency_significant_spread_ms,
         )
         selected = [sc.snapshot for sc in select_top_n(scored, world_size)]
     else:

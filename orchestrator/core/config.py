@@ -98,6 +98,15 @@ class Settings(BaseSettings):
     scheduler_alpha_load: float = 1.0
     scheduler_beta_reliability: float = 1.0
     scheduler_gamma_latency: float = 0.5
+    # Smallest difference treated as a full-scale gap when normalizing the load
+    # and latency terms. Normalization divides by max(observed spread, this),
+    # so a difference smaller than the domain considers meaningful produces a
+    # proportionally small penalty instead of being amplified to 1.0.
+    # Without these, the M9 benchmark measured a 7 ms loopback jitter outvoting
+    # a real reliability gap and the adaptive scheduler placing jobs on a node
+    # with 3 recorded failures (ADR-009 addendum).
+    scheduler_load_significant_spread: float = 25.0
+    scheduler_latency_significant_spread_ms: float = 50.0
 
     # --- Leases (ADR-003) ---
     lease_ttl_seconds: int = 30

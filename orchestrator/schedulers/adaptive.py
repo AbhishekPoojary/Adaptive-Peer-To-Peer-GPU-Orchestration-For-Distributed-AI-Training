@@ -80,6 +80,22 @@ class ScoredCandidate:
     was_selected: bool
 
 
+#: Smallest utilization gap (percentage points, load is 0..100) treated as a
+#: full-scale load difference. Nodes closer than this are "similarly loaded"
+#: and the alpha*L term scales their gap down proportionally rather than
+#: amplifying it. 25 points is a quarter of the range: enough that ordinary
+#: sampling jitter on an idle fleet stays small, while a genuinely busy node
+#: (say 80% against 20%) still reaches ~1.0.
+DEFAULT_LOAD_SIGNIFICANT_SPREAD = 25.0
+
+#: Smallest RTT gap (ms) treated as a full-scale latency difference. Peers on
+#: one LAN or a Tailscale overlay differ by single-digit milliseconds of noise;
+#: a peer that is genuinely far differs by tens. 50 ms sits above the noise and
+#: below a real WAN hop, so loopback jitter contributes almost nothing while a
+#: distant node is properly penalised.
+DEFAULT_LATENCY_SIGNIFICANT_SPREAD_MS = 50.0
+
+
 def _latest_rtt_ewma(snapshot: NodeSnapshot) -> float | None:
     """The node's smoothed RTT from its latest sample, or ``None`` if unmeasured.
 
@@ -93,29 +109,42 @@ def _latest_rtt_ewma(snapshot: NodeSnapshot) -> float | None:
     return sample.rtt_ewma_ms
 
 
-def _normalize_unknown_worst(values: list[float | None]) -> list[float]:
-    """Min-max normalize ``values`` to ``[0, 1]``; ``None`` becomes worst (1.0).
+def _normalize_unknown_worst(
+    values: list[float | None], *, significant_spread: float
+) -> list[float]:
+    """Normalize ``values`` to ``[0, 1]``; ``None`` becomes worst (1.0).
 
-    Known values are scaled against the min/max of the *known* values in the
-    pool. A ``None`` (unmeasured) is mapped to ``1.0`` — the worst case — so an
-    unmeasured node is never preferred over a measured one on this axis. When
-    there is no spread among the known values (a single known value, or all
-    equal), every known value maps to ``0.0``: no relative comparison is
-    possible, documented per ADR-009.
+    Scaled as ``(v - lo) / max(observed_spread, significant_spread)``, so the
+    *magnitude* of a difference survives normalization.
+
+    Plain min-max — which this was until the M9 benchmark — is wrong here, and
+    measurably so. It divides by the observed spread alone, which rescales
+    whatever difference happens to exist to the full 0..1 range no matter how
+    small it is. Two nodes 7 ms apart on loopback scored 0.0 and 1.0, exactly
+    as two nodes 500 ms apart would: a full-scale latency penalty for noise.
+    In ``bench/report/20260728T154205-reliability_placement.json`` that
+    amplified 7 ms outvoted a real reliability gap (R=0.30 vs R=0.04), and the
+    adaptive scheduler placed 3/6 jobs on a node with 3 recorded failures and
+    0 successes — indistinguishable from round-robin.
+
+    Dividing by at least ``significant_spread`` fixes that: differences smaller
+    than what the domain considers meaningful produce proportionally small
+    penalties, and only a genuinely large spread reaches 1.0. It also removes a
+    discontinuity that plain min-max had — all-equal values mapped to 0.0, but
+    values a microsecond apart mapped to 0.0 and 1.0, so an infinitesimal
+    change flipped the term from inert to maximal.
+
+    A ``None`` (unmeasured) still maps to ``1.0`` — the worst case — so an
+    unmeasured node is never preferred over a measured one on this axis. With
+    no known values at all, every entry is unknown and the result is all 1.0.
     """
+    if significant_spread <= 0.0:
+        raise ValueError("significant_spread must be > 0")
     known = [v for v in values if v is not None]
     lo = min(known) if known else 0.0
     hi = max(known) if known else 0.0
-    spread = hi - lo
-    out: list[float] = []
-    for v in values:
-        if v is None:
-            out.append(1.0)
-        elif spread <= 0.0:
-            out.append(0.0)
-        else:
-            out.append((v - lo) / spread)
-    return out
+    denominator = max(hi - lo, significant_spread)
+    return [1.0 if v is None else (v - lo) / denominator for v in values]
 
 
 def score_candidates(
@@ -125,19 +154,28 @@ def score_candidates(
     beta: float,
     gamma: float,
     wilson_z: float,
+    load_significant_spread: float = DEFAULT_LOAD_SIGNIFICANT_SPREAD,
+    latency_significant_spread_ms: float = DEFAULT_LATENCY_SIGNIFICANT_SPREAD_MS,
 ) -> list[ScoredCandidate]:
     """Score every candidate by ``S_i = α·L_i − β·R_i + γ·D_i`` (pure).
 
-    Load and latency are min-max normalized across exactly this candidate pool,
-    so the scores are only comparable *within one decision* — which is all the
-    selection needs. Returns one ``ScoredCandidate`` per input, in input order,
-    all with ``was_selected=False`` (the caller stamps the winner). An empty
-    input yields an empty list.
+    Load and latency are normalized across exactly this candidate pool against
+    at least the domain's significant spread, so a difference too small to
+    matter cannot outvote the other terms (see
+    :func:`_normalize_unknown_worst`). Scores remain comparable only *within
+    one decision*, which is all the selection needs. Returns one
+    ``ScoredCandidate`` per input, in input order, all with
+    ``was_selected=False`` (the caller stamps the winner). An empty input
+    yields an empty list.
     """
     raw_utils = [current_load(c.snapshot) for c in candidates]
     raw_rtts = [_latest_rtt_ewma(c.snapshot) for c in candidates]
-    l_scores = _normalize_unknown_worst(raw_utils)
-    d_scores = _normalize_unknown_worst(raw_rtts)
+    l_scores = _normalize_unknown_worst(
+        raw_utils, significant_spread=load_significant_spread
+    )
+    d_scores = _normalize_unknown_worst(
+        raw_rtts, significant_spread=latency_significant_spread_ms
+    )
 
     scored: list[ScoredCandidate] = []
     for cand, raw_util, raw_rtt, l_i, d_i in zip(
