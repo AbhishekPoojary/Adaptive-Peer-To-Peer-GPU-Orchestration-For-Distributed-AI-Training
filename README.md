@@ -12,19 +12,24 @@ Every architectural choice is recorded in `docs/adr/`.
 
 ## Status
 
-**M0–M9 complete.** The system runs end to end: a peer enrolls with one
+**M0–M10 complete.** The system runs end to end: a peer enrolls with one
 command, heartbeats real hardware telemetry, claims a lease, trains a real model
 in a container, streams its logs and metrics live to a dashboard, checkpoints to
 object storage, and recovers onto another peer when a node dies mid-run.
 
 What is measured rather than asserted:
 
-- Real MNIST training to **98.67%** test accuracy on CUDA, driven end to end
+- Real MNIST training to **99.03%** test accuracy on CUDA, driven end to end
   through the authenticated API.
 - The adaptive scheduler places **6/6** jobs on a reliable node over one with
   three recorded failures, where `round_robin` manages 3/6 and `least_loaded`
   2/6 — see `bench/report/`.
+- A peer SIGKILLed mid-training is detected in **5.8 s** and its job completes
+  on another machine **55.9 s** after the peer vanished.
 - 279 tests against a real Postgres. No mocked database, no simulated failures.
+
+`docs/STATUS.md` is the honest account of what is done, what is explicitly not
+claimed, and where to start next.
 
 What is **not** claimed: any throughput speedup from distribution. All
 development happened on one laptop with one GPU, where extra ranks contend for
@@ -153,11 +158,15 @@ python -m bench.harness --scenario reliability_placement --username <you>
 python -m bench.harness --scenario failure_recovery --username <you>
 ```
 
-The harness starts real agents, induces real failures with `docker kill`, and
+The harness starts real agent processes, induces real failures (`docker kill` on
+a running trainer; `SIGKILL` on a peer that must then be detected as gone), and
 writes a timestamped artifact to `bench/report/` carrying the git SHA and the
 hardware it ran on. It refuses to run from a dirty worktree, and a run that
 cannot complete its measurements writes **nothing** rather than publishing a
 report with a hole in it.
+
+Runs take minutes: they include real training and real failure detection, which
+has a 5 s floor by design (ADR-004). See `docs/OPERATIONS.md`.
 
 ## Ground rules
 
