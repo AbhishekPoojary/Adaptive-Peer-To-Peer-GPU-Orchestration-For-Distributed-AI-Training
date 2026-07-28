@@ -479,6 +479,7 @@ async def reassign_job_attempt(
     message: str,
     extra: dict[str, Any] | None = None,
     unclaimed_leases: list[Lease] | None = None,
+    unclaimed_backoff_seconds: float = 0.0,
 ) -> bool:
     """Tear down a doomed attempt and requeue the job — the single reassignment
     code path shared by the TTL-expiry sweep (:func:`sweep_expired_leases`) and
@@ -525,6 +526,23 @@ async def reassign_job_attempt(
         # and UNCLAIMED is excluded from the lease-history reliability inputs the
         # adaptive scheduler reads (services.scheduling._reliability_inputs).
         lease.state = LeaseState.UNCLAIMED
+    if unclaimed and unclaimed_backoff_seconds > 0:
+        # M7.1c: skip these nodes for a moment. They are healthy by every other
+        # measure — heartbeating, idle, blameless — which is precisely why the
+        # next pass would otherwise re-offer the same work to the same node and
+        # watch it lapse again. Observed in the wild: 7 wasted epochs in 108s
+        # against one node whose agent was stuck.
+        #
+        # A timestamp rather than a counter, so it expires on its own with no
+        # reset path to forget: a node that starts claiming again is simply
+        # eligible once the moment passes. Still not a reliability signal.
+        await session.execute(
+            update(Node)
+            .where(Node.id.in_([lease.node_id for lease in unclaimed]))
+            .values(
+                claim_backoff_until=now + timedelta(seconds=unclaimed_backoff_seconds)
+            )
+        )
     await _release_cohort_siblings(
         session,
         job=job,
@@ -695,6 +713,7 @@ async def sweep_expired_leases(
             job=job,
             failed_leases=timed_out,
             unclaimed_leases=unclaimed,
+            unclaimed_backoff_seconds=settings.unclaimed_offer_backoff_seconds,
             now=now,
             message=_overdue_message(
                 timed_out=timed_out,

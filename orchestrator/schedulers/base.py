@@ -105,10 +105,11 @@ def passes_hard_filters(
     """True iff ``snapshot`` may run ``job`` (ADR-009 hard filters).
 
     A node qualifies only when it is ONLINE, not DRAINING, heartbeating within
-    the staleness window, free of an active lease, and — for a GPU job — has a
-    GPU large enough. A CPU job (``min_gpu_mem_bytes is None``) accepts any node
-    that clears the other filters; a GPU job requires a big-enough GPU, so a
-    CPU-only node is filtered out.
+    the staleness window, free of an active lease, not backing off from a
+    lapsed offer, and — for a GPU job — has a GPU large enough. A CPU job
+    (``min_gpu_mem_bytes is None``) accepts any node that clears the other
+    filters; a GPU job requires a big-enough GPU, so a CPU-only node is
+    filtered out.
     """
     node = snapshot.node
     # ONLINE is the only runnable status: this rejects both OFFLINE and DRAINING.
@@ -117,6 +118,12 @@ def passes_hard_filters(
     if _is_stale(node, now=now, stale_seconds=stale_seconds):
         return False
     if snapshot.has_active_lease:
+        return False
+    # M7.1c: this node let its last offer lapse unclaimed. It is still healthy
+    # by every other measure — heartbeating, idle, blameless — which is exactly
+    # why it would otherwise be re-offered the same work immediately and let it
+    # lapse again. Skip it until the short backoff passes.
+    if node.claim_backoff_until is not None and node.claim_backoff_until > now:
         return False
 
     min_gpu = job.spec.get("min_gpu_mem_bytes")
@@ -134,7 +141,13 @@ def eligible_candidates(
     now: datetime,
     stale_seconds: float,
 ) -> list[NodeSnapshot]:
-    """The subset of ``snapshots`` that passes every hard filter for ``job``."""
+    """The subset of ``snapshots`` that passes every hard filter for ``job``.
+
+    An empty result is a normal outcome, not an error: the job simply stays
+    QUEUED and the next pass reconsiders it. That is what keeps the claim
+    backoff safe — a fleet where every node happens to be backing off delays
+    placement by seconds, it does not fail the job.
+    """
     return [
         s
         for s in snapshots

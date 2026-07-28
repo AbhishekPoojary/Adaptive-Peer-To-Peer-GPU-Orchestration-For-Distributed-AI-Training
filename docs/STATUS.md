@@ -21,6 +21,7 @@ Last updated: 2026-07-28, at commit `0e939f7`.
 | A job survives its node disappearing | Reassigned and completed, 55.89 s end to end |
 | Checkpoint to MinIO and resume on reassignment | ADR-006, `tests/test_checkpoint_manifest.py` |
 | Adaptive placement beats the baselines on reliability | 6/6 vs 2/6 and 3/6, `bench/report/20260728T155702` |
+| A node that lets an offer lapse is skipped briefly, not re-offered | `tests/test_claim_backoff.py` (M7.1c) |
 | Multi-rank DDP under torchrun with real c10d rendezvous | ADR-005, M5 |
 | Real user auth; no secret in the browser bundle | ADR-012; bundle greps clean for the admin key |
 | Container isolation | `cap_drop=ALL`, read-only rootfs, no host network (ADR-007) |
@@ -70,34 +71,26 @@ fails loudly after N tries. This is the most valuable outstanding change: OOM
 on small consumer GPUs is the single most likely real failure in the target
 deployment.
 
-### 2. Reschedule backoff (M7.1c)
-
-A node that fails to claim an offered lease is immediately re-offered it. The
-root cause of the observed thrash was fixed in M7.1b (the agent now abandons
-its container when fenced out), so this is defence in depth rather than a live
-bug — but a node that cannot claim should be skipped briefly rather than
-retried instantly.
-
-### 3. The usability test has never been run with a real person
+### 2. The usability test has never been run with a real person
 
 `docs/USABILITY-TEST.md` is a complete script for an unassisted run. It needs a
 classmate who has not seen the system. **Do not simulate it** — an invented
 finding is worse than an untested interface, because it looks like evidence.
 
-### 4. No TLS
+### 3. No TLS
 
 ADR-010 assumes a Tailscale overlay, which encrypts transport. Exposing the
 orchestrator on any other network would put bearer tokens on the wire in
 plaintext. Anything beyond the overlay needs TLS terminated in front.
 
-### 5. Token revocation is bounded by TTL only
+### 4. Token revocation is bounded by TTL only
 
 There is no revocation list for either node or user tokens. Disabling a user
 account takes effect immediately (the row is re-read per request), but a stolen
 token stays valid until it expires — 15 minutes by default. Accepted in
 ADR-008/ADR-012; worth revisiting if this ever holds anything sensitive.
 
-### 6. The rate limiter is per-process
+### 5. The rate limiter is per-process
 
 In-process fixed-window counters, so N orchestrator replicas allow N times the
 limit. ADR-010 deploys one. A second replica needs shared state (ADR-012 §7).

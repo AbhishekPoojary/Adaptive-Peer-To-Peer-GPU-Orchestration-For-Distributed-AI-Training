@@ -111,6 +111,14 @@ class Settings(BaseSettings):
     # --- Leases (ADR-003) ---
     lease_ttl_seconds: int = 30
     lease_renewal_grace_seconds: int = 5
+    # How long the scheduler skips a node after an offer to it lapsed unclaimed
+    # (M7.1c). Defence in depth: the root cause of observed offer-thrash was an
+    # agent stuck on an orphaned container, fixed in M7.1b, but a node that
+    # demonstrably could not pick up the last offer should not immediately be
+    # handed another. Kept short — this is "wait a moment", not a penalty, and a
+    # long window would strand work on a fleet that is merely slow. Set to 0 to
+    # disable the backoff entirely.
+    unclaimed_offer_backoff_seconds: float = 20.0
 
     # --- Distributed training / rendezvous (ADR-005, M5) ---
     # TCP port the c10d rendezvous host binds for a multi-rank cohort; every rank
