@@ -4,7 +4,7 @@ An honest account of what this system does, what has been measured, and what is
 missing. Written for whoever picks it up next — including a future me who has
 forgotten the details.
 
-Last updated: 2026-07-28, at commit `0e939f7`.
+Last updated: 2026-07-28, at commit `9179535`.
 
 ---
 
@@ -26,7 +26,7 @@ Last updated: 2026-07-28, at commit `0e939f7`.
 | Real user auth; no secret in the browser bundle | ADR-012; bundle greps clean for the admin key |
 | Container isolation | `cap_drop=ALL`, read-only rootfs, no host network (ADR-007) |
 
-270 tests, all against a real Postgres. No mocked database, no simulated
+279 tests, all against a real Postgres. No mocked database, no simulated
 failures outside `tests/`.
 
 ---

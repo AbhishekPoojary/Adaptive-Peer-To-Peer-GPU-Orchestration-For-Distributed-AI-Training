@@ -24,7 +24,7 @@ What is measured rather than asserted:
 - The adaptive scheduler places **6/6** jobs on a reliable node over one with
   three recorded failures, where `round_robin` manages 3/6 and `least_loaded`
   2/6 — see `bench/report/`.
-- 270 tests against a real Postgres. No mocked database, no simulated failures.
+- 279 tests against a real Postgres. No mocked database, no simulated failures.
 
 What is **not** claimed: any throughput speedup from distribution. All
 development happened on one laptop with one GPU, where extra ranks contend for
