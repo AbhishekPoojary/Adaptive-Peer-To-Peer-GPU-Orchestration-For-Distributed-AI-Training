@@ -90,6 +90,29 @@ async def _run(args: argparse.Namespace) -> int:
         logger.error("%s", exc)
         return 2
 
+    # Preflight: a foreign agent already ONLINE can win a placement and silently
+    # confound every measurement. The scenarios catch it, but only after
+    # enrolling agents and submitting a job — check up front instead, and say
+    # exactly what to do about it.
+    try:
+        strays = await client.online_nodes()
+    except OrchestratorError as exc:
+        logger.error("%s", exc)
+        await client.aclose()
+        return 2
+    if strays and not args.allow_foreign_nodes:
+        names = ", ".join(sorted(n["name"] for n in strays))
+        logger.error(
+            "%d node(s) are already ONLINE (%s). A benchmark run needs a fleet "
+            "it fully controls, or a job may land on a node whose history and "
+            "load this run did not create. Stop those agents and retry, or pass "
+            "--allow-foreign-nodes if you know they are inert.",
+            len(strays),
+            names,
+        )
+        await client.aclose()
+        return 2
+
     workdir = Path(tempfile.mkdtemp(prefix=f"bench-{args.scenario}-"))
     fleet = Fleet(client=client, workdir=workdir, orchestrator_url=args.orchestrator)
     logger.info("scenario=%s workdir=%s", args.scenario, workdir)
@@ -152,6 +175,12 @@ def main(argv: list[str] | None = None) -> int:
         "--keep-workdir",
         action="store_true",
         help="Keep the temporary agent state dirs and logs for debugging.",
+    )
+    parser.add_argument(
+        "--allow-foreign-nodes",
+        action="store_true",
+        help="Run even though nodes this run did not start are already ONLINE. "
+        "They may take placements and confound the measurement.",
     )
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(argv)
