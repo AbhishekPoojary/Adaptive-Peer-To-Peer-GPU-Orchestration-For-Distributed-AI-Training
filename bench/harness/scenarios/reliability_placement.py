@@ -54,6 +54,13 @@ logger = logging.getLogger("bench.reliability_placement")
 
 NAME = "reliability_placement"
 
+#: Result keys holding a faithful copy of the orchestrator's own record rather
+#: than a measurement this harness took. The recorded scheduling decisions
+#: carry per-candidate fields that are legitimately null (an unmeasured RTT,
+#: for instance), and rewriting them to satisfy the no-nulls rule would corrupt
+#: the audit trail this scenario exists to capture.
+VERBATIM_RESULT_KEYS = frozenset({"decisions"})
+
 #: Terminal job states, used when waiting for a trial to settle.
 _TERMINAL = {"COMPLETED", "FAILED", "CANCELLED"}
 

@@ -42,9 +42,12 @@ from bench.harness.scenarios import failure_recovery, reliability_placement
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 SCENARIO_DIR = _REPO_ROOT / "bench" / "scenarios"
 
+#: name -> scenario module. Each module exposes ``NAME``, ``run``, and
+#: ``VERBATIM_RESULT_KEYS`` (which result keys hold a copy of the system's own
+#: record rather than a measurement, and so may legitimately contain nulls).
 SCENARIOS = {
-    reliability_placement.NAME: reliability_placement.run,
-    failure_recovery.NAME: failure_recovery.run,
+    reliability_placement.NAME: reliability_placement,
+    failure_recovery.NAME: failure_recovery,
 }
 
 logger = logging.getLogger("bench")
@@ -63,7 +66,7 @@ def load_scenario(name: str) -> dict[str, Any]:
 
 async def _run(args: argparse.Namespace) -> int:
     config = load_scenario(args.scenario)
-    scenario_fn = SCENARIOS[args.scenario]
+    scenario_module = SCENARIOS[args.scenario]
 
     # Resolve provenance BEFORE running anything: discovering a dirty worktree
     # after a ten-minute benchmark wastes the run, and worse, tempts whoever is
@@ -118,7 +121,7 @@ async def _run(args: argparse.Namespace) -> int:
     logger.info("scenario=%s workdir=%s", args.scenario, workdir)
 
     try:
-        results = await scenario_fn(client=client, fleet=fleet, config=config)
+        results = await scenario_module.run(client=client, fleet=fleet, config=config)
     except (
         IncompleteMeasurementError,
         OrchestratorError,
@@ -140,7 +143,12 @@ async def _run(args: argparse.Namespace) -> int:
         provisional=args.allow_dirty,
     )
     try:
-        path = write_artifact(artifact)
+        path = write_artifact(
+            artifact,
+            verbatim_keys=getattr(
+                scenario_module, "VERBATIM_RESULT_KEYS", frozenset()
+            ),
+        )
     except IncompleteMeasurementError as exc:
         logger.error("refusing to publish an incomplete artifact: %s", exc)
         return 1

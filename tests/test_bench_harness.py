@@ -65,6 +65,62 @@ def test_a_null_nested_deep_in_results_is_still_refused(tmp_path: Path) -> None:
     assert list(tmp_path.iterdir()) == []
 
 
+def test_a_verbatim_record_may_contain_nulls(tmp_path: Path) -> None:
+    """A copy of the orchestrator's own audit trail is data, not a measurement.
+
+    A job's first state transition genuinely has ``from_state: null`` because
+    it had no prior state. The no-nulls rule targets metrics the harness failed
+    to measure; rewriting a faithful record to satisfy it would corrupt the
+    very evidence the scenario exists to capture. The real failure_recovery run
+    hit exactly this.
+    """
+    artifact = _artifact(
+        {
+            "recovery_seconds": 12.5,
+            "event_timeline": [{"from_state": None, "to_state": "QUEUED"}],
+        }
+    )
+    path = write_artifact(
+        artifact, report_dir=tmp_path, verbatim_keys=frozenset({"event_timeline"})
+    )
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["results"]["event_timeline"][0]["from_state"] is None
+
+
+def test_the_exemption_does_not_leak_to_sibling_keys(tmp_path: Path) -> None:
+    """Exempting one key must not weaken the rule everywhere else — otherwise
+    declaring a verbatim key would quietly disable the whole guarantee."""
+    artifact = _artifact(
+        {
+            "event_timeline": [{"from_state": None}],
+            "recovery_seconds": None,  # a real missing measurement
+        }
+    )
+    with pytest.raises(IncompleteMeasurementError, match="recovery_seconds"):
+        write_artifact(
+            artifact, report_dir=tmp_path, verbatim_keys=frozenset({"event_timeline"})
+        )
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_verbatim_keys_default_to_none(tmp_path: Path) -> None:
+    """Strict by default: a scenario must opt in explicitly, in its own module,
+    so the exemption is visible where someone reviewing that scenario looks."""
+    artifact = _artifact({"event_timeline": [{"from_state": None}]})
+    with pytest.raises(IncompleteMeasurementError):
+        write_artifact(artifact, report_dir=tmp_path)
+
+
+def test_every_shipped_scenario_declares_its_verbatim_keys() -> None:
+    """Each scenario module must state which of its result keys are verbatim —
+    even if the answer is 'none' — so the decision is never implicit."""
+    from bench.harness.__main__ import SCENARIOS
+
+    for name, module in SCENARIOS.items():
+        keys = getattr(module, "VERBATIM_RESULT_KEYS", None)
+        assert isinstance(keys, frozenset), f"{name} does not declare VERBATIM_RESULT_KEYS"
+
+
 def test_an_artifact_missing_its_limitations_block_is_refused(tmp_path: Path) -> None:
     """ADR-013: every report must declare which score terms it did not
     exercise, so a reader taking only the JSON cannot mistake a partial

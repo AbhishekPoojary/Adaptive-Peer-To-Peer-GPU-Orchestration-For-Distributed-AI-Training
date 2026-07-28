@@ -39,15 +39,22 @@ def load_schema() -> dict[str, Any]:
     return schema
 
 
-def _reject_nulls(node: Any, path: str = "results") -> None:
+def _reject_nulls(
+    node: Any, path: str = "results", *, verbatim_keys: frozenset[str] = frozenset()
+) -> None:
     """Recursively refuse a null anywhere in the measured results.
 
-    A ``null`` in *telemetry* is meaningful and required (rule 2: "no GPU
-    reading" must not become 0.0). A ``null`` in a *benchmark result* is
-    different — it means the harness did not measure the thing it said it
-    would, and the artifact should not exist. Telemetry that legitimately has
-    no value is recorded as a count of how many samples lacked it, not as a
-    null the reader has to interpret.
+    A ``null`` in a *measured metric* means the harness did not measure the
+    thing it said it would, and the artifact should not exist.
+
+    ``verbatim_keys`` names result keys that hold a faithful copy of something
+    the system recorded — an audit trail, an event timeline — rather than a
+    measurement the harness took. Nulls there are *data*: a job's first state
+    transition genuinely has ``from_state: null`` because it had no prior
+    state, and rewriting that to a placeholder would corrupt the record to
+    satisfy a rule aimed at something else. Subtrees under these keys are
+    copied through unchecked; everything else stays strict, so the exemption
+    has to be declared per scenario and is visible in that scenario's module.
     """
     if node is None:
         raise IncompleteMeasurementError(
@@ -56,10 +63,12 @@ def _reject_nulls(node: Any, path: str = "results") -> None:
         )
     if isinstance(node, dict):
         for key, value in node.items():
-            _reject_nulls(value, f"{path}.{key}")
+            if key in verbatim_keys:
+                continue
+            _reject_nulls(value, f"{path}.{key}", verbatim_keys=verbatim_keys)
     elif isinstance(node, list):
         for index, value in enumerate(node):
-            _reject_nulls(value, f"{path}[{index}]")
+            _reject_nulls(value, f"{path}[{index}]", verbatim_keys=verbatim_keys)
 
 
 def build_artifact(
@@ -93,13 +102,18 @@ def build_artifact(
     return artifact
 
 
-def write_artifact(artifact: dict[str, Any], *, report_dir: Path | None = None) -> Path:
+def write_artifact(
+    artifact: dict[str, Any],
+    *,
+    report_dir: Path | None = None,
+    verbatim_keys: frozenset[str] = frozenset(),
+) -> Path:
     """Validate and write the artifact. Returns the path written.
 
     Validation happens *before* the file exists, so a rejected artifact leaves
     nothing behind for someone to find later and mistake for a real result.
     """
-    _reject_nulls(artifact["results"])
+    _reject_nulls(artifact["results"], verbatim_keys=verbatim_keys)
     jsonschema.validate(artifact, load_schema())
 
     target_dir = report_dir or REPORT_DIR

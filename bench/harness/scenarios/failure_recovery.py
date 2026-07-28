@@ -51,6 +51,12 @@ logger = logging.getLogger("bench.failure_recovery")
 
 NAME = "failure_recovery"
 
+#: Result keys holding a faithful copy of the orchestrator's own record rather
+#: than a measurement this harness took. Nulls inside them are data — a job's
+#: first state transition really does have ``from_state: null`` — so they are
+#: exempt from the no-nulls rule. Everything else in ``results`` stays strict.
+VERBATIM_RESULT_KEYS = frozenset({"event_timeline"})
+
 _TERMINAL = {"COMPLETED", "FAILED", "CANCELLED"}
 
 
