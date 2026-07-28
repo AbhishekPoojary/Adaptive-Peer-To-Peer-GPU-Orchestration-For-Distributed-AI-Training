@@ -1,0 +1,467 @@
+{
+  "timestamp_utc": "2026-07-28T15:57:02.185385+00:00",
+  "git_sha": "d1573382003a67c490e579ae177874bfe682b3cf",
+  "hardware": {
+    "cpu": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel (12C/16T)",
+    "gpu": "NVIDIA GeForce RTX 3050 Laptop GPU (4.0 GB)",
+    "ram_gb": 15.63,
+    "os": "Windows 11 (python 3.13.13)"
+  },
+  "scenario": "reliability_placement",
+  "results": {
+    "hypothesis": "Given two nodes that are equally loaded and equally close, only the adaptive scheduler has an input (recorded lease history) that distinguishes them, so only it should prefer the reliable node.",
+    "nodes": {
+      "healthy": {
+        "node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+        "node_name": "node-19",
+        "lease_success_count": 2,
+        "lease_failure_count": 0
+      },
+      "degraded": {
+        "node_id": "c9b60753-8685-4b35-a800-bfb0568fd653",
+        "node_name": "node-18",
+        "lease_success_count": 0,
+        "lease_failure_count": 3
+      }
+    },
+    "history_construction": {
+      "induced_failures": [
+        {
+          "job_id": "801ddb85-697e-4257-b8ff-3ef3d7c9b6b1",
+          "container_id": "f76935b7280d",
+          "counters_before": {
+            "ok": 0,
+            "fail": 0
+          },
+          "counters_after": {
+            "ok": 0,
+            "fail": 1
+          }
+        },
+        {
+          "job_id": "2e3789c4-623f-48c2-8cbe-531070478fcb",
+          "container_id": "d6f762d9b99c",
+          "counters_before": {
+            "ok": 0,
+            "fail": 1
+          },
+          "counters_after": {
+            "ok": 0,
+            "fail": 2
+          }
+        },
+        {
+          "job_id": "b979c9a0-d438-4138-89c0-7139631968a2",
+          "container_id": "337e1e0a6a10",
+          "counters_before": {
+            "ok": 0,
+            "fail": 2
+          },
+          "counters_after": {
+            "ok": 0,
+            "fail": 3
+          }
+        }
+      ],
+      "induced_successes": [
+        {
+          "job_id": "68c3e900-5434-4f91-8498-71c3a7b4e39e",
+          "seconds": 21.54,
+          "final_test_accuracy": 0.9793,
+          "device": "cuda",
+          "counters_before": {
+            "ok": 0,
+            "fail": 0
+          },
+          "counters_after": {
+            "ok": 1,
+            "fail": 0
+          }
+        },
+        {
+          "job_id": "6a0af708-7439-4fee-aaab-3513e30c88f2",
+          "seconds": 18.45,
+          "final_test_accuracy": 0.9794,
+          "device": "cuda",
+          "counters_before": {
+            "ok": 1,
+            "fail": 0
+          },
+          "counters_after": {
+            "ok": 2,
+            "fail": 0
+          }
+        }
+      ]
+    },
+    "placement_by_scheduler": {
+      "adaptive": {
+        "trials": 6,
+        "placed_on_healthy": 6,
+        "placed_on_degraded": 0,
+        "healthy_share": 1.0,
+        "placements": [
+          {
+            "job_id": "1c77106d-a5d5-43d1-961e-c108b947ebb2",
+            "scheduled_node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+            "decisions": [
+              {
+                "id": "3ad57ee2-1b7e-45de-9122-de9fb7493531",
+                "job_id": "1c77106d-a5d5-43d1-961e-c108b947ebb2",
+                "ts": "2026-07-28T15:56:59.200582Z",
+                "scheduler_name": "adaptive",
+                "alpha": 1.0,
+                "beta": 1.0,
+                "gamma": 0.5,
+                "reliability_halflife_seconds": 86400.0,
+                "wilson_z": 1.96,
+                "selected_node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+                "candidates": [
+                  {
+                    "node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+                    "node_name": "node-19",
+                    "l_score": 0.0,
+                    "r_score": 0.300618459652093,
+                    "d_score": 0.0,
+                    "s_score": -0.300618459652093,
+                    "raw_util": 6.0,
+                    "raw_rtt_ewma_ms": 61.300791214339355,
+                    "weighted_success": 2.999788588464436,
+                    "weighted_failure": 1.0,
+                    "was_selected": true
+                  },
+                  {
+                    "node_id": "c9b60753-8685-4b35-a800-bfb0568fd653",
+                    "node_name": "node-18",
+                    "l_score": 0.0,
+                    "r_score": 0.03623336846704693,
+                    "d_score": 0.09889604693517186,
+                    "s_score": 0.013214655000538998,
+                    "raw_util": 6.0,
+                    "raw_rtt_ewma_ms": 66.24559356109795,
+                    "weighted_success": 1.0,
+                    "weighted_failure": 3.99862812796065,
+                    "was_selected": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "job_id": "fbbe9546-09ef-46d1-8936-d56bd5c3ae86",
+            "scheduled_node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+            "decisions": [
+              {
+                "id": "df6d67ae-73b5-41c3-bd80-53717e9e15ee",
+                "job_id": "fbbe9546-09ef-46d1-8936-d56bd5c3ae86",
+                "ts": "2026-07-28T15:56:59.373272Z",
+                "scheduler_name": "adaptive",
+                "alpha": 1.0,
+                "beta": 1.0,
+                "gamma": 0.5,
+                "reliability_halflife_seconds": 86400.0,
+                "wilson_z": 1.96,
+                "selected_node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+                "candidates": [
+                  {
+                    "node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+                    "node_name": "node-19",
+                    "l_score": 0.0,
+                    "r_score": 0.30061823139649385,
+                    "d_score": 0.0,
+                    "s_score": -0.30061823139649385,
+                    "raw_util": 6.0,
+                    "raw_rtt_ewma_ms": 61.300791214339355,
+                    "weighted_success": 2.999785845594228,
+                    "weighted_failure": 1.0,
+                    "was_selected": true
+                  },
+                  {
+                    "node_id": "c9b60753-8685-4b35-a800-bfb0568fd653",
+                    "node_name": "node-18",
+                    "l_score": 0.0,
+                    "r_score": 0.036233399077676996,
+                    "d_score": 0.09889604693517186,
+                    "s_score": 0.013214624389908933,
+                    "raw_util": 6.0,
+                    "raw_rtt_ewma_ms": 66.24559356109795,
+                    "weighted_success": 1.0,
+                    "weighted_failure": 3.9986240151020183,
+                    "was_selected": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "job_id": "526023b2-70b5-4da5-ac6a-fa696be591a4",
+            "scheduled_node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+            "decisions": [
+              {
+                "id": "3a926dfb-8fc0-4a89-b3ee-47794636ca51",
+                "job_id": "526023b2-70b5-4da5-ac6a-fa696be591a4",
+                "ts": "2026-07-28T15:56:59.539942Z",
+                "scheduler_name": "adaptive",
+                "alpha": 1.0,
+                "beta": 1.0,
+                "gamma": 0.5,
+                "reliability_halflife_seconds": 86400.0,
+                "wilson_z": 1.96,
+                "selected_node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+                "candidates": [
+                  {
+                    "node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+                    "node_name": "node-19",
+                    "l_score": 0.0,
+                    "r_score": 0.30061800742805167,
+                    "d_score": 0.0,
+                    "s_score": -0.30061800742805167,
+                    "raw_util": 6.0,
+                    "raw_rtt_ewma_ms": 61.300791214339355,
+                    "weighted_success": 2.9997831542429267,
+                    "weighted_failure": 1.0,
+                    "was_selected": true
+                  },
+                  {
+                    "node_id": "c9b60753-8685-4b35-a800-bfb0568fd653",
+                    "node_name": "node-18",
+                    "l_score": 0.0,
+                    "r_score": 0.036233429113402695,
+                    "d_score": 0.09889604693517186,
+                    "s_score": 0.013214594354183234,
+                    "raw_util": 6.0,
+                    "raw_rtt_ewma_ms": 66.24559356109795,
+                    "weighted_success": 1.0,
+                    "weighted_failure": 3.998619979494574,
+                    "was_selected": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "job_id": "d69efa83-2de4-4490-9041-d17b55bc40f8",
+            "scheduled_node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+            "decisions": [
+              {
+                "id": "04fc57d3-6871-4321-8d4a-c861670545fb",
+                "job_id": "d69efa83-2de4-4490-9041-d17b55bc40f8",
+                "ts": "2026-07-28T15:56:59.693800Z",
+                "scheduler_name": "adaptive",
+                "alpha": 1.0,
+                "beta": 1.0,
+                "gamma": 0.5,
+                "reliability_halflife_seconds": 86400.0,
+                "wilson_z": 1.96,
+                "selected_node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+                "candidates": [
+                  {
+                    "node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+                    "node_name": "node-19",
+                    "l_score": 0.0,
+                    "r_score": 0.3006178022525209,
+                    "d_score": 0.0,
+                    "s_score": -0.3006178022525209,
+                    "raw_util": 6.0,
+                    "raw_rtt_ewma_ms": 61.300791214339355,
+                    "weighted_success": 2.999780688720925,
+                    "weighted_failure": 1.0,
+                    "was_selected": true
+                  },
+                  {
+                    "node_id": "c9b60753-8685-4b35-a800-bfb0568fd653",
+                    "node_name": "node-18",
+                    "l_score": 0.0,
+                    "r_score": 0.036233456628896606,
+                    "d_score": 0.09889604693517186,
+                    "s_score": 0.013214566838689323,
+                    "raw_util": 6.0,
+                    "raw_rtt_ewma_ms": 66.24559356109795,
+                    "weighted_success": 1.0,
+                    "weighted_failure": 3.9986162825119695,
+                    "was_selected": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "job_id": "94398f88-dfe1-4dec-8c80-4532e34b6175",
+            "scheduled_node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+            "decisions": [
+              {
+                "id": "c8d87ea2-cfd0-41a9-b4bc-9d298def5c8f",
+                "job_id": "94398f88-dfe1-4dec-8c80-4532e34b6175",
+                "ts": "2026-07-28T15:56:59.862944Z",
+                "scheduler_name": "adaptive",
+                "alpha": 1.0,
+                "beta": 1.0,
+                "gamma": 0.5,
+                "reliability_halflife_seconds": 86400.0,
+                "wilson_z": 1.96,
+                "selected_node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+                "candidates": [
+                  {
+                    "node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+                    "node_name": "node-19",
+                    "l_score": 0.0,
+                    "r_score": 0.30061757772366704,
+                    "d_score": 0.0,
+                    "s_score": -0.30061757772366704,
+                    "raw_util": 6.0,
+                    "raw_rtt_ewma_ms": 61.300791214339355,
+                    "weighted_success": 2.9997779906383815,
+                    "weighted_failure": 1.0,
+                    "was_selected": true
+                  },
+                  {
+                    "node_id": "c9b60753-8685-4b35-a800-bfb0568fd653",
+                    "node_name": "node-18",
+                    "l_score": 0.0,
+                    "r_score": 0.03623348673983935,
+                    "d_score": 0.09889604693517186,
+                    "s_score": 0.013214536727746577,
+                    "raw_util": 6.0,
+                    "raw_rtt_ewma_ms": 66.24559356109795,
+                    "weighted_success": 1.0,
+                    "weighted_failure": 3.998612236811212,
+                    "was_selected": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "job_id": "5d20728c-1b2d-4030-b74a-ed5a144dd13b",
+            "scheduled_node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+            "decisions": [
+              {
+                "id": "19ee07e8-b945-48b4-82b2-030f6856c80b",
+                "job_id": "5d20728c-1b2d-4030-b74a-ed5a144dd13b",
+                "ts": "2026-07-28T15:57:00.023300Z",
+                "scheduler_name": "adaptive",
+                "alpha": 1.0,
+                "beta": 1.0,
+                "gamma": 0.5,
+                "reliability_halflife_seconds": 86400.0,
+                "wilson_z": 1.96,
+                "selected_node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+                "candidates": [
+                  {
+                    "node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+                    "node_name": "node-19",
+                    "l_score": 0.16,
+                    "r_score": 0.300617363465824,
+                    "d_score": 0.0,
+                    "s_score": -0.140617363465824,
+                    "raw_util": 10.0,
+                    "raw_rtt_ewma_ms": 61.76335904781676,
+                    "weighted_success": 2.9997754159803645,
+                    "weighted_failure": 1.0,
+                    "was_selected": true
+                  },
+                  {
+                    "node_id": "c9b60753-8685-4b35-a800-bfb0568fd653",
+                    "node_name": "node-18",
+                    "l_score": 0.0,
+                    "r_score": 0.03623351547339547,
+                    "d_score": 0.08964469026562369,
+                    "s_score": 0.008588829659416375,
+                    "raw_util": 6.0,
+                    "raw_rtt_ewma_ms": 66.24559356109795,
+                    "weighted_success": 1.0,
+                    "weighted_failure": 3.9986083761821463,
+                    "was_selected": false
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "least_loaded": {
+        "trials": 6,
+        "placed_on_healthy": 2,
+        "placed_on_degraded": 4,
+        "healthy_share": 0.3333,
+        "placements": [
+          {
+            "job_id": "a08a60bf-654a-45e2-a1da-94c2fcdd1576",
+            "scheduled_node_id": "c9b60753-8685-4b35-a800-bfb0568fd653",
+            "decisions": []
+          },
+          {
+            "job_id": "198bd0f5-d82d-4490-b9a6-415d0d63f620",
+            "scheduled_node_id": "c9b60753-8685-4b35-a800-bfb0568fd653",
+            "decisions": []
+          },
+          {
+            "job_id": "80d07de2-b4f8-42ab-b82f-feacd01dc5a9",
+            "scheduled_node_id": "c9b60753-8685-4b35-a800-bfb0568fd653",
+            "decisions": []
+          },
+          {
+            "job_id": "90512b29-739d-4d7c-a8fd-fec68a4428c6",
+            "scheduled_node_id": "c9b60753-8685-4b35-a800-bfb0568fd653",
+            "decisions": []
+          },
+          {
+            "job_id": "57794efc-d688-4983-822e-d4eeee9de660",
+            "scheduled_node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+            "decisions": []
+          },
+          {
+            "job_id": "da494e9a-b91d-48f0-9100-f4b333c14835",
+            "scheduled_node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+            "decisions": []
+          }
+        ]
+      },
+      "round_robin": {
+        "trials": 6,
+        "placed_on_healthy": 3,
+        "placed_on_degraded": 3,
+        "healthy_share": 0.5,
+        "placements": [
+          {
+            "job_id": "95097430-ed65-4d45-a129-8d4e73bf7ba2",
+            "scheduled_node_id": "c9b60753-8685-4b35-a800-bfb0568fd653",
+            "decisions": []
+          },
+          {
+            "job_id": "a3afe449-e45c-4ba1-891b-9eb403df8034",
+            "scheduled_node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+            "decisions": []
+          },
+          {
+            "job_id": "ec94091c-0164-4879-9a30-f770dce47cc3",
+            "scheduled_node_id": "c9b60753-8685-4b35-a800-bfb0568fd653",
+            "decisions": []
+          },
+          {
+            "job_id": "9464010c-c05e-427a-b354-c2657541d41d",
+            "scheduled_node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+            "decisions": []
+          },
+          {
+            "job_id": "cbe28ec0-73fa-4fc3-80e7-95e005272d2a",
+            "scheduled_node_id": "c9b60753-8685-4b35-a800-bfb0568fd653",
+            "decisions": []
+          },
+          {
+            "job_id": "f5dbbe74-63f4-4d3f-8f1f-df914a6592fd",
+            "scheduled_node_id": "54300e54-40d6-4c97-95a7-d56833807ac6",
+            "decisions": []
+          }
+        ]
+      }
+    }
+  },
+  "limitations": {
+    "load_term_differentiable": false,
+    "latency_term_differentiable": false,
+    "notes": [
+      "All 2 agents ran on one physical host (1 distinct hostname). psutil.cpu_percent() and NVML utilization are host/device-wide, so every node reports the same load truthfully; RTT is loopback for all of them. The L and D terms of S_i are therefore untested here \u2014 only the reliability term R is differentiated (ADR-013)."
+    ]
+  }
+}

@@ -23,10 +23,15 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Bench reports are machine-written artifacts, not source — keep the
-# schema but ignore generated reports.
+# Bench reports ARE tracked. They are machine-written rather than source, but
+# they are also the only evidence behind every performance claim this project
+# makes — the README points at them, and an ignored report directory would mean
+# those numbers had nothing committed to back them. They are small, immutable,
+# and carry their own git SHA, so they read as a permanent measurement log.
+# Only stray non-report files are excluded.
 bench/report/*
 !bench/report/.gitkeep
+!bench/report/*.json
 
 # Docker
 *.log
