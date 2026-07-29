@@ -119,6 +119,19 @@ class Settings(BaseSettings):
     # long window would strand work on a fleet that is merely slow. Set to 0 to
     # disable the backoff entirely.
     unclaimed_offer_backoff_seconds: float = 20.0
+    # How many times a job may be retried after a *reported* trainer failure
+    # before it fails terminally (ADR-005 addendum 2). ADR-005 originally made
+    # such failures terminal so a broken job spec could not walk the whole
+    # fleet; that is still the concern, and a small bound answers it while
+    # giving a node-specific failure — an OOM kill on a 4 GB laptop GPU being
+    # the likeliest real one here — a real second chance on different hardware.
+    # 0 restores the strict pre-M11 fail-fast behaviour exactly.
+    max_job_failure_retries: int = 2
+    # How long the node whose trainer just failed is skipped, so the retry
+    # prefers different hardware. Longer than the unclaimed backoff: a node that
+    # killed a trainer is more likely to kill the next one than a node that was
+    # merely slow to poll.
+    failed_attempt_backoff_seconds: float = 45.0
 
     # --- Distributed training / rendezvous (ADR-005, M5) ---
     # TCP port the c10d rendezvous host binds for a multi-rank cohort; every rank

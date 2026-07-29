@@ -178,8 +178,13 @@ async def fail(
     body: LeaseFailRequest,
     node: Node = Depends(require_node_auth),
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings_dep),
 ) -> LeaseOut:
-    """Finish a lease as failed (epoch-fenced); job → FAILED with a reason.
+    """Finish a lease as failed (epoch-fenced).
+
+    The job is retried on another peer while it has retries left, and fails
+    terminally once it does not (ADR-005 addendum 2) — so a trainer killed by
+    one machine's OOM killer does not end a job another machine could finish.
 
     ``body.result`` is the optional real training result summary (M4); when
     present it is persisted to ``Job.result`` and shapes the plain-language
@@ -193,6 +198,8 @@ async def fail(
             epoch=body.lease_epoch,
             reason=body.reason,
             result=body.result.model_dump() if body.result is not None else None,
+            max_failure_retries=settings.max_job_failure_retries,
+            failed_attempt_backoff_seconds=settings.failed_attempt_backoff_seconds,
         )
     except LeaseNotFoundError as exc:
         await session.rollback()

@@ -138,6 +138,16 @@ class Job(Base):
     current_lease_epoch: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="0", default=0
     )
+    # How many attempts have ended in a *reported* trainer failure (ADR-005
+    # addendum 2). Bounds retry: past MAX_JOB_FAILURE_RETRIES the job fails
+    # terminally instead of walking a broken spec across the whole fleet.
+    #
+    # Deliberately not derived from current_lease_epoch, which also advances
+    # for dropped-node reassignments — a job whose peers keep vanishing would
+    # otherwise exhaust its failure budget having never actually failed.
+    failed_attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
     # Node this job is currently placed on (set at SCHEDULED, consumed at claim,
     # cleared on reassignment). NULL while QUEUED/terminal. For a multi-rank
     # (world_size>1) cohort this is the rank-0 / rendezvous-host node.

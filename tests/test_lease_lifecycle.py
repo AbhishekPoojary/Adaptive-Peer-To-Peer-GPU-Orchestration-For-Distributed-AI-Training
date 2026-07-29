@@ -101,7 +101,12 @@ async def test_fail_records_reason_and_failure_count(
 
     job_row = (await session.execute(select(Job).where(Job.id == job.id))).scalar_one()
     await session.refresh(job_row)
-    assert job_row.state is JobState.FAILED
+    # The *lease* failed terminally; the *job* is retried on another peer while
+    # it has retries left (ADR-005 addendum 2). The reason and the node's
+    # reliability failure are recorded either way — those are what this test
+    # exists to pin, and they are unchanged.
+    assert job_row.state is JobState.REASSIGNED
+    assert job_row.failed_attempt_count == 1
     assert job_row.failure_reason == "execution-not-implemented"
 
     node = (await session.execute(select(Node).where(Node.id == uuid.UUID(node_id)))).scalar_one()

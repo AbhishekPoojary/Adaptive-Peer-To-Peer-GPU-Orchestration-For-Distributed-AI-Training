@@ -101,13 +101,16 @@ class Node(Base):
         DateTime(timezone=True), nullable=True
     )
 
-    # --- Claim backoff (M7.1c). Set when a PENDING offer to this node expires
-    # unclaimed; the scheduler skips the node until it passes. NOT a reliability
-    # signal — an unclaimed offer is blameless (ADR-003 addendum) and the
-    # counters above stay untouched. This is a short-lived scheduling hint that
-    # ages out by itself, so a node whose agent is briefly wedged stops
-    # absorbing offers nobody can claim. NULL = never lapsed an offer. ---
-    claim_backoff_until: Mapped[datetime | None] = mapped_column(
+    # --- Scheduling backoff: skip this node until the timestamp passes. Set on
+    # two events, both meaning "this node could not make the last thing work":
+    #   * a PENDING offer to it expired unclaimed (M7.1c), and
+    #   * a trainer it was running reported a failure (ADR-005 addendum 2), so
+    #     the retry prefers different hardware.
+    # NOT a reliability signal in either case — the counters above are the
+    # reliability record, and an unclaimed offer in particular is blameless
+    # (ADR-003 addendum). This is a short-lived hint that ages out by itself,
+    # with no reset path to forget. NULL = no backoff has ever applied. ---
+    scheduling_backoff_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 

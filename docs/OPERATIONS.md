@@ -30,6 +30,27 @@ invalid input value for enum lease_state: "UNCLAIMED"
 The migration "succeeded" and the column still rejects the value. Run alembic
 from the host against the published port, or rebuild the image first.
 
+### ...but then rebuild the image, or the container will not start
+
+The mirror of the trap above, and it is worse because it crash-loops:
+
+```
+FAILED: Can't locate revision identified by '0009_unclaimed_backoff'
+Container deploy-orchestrator-1  Restarting (255)
+```
+
+The database is now at a revision the *image* has never heard of, so the
+entrypoint's `alembic upgrade head` cannot build a path from it and the
+container dies on boot, forever.
+
+```bash
+docker compose -f deploy/compose.yaml build orchestrator
+docker compose -f deploy/compose.yaml up -d --force-recreate orchestrator
+```
+
+The rule that avoids both traps: **the image must always know at least as many
+revisions as the database.** Write a migration, rebuild, then apply.
+
 ### Verify a migration is reversible before shipping it
 
 ```bash

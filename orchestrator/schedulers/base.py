@@ -119,11 +119,15 @@ def passes_hard_filters(
         return False
     if snapshot.has_active_lease:
         return False
-    # M7.1c: this node let its last offer lapse unclaimed. It is still healthy
-    # by every other measure — heartbeating, idle, blameless — which is exactly
-    # why it would otherwise be re-offered the same work immediately and let it
-    # lapse again. Skip it until the short backoff passes.
-    if node.claim_backoff_until is not None and node.claim_backoff_until > now:
+    # This node could not make the last thing work — it let an offer lapse
+    # unclaimed (M7.1c), or a trainer on it just failed (ADR-005 addendum 2).
+    # Either way it is still healthy by every other measure — heartbeating,
+    # idle — which is exactly why it would otherwise be handed the same work
+    # again immediately and fail it again. Skip it until the window passes.
+    if (
+        node.scheduling_backoff_until is not None
+        and node.scheduling_backoff_until > now
+    ):
         return False
 
     min_gpu = job.spec.get("min_gpu_mem_bytes")

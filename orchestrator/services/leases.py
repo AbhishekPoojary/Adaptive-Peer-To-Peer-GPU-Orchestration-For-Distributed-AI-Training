@@ -318,16 +318,26 @@ def _complete_message(result: dict[str, Any] | None) -> str:
     return "Job completed successfully by the leaseholder."
 
 
-def _fail_message(reason: str, result: dict[str, Any] | None) -> str:
+def _fail_message(
+    reason: str, result: dict[str, Any] | None, *, attempts: int = 1
+) -> str:
     """Plain-language failure message for the dashboard timeline (M4).
 
     A real training result carrying an exit code gets the concise, specific
     phrasing; otherwise the original reason-only message (M2/M3 behaviour, and
     still exactly right for non-training failures like a Docker launch error).
+
+    ``attempts`` is stated whenever the job was retried (ADR-005 addendum 2), so
+    a failure that took a minute and three peers to arrive at does not read like
+    a single unlucky run.
     """
     if result is not None and result.get("exit_code") is not None:
-        return f"Training failed: exit code {result['exit_code']}."
-    return f"Job failed on the leaseholder: {reason}"
+        detail = f"Training failed: exit code {result['exit_code']}."
+    else:
+        detail = f"Job failed on the leaseholder: {reason}"
+    if attempts > 1:
+        return f"{detail} Gave up after {attempts} attempts on different peers."
+    return detail
 
 
 async def complete_lease(
@@ -403,11 +413,31 @@ async def fail_lease(
     epoch: int,
     reason: str,
     result: dict[str, Any] | None = None,
+    max_failure_retries: int = 0,
+    failed_attempt_backoff_seconds: float = 0.0,
 ) -> Lease:
-    """Finish a lease as failed: job → FAILED, node failure += 1. Fenced.
+    """Finish a lease as failed. Node failure += 1, job retried or ended. Fenced.
 
     ``result`` is the optional real training result summary (M4); when present
     it is persisted to ``Job.result`` verbatim and shapes the audit message.
+
+    One rank failing dooms the whole *attempt* (M5): the cohort siblings are
+    released so it stops. What happens to the *job* then is bounded retry
+    (ADR-005 addendum 2). ADR-005 originally made any reported failure terminal,
+    to stop a broken job spec walking the fleet. That is still the concern, but
+    it wrongly assumed every trainer failure is a property of the job — an OOM
+    kill on a 4 GB laptop GPU is a property of the *machine*, and another peer
+    may well succeed. So:
+
+    * under ``max_failure_retries``, the job goes ``REASSIGNED`` — the same
+      retry path a dropped node takes — and the failing node is put in a short
+      scheduling backoff so the retry prefers different hardware;
+    * at or past it, the job goes ``FAILED`` with an audit message stating how
+      many attempts were made, so a bounded-but-slow failure is never
+      mysterious.
+
+    ``max_failure_retries=0`` (the default here) reproduces the strict pre-M11
+    behaviour exactly; the API layer passes the configured value.
     """
     lease, job = await _load_fenced(
         session, lease_id=lease_id, node=node, epoch=epoch
@@ -418,18 +448,14 @@ async def fail_lease(
     job.failure_reason = reason
     if result is not None and job.result is None:
         job.result = result
-    # The failing rank's node earns a real reliability failure.
+    # The failing rank's node earns a real reliability failure, whether or not
+    # the job is retried: a trainer really did die on it, and that is exactly
+    # the earned signal ADR-009 ranks on.
     await session.execute(
         update(Node)
         .where(Node.id == node.id)
         .values(lease_failure_count=Node.lease_failure_count + 1)
     )
-    # One rank failing dooms the whole attempt (M5): release the siblings so the
-    # cohort stops, and end the job. A reported training failure is TERMINAL
-    # (ADR-005: failures surface instead of being masked by endless retry, and
-    # this preserves M4's single-rank fail → FAILED). A lease that merely
-    # *expired* (node dropped) is the retryable case and goes REASSIGNED via the
-    # sweep instead.
     finalize_extra = {
         "lease_id": str(lease.id),
         "lease_epoch": lease.lease_epoch,
@@ -437,17 +463,58 @@ async def fail_lease(
         "reason": reason,
     }
     if job.state in (JobState.LEASED, JobState.RUNNING):
+        job.failed_attempt_count += 1
+        attempts = job.failed_attempt_count
+        may_retry = attempts <= max_failure_retries
+
+        if may_retry and failed_attempt_backoff_seconds > 0:
+            # Steer the retry away from the node that just killed a trainer. A
+            # short window, not an exclusion — on a single-node fleet the job
+            # must still be able to retry where it is, because "no other peer
+            # exists" should delay a retry rather than cancel it.
+            await session.execute(
+                update(Node)
+                .where(Node.id == node.id)
+                .values(
+                    scheduling_backoff_until=now
+                    + timedelta(seconds=failed_attempt_backoff_seconds)
+                )
+            )
+
         await _release_cohort_siblings(
             session, job=job, epoch=lease.lease_epoch, exclude_lease_ids={lease.id}, now=now
         )
-        transition_job(
-            session,
-            job,
-            JobState.FAILED,
-            message=_fail_message(reason, result),
-            extra=finalize_extra,
-            now=now,
-        )
+        if may_retry:
+            transition_job(
+                session,
+                job,
+                JobState.REASSIGNED,
+                message=(
+                    f"Attempt {attempts} failed on {node.name} ({reason}); "
+                    f"retrying on another peer "
+                    f"({max_failure_retries - attempts + 1} retries left)."
+                ),
+                extra={
+                    **finalize_extra,
+                    "failed_attempt_count": attempts,
+                    "max_failure_retries": max_failure_retries,
+                    "node_name": node.name,
+                },
+                now=now,
+            )
+        else:
+            transition_job(
+                session,
+                job,
+                JobState.FAILED,
+                message=_fail_message(reason, result, attempts=attempts),
+                extra={
+                    **finalize_extra,
+                    "failed_attempt_count": attempts,
+                    "max_failure_retries": max_failure_retries,
+                },
+                now=now,
+            )
         job.scheduled_node_id = None
         job.rendezvous_node_id = None
     else:
@@ -540,7 +607,7 @@ async def reassign_job_attempt(
             update(Node)
             .where(Node.id.in_([lease.node_id for lease in unclaimed]))
             .values(
-                claim_backoff_until=now + timedelta(seconds=unclaimed_backoff_seconds)
+                scheduling_backoff_until=now + timedelta(seconds=unclaimed_backoff_seconds)
             )
         )
     await _release_cohort_siblings(

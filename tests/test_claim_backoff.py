@@ -77,7 +77,7 @@ def _online(**overrides: object) -> Node:
 
 def test_a_backed_off_node_is_filtered_out() -> None:
     now = datetime.now(UTC)
-    node = _online(claim_backoff_until=now + timedelta(seconds=10))
+    node = _online(scheduling_backoff_until=now + timedelta(seconds=10))
     assert (
         passes_hard_filters(_job(), _snapshot(node), now=now, stale_seconds=60.0)
         is False
@@ -88,7 +88,7 @@ def test_the_backoff_expires_on_its_own() -> None:
     """A timestamp, not a counter: nothing has to remember to clear it, so a
     node that starts claiming again simply becomes eligible."""
     now = datetime.now(UTC)
-    node = _online(claim_backoff_until=now - timedelta(seconds=1))
+    node = _online(scheduling_backoff_until=now - timedelta(seconds=1))
     assert (
         passes_hard_filters(_job(), _snapshot(node), now=now, stale_seconds=60.0)
         is True
@@ -98,7 +98,7 @@ def test_the_backoff_expires_on_its_own() -> None:
 def test_a_node_that_never_lapsed_an_offer_is_eligible() -> None:
     """NULL means "never lapsed an offer" and must not be read as backed off."""
     now = datetime.now(UTC)
-    node = _online(claim_backoff_until=None)
+    node = _online(scheduling_backoff_until=None)
     assert (
         passes_hard_filters(_job(), _snapshot(node), now=now, stale_seconds=60.0)
         is True
@@ -148,8 +148,8 @@ async def test_an_unclaimed_offer_backs_the_node_off_without_blaming_it(
         )
     ).scalar_one()
 
-    assert node.claim_backoff_until is not None, "the node must be backed off"
-    assert node.claim_backoff_until > datetime.now(UTC)
+    assert node.scheduling_backoff_until is not None, "the node must be backed off"
+    assert node.scheduling_backoff_until > datetime.now(UTC)
 
     # Blameless: the offer lapsed, nobody dropped anything.
     assert node.lease_failure_count == 0

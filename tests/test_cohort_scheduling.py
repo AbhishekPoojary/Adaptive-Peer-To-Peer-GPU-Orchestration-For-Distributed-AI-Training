@@ -441,7 +441,7 @@ async def test_one_rank_failure_fails_whole_attempt(
         await api_client.post(f"/nodes/{node_b}/leases/claim", headers=auth_headers(token_b))
     ).json()["lease"]
 
-    # Node A reports a real training failure → the whole attempt is TERMINAL.
+    # Node A reports a real training failure → the whole ATTEMPT is torn down.
     failed = await api_client.post(
         f"/leases/{lease_a['id']}/fail",
         json={"lease_epoch": 1, "reason": "trainer exited with code 1"},
@@ -451,7 +451,12 @@ async def test_one_rank_failure_fails_whole_attempt(
 
     job_row = (await session.execute(select(Job).where(Job.id == job.id))).scalar_one()
     await session.refresh(job_row)
-    assert job_row.state is JobState.FAILED
+    # The attempt is dead — which is what this test is named for and what the
+    # lease assertions below prove. The *job* is retried on a fresh cohort while
+    # it has retries left (ADR-005 addendum 2); it only reaches FAILED once the
+    # bound is exhausted, which tests/test_failed_attempt_retry.py covers.
+    assert job_row.state is JobState.REASSIGNED
+    assert job_row.failed_attempt_count == 1
 
     la = await _lease(session, lease_a["id"])
     lb = await _lease(session, lease_b["id"])
