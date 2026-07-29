@@ -4,7 +4,9 @@ An honest account of what this system does, what has been measured, and what is
 missing. Written for whoever picks it up next — including a future me who has
 forgotten the details.
 
-Last updated: 2026-07-28, at commit `a4022e6`.
+Last updated after M11 (bounded retry on a reported trainer failure).
+Deliberately not pinned to a commit SHA: a document that cites its own
+commit is stale the moment it is written.
 
 ---
 
