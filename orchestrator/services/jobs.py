@@ -237,6 +237,7 @@ def _summary(job: Job) -> JobSummary:
         scheduler_name=job.scheduler_name,
         state=job.state.value,
         current_lease_epoch=job.current_lease_epoch,
+        failed_attempt_count=job.failed_attempt_count,
         scheduled_node_id=job.scheduled_node_id,
         submitted_by=job.submitted_by,
         submitted_at=job.submitted_at,

@@ -4,7 +4,7 @@ An honest account of what this system does, what has been measured, and what is
 missing. Written for whoever picks it up next — including a future me who has
 forgotten the details.
 
-Last updated: 2026-07-28, at commit `9179535`.
+Last updated: 2026-07-28, at commit `a4022e6`.
 
 ---
 
@@ -19,6 +19,7 @@ Last updated: 2026-07-28, at commit `9179535`.
 | Claim races resolve to exactly one winner | `tests/test_lease_claim_race.py` (real Postgres row locks) |
 | φ-accrual detects a vanished peer | 5.8 s of silence → suspicion 11.9 vs threshold 3.0 |
 | A job survives its node disappearing | Reassigned and completed, 55.89 s end to end |
+| A job survives its *trainer* being killed | Retried on another peer, completed to 99.12% (ADR-005 addendum 2) |
 | Checkpoint to MinIO and resume on reassignment | ADR-006, `tests/test_checkpoint_manifest.py` |
 | Adaptive placement beats the baselines on reliability | 6/6 vs 2/6 and 3/6, `bench/report/20260728T155702` |
 | A node that lets an offer lapse is skipped briefly, not re-offered | `tests/test_claim_backoff.py` (M7.1c) |
@@ -26,7 +27,7 @@ Last updated: 2026-07-28, at commit `9179535`.
 | Real user auth; no secret in the browser bundle | ADR-012; bundle greps clean for the admin key |
 | Container isolation | `cap_drop=ALL`, read-only rootfs, no host network (ADR-007) |
 
-279 tests, all against a real Postgres. No mocked database, no simulated
+284 tests, all against a real Postgres. No mocked database, no simulated
 failures outside `tests/`.
 
 ---
@@ -49,6 +50,11 @@ Every benchmark artifact says so in a machine-written `limitations` block
 points and `50.0 ms` are argued from the domain (ADR-009 addendum), not
 measured. A fleet of genuinely different machines is what would test them.
 
+**The retry bound is a judgement, not a measurement.** `MAX_JOB_FAILURE_RETRIES=2`
+caps how far a broken job spec can walk the fleet, but no data says 2 is the
+right number — it is a small bound chosen to make the failure mode cheap, and
+it is configurable for that reason.
+
 **No load testing.** Nothing here has been run with more than a handful of
 nodes or jobs. Scheduler pass cost is O(candidates) per job and the audit trail
 writes a row per candidate per decision; neither has been profiled.
@@ -57,40 +63,26 @@ writes a row per candidate per decision; neither has been profiled.
 
 ## Known gaps and where to start
 
-### 1. A reported trainer failure is terminal, even when it is node-specific
-
-`services/leases.py` treats any nonzero trainer exit as terminal, on the
-reasoning that a broken job spec would otherwise loop across the whole fleet.
-That is sound for a bad spec and wrong for exit code 137 — `SIGKILL`, which on
-a 4 GB laptop GPU is very often the OOM killer. A larger peer might well
-succeed, and the job dies instead.
-
-Fixing it properly means classifying failures (node-specific vs job-specific)
-and bounded retry with an attempt counter, so a genuinely broken job still
-fails loudly after N tries. This is the most valuable outstanding change: OOM
-on small consumer GPUs is the single most likely real failure in the target
-deployment.
-
-### 2. The usability test has never been run with a real person
+### 1. The usability test has never been run with a real person
 
 `docs/USABILITY-TEST.md` is a complete script for an unassisted run. It needs a
 classmate who has not seen the system. **Do not simulate it** — an invented
 finding is worse than an untested interface, because it looks like evidence.
 
-### 3. No TLS
+### 2. No TLS
 
 ADR-010 assumes a Tailscale overlay, which encrypts transport. Exposing the
 orchestrator on any other network would put bearer tokens on the wire in
 plaintext. Anything beyond the overlay needs TLS terminated in front.
 
-### 4. Token revocation is bounded by TTL only
+### 3. Token revocation is bounded by TTL only
 
 There is no revocation list for either node or user tokens. Disabling a user
 account takes effect immediately (the row is re-read per request), but a stolen
 token stays valid until it expires — 15 minutes by default. Accepted in
 ADR-008/ADR-012; worth revisiting if this ever holds anything sensitive.
 
-### 5. The rate limiter is per-process
+### 4. The rate limiter is per-process
 
 In-process fixed-window counters, so N orchestrator replicas allow N times the
 limit. ADR-010 deploys one. A second replica needs shared state (ADR-012 §7).

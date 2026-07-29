@@ -86,6 +86,10 @@ class JobSummary(BaseModel):
     scheduler_name: str
     state: str
     current_lease_epoch: int
+    # How many attempts ended in a reported trainer failure (ADR-005 addendum
+    # 2). Exposed so "this job has been retried twice" is visible rather than
+    # something an operator has to infer from the event timeline.
+    failed_attempt_count: int
     scheduled_node_id: uuid.UUID | None
     submitted_by: str
     submitted_at: datetime

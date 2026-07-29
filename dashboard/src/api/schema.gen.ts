@@ -471,7 +471,8 @@ export interface paths {
          *
          *     On a grant the response also carries the rank/world_size/rendezvous endpoint
          *     (``RendezvousAssignment``) the agent needs to launch the rank under torchrun
-         *     (M5, ADR-005).
+         *     (M5, ADR-005), and the job's spec — which since M8 is the agent's only route
+         *     to it, ``GET /jobs/{id}`` having become human-only (ADR-012).
          */
         post: operations["claim_lease_nodes__node_id__leases_claim_post"];
         delete?: never;
@@ -535,7 +536,11 @@ export interface paths {
         put?: never;
         /**
          * Fail
-         * @description Finish a lease as failed (epoch-fenced); job → FAILED with a reason.
+         * @description Finish a lease as failed (epoch-fenced).
+         *
+         *     The job is retried on another peer while it has retries left, and fails
+         *     terminally once it does not (ADR-005 addendum 2) — so a trainer killed by
+         *     one machine's OOM killer does not end a job another machine could finish.
          *
          *     ``body.result`` is the optional real training result summary (M4); when
          *     present it is persisted to ``Job.result`` and shapes the plain-language
@@ -584,10 +589,20 @@ export interface components {
          *     to this node right now (a clean empty-handed poll, not an error).
          *     ``rendezvous`` accompanies a granted lease with the rank/world_size/endpoint
          *     the agent needs to launch it (M5); ``null`` when ``lease`` is ``null``.
+         *
+         *     ``job_spec`` is the granted job's validated spec. It travels with the claim
+         *     (M8) because the agent needs it to launch the trainer and there is no other
+         *     way for it to get it: ``GET /jobs/{id}`` is now human-only (ADR-012), and a
+         *     node token is correctly rejected there. Returning it here keeps the
+         *     authorization honest — a node receives the spec for the one job it was just
+         *     granted, rather than being handed read access to every job in the fleet —
+         *     and removes a round trip on the claim path.
          */
         ClaimResponse: {
             lease: components["schemas"]["LeaseOut"] | null;
             rendezvous?: components["schemas"]["RendezvousAssignment"] | null;
+            /** Job Spec */
+            job_spec?: Record<string, never> | null;
         };
         /**
          * EnrollmentTokenCreateRequest
@@ -778,6 +793,8 @@ export interface components {
             state: string;
             /** Current Lease Epoch */
             current_lease_epoch: number;
+            /** Failed Attempt Count */
+            failed_attempt_count: number;
             /** Scheduled Node Id */
             scheduled_node_id: string | null;
             /** Submitted By */
@@ -884,6 +901,8 @@ export interface components {
             state: string;
             /** Current Lease Epoch */
             current_lease_epoch: number;
+            /** Failed Attempt Count */
+            failed_attempt_count: number;
             /** Scheduled Node Id */
             scheduled_node_id: string | null;
             /** Submitted By */
