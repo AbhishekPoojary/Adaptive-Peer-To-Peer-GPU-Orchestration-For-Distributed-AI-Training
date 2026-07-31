@@ -418,6 +418,7 @@ async def _service_lease(
     release_after: float | None,
     docker_client: docker.DockerClient | None,
     launch_config: TrainerLaunchConfig,
+    allow_unsandboxed: bool = False,
 ) -> ExecutingLease | None:
     """Advance the lease state machine for one cycle.
 
@@ -455,9 +456,11 @@ async def _service_lease(
             # needed) — see ExecutingLease.task's docstring.
             return ExecutingLease(held=held, task=None)
 
-        if docker_client is None:
+        if docker_client is None and not allow_unsandboxed:
             logger.error(
-                "cannot execute lease id=%s: Docker is unavailable on this node",
+                "cannot execute lease id=%s: Docker is unavailable on this node "
+                "(pass --allow-unsandboxed to run the trainer as a child process "
+                "instead; see docs/adr/ADR-007-addendum.md for what that gives up)",
                 held.lease_id,
             )
             await _report_result(
@@ -505,6 +508,7 @@ async def _service_lease(
                 has_gpu=has_gpu,
                 launch_config=launch_config,
                 rendezvous=rendezvous,
+                unsandboxed=docker_client is None,
             )
         )
         return ExecutingLease(held=held, task=task)
@@ -608,6 +612,43 @@ async def _service_lease(
     return executing
 
 
+def _log_unsandboxed_consent(docker_error: Exception, memory_limit: str) -> None:
+    """State plainly what running without a container gives up (ADR-007 addendum).
+
+    Printed every start, not once, and itemised rather than summarised as
+    "reduced isolation". The machine at risk usually belongs to someone doing
+    the operator a favour, and a warning vague enough to skim is not consent.
+    """
+    logger.warning(
+        "\n"
+        "  ────────────────────────────────────────────────────────────────\n"
+        "  RUNNING WITHOUT CONTAINER ISOLATION (--allow-unsandboxed)\n"
+        "  ────────────────────────────────────────────────────────────────\n"
+        "  Docker is not available here (%s), so training jobs will run as\n"
+        "  ordinary child processes of this agent, under your user account.\n"
+        "\n"
+        "  That means a training job on this machine:\n"
+        "    - runs with your permissions, not a container's\n"
+        "    - can read and write any file you can\n"
+        "    - has your network access\n"
+        "    - is NOT limited by cgroups\n"
+        "\n"
+        "  Partial mitigation: memory use is polled and the job is killed if it\n"
+        "  exceeds %s. That is sampled, not kernel-enforced, so a sudden spike\n"
+        "  can overshoot before it is caught.\n"
+        "\n"
+        "  The only program run this way is this project's own trainer\n"
+        "  (trainer/train.py) — you can read it before agreeing. Job submitters\n"
+        "  cannot supply code; only a dataset name from a fixed list and\n"
+        "  range-checked numbers.\n"
+        "\n"
+        "  Install Docker to get full isolation back. Ctrl+C now to stop.\n"
+        "  ────────────────────────────────────────────────────────────────",
+        docker_error,
+        memory_limit,
+    )
+
+
 def _configure_logging(level: str) -> None:
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
@@ -660,6 +701,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--trainer-image",
         default=os.environ.get("TRAINER_IMAGE", "gpu-orchestrator-trainer:latest"),
         help="Docker image the agent launches for training jobs (ADR-007).",
+    )
+    parser.add_argument(
+        "--allow-unsandboxed",
+        action="store_true",
+        help=(
+            "If Docker is unavailable, run the trainer as a child process instead "
+            "of a container. This gives up the ADR-007 isolation guarantees — see "
+            "docs/adr/ADR-007-addendum.md. Off by default."
+        ),
     )
     parser.add_argument(
         "--trainer-memory-limit",
@@ -813,11 +863,16 @@ async def run(args: argparse.Namespace) -> None:
                 docker_client.ping()
                 logger.info("Docker daemon reachable: this node can execute training jobs")
             except Exception as exc:  # noqa: BLE001 - any Docker SDK/daemon failure
-                logger.error(
-                    "Docker is unavailable on this node (%s); any claimed lease will be "
-                    "failed honestly rather than executed",
-                    exc,
-                )
+                if args.allow_unsandboxed:
+                    _log_unsandboxed_consent(exc, launch_config.memory_limit)
+                else:
+                    logger.error(
+                        "Docker is unavailable on this node (%s); any claimed lease will "
+                        "be failed honestly rather than executed. To contribute this "
+                        "machine without Docker, re-run with --allow-unsandboxed (see "
+                        "docs/adr/ADR-007-addendum.md for what that gives up).",
+                        exc,
+                    )
                 docker_client = None
 
         logger.info(
@@ -885,6 +940,7 @@ async def run(args: argparse.Namespace) -> None:
                 release_after=args.release_after,
                 docker_client=docker_client,
                 launch_config=launch_config,
+                allow_unsandboxed=args.allow_unsandboxed,
             )
             metrics_state.record_lease_state(
                 lease_active=executing_lease is not None,

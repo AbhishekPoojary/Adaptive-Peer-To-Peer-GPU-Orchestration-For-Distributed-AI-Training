@@ -36,7 +36,8 @@ import queue
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Protocol
+from pathlib import Path
+from typing import Any, Protocol, runtime_checkable
 
 import docker
 import docker.errors
@@ -71,6 +72,12 @@ class TrainerLaunchConfig:
     s3_bucket_checkpoints: str | None = None
     s3_region: str = "us-east-1"
     checkpoint_every_n_steps: int = 100
+    # Where the trainer caches downloaded datasets when running unsandboxed
+    # (ADR-007 addendum). The container path uses the named Docker volume
+    # above; a child process has no such mount, so it needs a real host path.
+    unsandboxed_data_cache_dir: str = str(
+        Path.home() / ".gpu-orchestrator-agent" / "data-cache"
+    )
 
     def checkpointing_enabled(self) -> bool:
         """True iff all S3 credentials/endpoint/bucket are present."""
@@ -103,10 +110,16 @@ class RendezvousSpec:
     max_restarts: int
 
 
+@runtime_checkable
 class SupportsLogs(Protocol):
     """The subset of docker-py's ``Container`` this module relies on —
     documents the real interface and lets tests substitute a lightweight
-    double without importing the real SDK's model classes."""
+    double without importing the real SDK's model classes.
+
+    ``runtime_checkable`` so the unsandboxed backend's ``TrainerProcess``
+    (ADR-007 addendum) can assert it really satisfies this contract; the two
+    execution paths share every consumer below the launch, and that only holds
+    while both honour this interface."""
 
     def logs(self, **kwargs: Any) -> Iterator[bytes]: ...
 
@@ -309,10 +322,19 @@ def _iter_single_stream_lines(
         buffered = pending + chunk.decode("utf-8", errors="replace")
         *complete_lines, pending = buffered.split("\n")
         for line in complete_lines:
-            if line:
-                yield line
+            # Strip a trailing CR so a CRLF writer yields the same line a LF
+            # writer does. Linux containers emit LF, so this never mattered
+            # until the unsandboxed backend (ADR-007 addendum) started feeding
+            # this function a Windows child process — whose CRLF left a stray
+            # "\r" on every line and corrupted the trainer's machine-readable
+            # metric frames.
+            stripped = line.rstrip("\r")
+            if stripped:
+                yield stripped
     if pending:
-        yield pending
+        trailing = pending.rstrip("\r")
+        if trailing:
+            yield trailing
 
 
 def stream_container_logs(container: SupportsLogs) -> Iterator[tuple[str, str]]:

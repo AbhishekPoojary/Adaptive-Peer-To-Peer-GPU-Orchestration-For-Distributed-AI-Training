@@ -18,6 +18,7 @@ import logging
 import queue
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import docker
@@ -36,6 +37,11 @@ from agent.runtime.docker_launcher import (
 )
 from agent.runtime.metrics import parse_final_line, parse_metric_line, parse_resume_line
 from agent.runtime.stream_client import LeaseStreamClient, http_to_ws_base, stream_url
+from agent.runtime.subprocess_launcher import (
+    TrainerSourceNotFoundError,
+    launch_trainer_process,
+    parse_memory_limit,
+)
 
 logger = logging.getLogger("agent.runtime.execution")
 
@@ -44,9 +50,44 @@ _LOG_DONE = object()
 
 
 class DockerLaunchError(Exception):
-    """Docker itself failed to launch the trainer container (missing image,
-    GPU device request rejected, daemon unreachable, bad mount, ...) — no
-    training happened at all, so the caller must fail the lease honestly."""
+    """The trainer failed to launch at all (missing image, GPU device request
+    rejected, daemon unreachable, bad mount, missing trainer source on the
+    unsandboxed path, ...) — no training happened, so the caller must fail the
+    lease honestly rather than report an empty result."""
+
+
+async def _launch_unsandboxed(
+    *,
+    run_kwargs: dict[str, Any],
+    launch_config: TrainerLaunchConfig,
+    rendezvous: RendezvousSpec | None,
+) -> SupportsLogs:
+    """Start the trainer as a child process (ADR-007 addendum).
+
+    Reuses ``run_kwargs["environment"]`` — the very dict the container path
+    passes to Docker — so the trainer is configured identically on both
+    backends and they cannot drift.
+    """
+    if rendezvous is not None and rendezvous.world_size > 1:
+        # A multi-rank cohort needs the c10d rendezvous network the container
+        # path builds. Refused rather than silently degraded to one rank, which
+        # would report a world_size=N result that was never distributed.
+        raise DockerLaunchError(
+            "multi-rank (world_size > 1) jobs require the container path; this "
+            "node is running unsandboxed and can only take single-rank work"
+        )
+    environment: dict[str, str] = dict(run_kwargs["environment"])
+    try:
+        return await asyncio.to_thread(
+            launch_trainer_process,
+            environment=environment,
+            data_cache_dir=Path(launch_config.unsandboxed_data_cache_dir),
+            memory_limit_bytes=parse_memory_limit(launch_config.memory_limit),
+        )
+    except TrainerSourceNotFoundError as exc:
+        raise DockerLaunchError(str(exc)) from exc
+    except Exception as exc:
+        raise DockerLaunchError(f"could not start the trainer process: {exc}") from exc
 
 
 @dataclass
@@ -98,7 +139,7 @@ def _wait_thread(container: SupportsLogs, out_queue: queue.Queue[int]) -> None:
 
 async def run_lease_execution(
     *,
-    docker_client: docker.DockerClient,
+    docker_client: docker.DockerClient | None,
     orchestrator_http_base: str,
     node_id: str,
     access_token: str,
@@ -109,19 +150,22 @@ async def run_lease_execution(
     has_gpu: bool,
     launch_config: TrainerLaunchConfig,
     rendezvous: RendezvousSpec | None = None,
+    unsandboxed: bool = False,
 ) -> ExecutionResult:
-    """Launch the trainer container for this lease and run it to completion,
-    forwarding its real output over the WebSocket stream as it happens.
+    """Launch this lease's trainer and run it to completion, forwarding its
+    real output over the WebSocket stream as it happens.
 
     ``rendezvous`` (M5): when present with ``world_size > 1`` the container is
     launched under torchrun for real DDP, joining the cohort's shared network
     (created here if absent). ``None``/``world_size == 1`` is the M4
     single-process path. Raises :class:`DockerLaunchError` if the container
     itself never started.
+
+    ``unsandboxed`` (ADR-007 addendum) runs the trainer as a child process
+    instead, for a peer with no Docker. Everything below the launch — log
+    streaming, metric parsing, cancellation, abandonment — is identical, because
+    both backends satisfy the same ``SupportsLogs`` contract.
     """
-    ensure_dataset_cache_volume(docker_client, name=launch_config.dataset_cache_volume)
-    if rendezvous is not None and rendezvous.world_size > 1:
-        ensure_rendezvous_network(docker_client, name=rendezvous.network)
     run_kwargs = build_run_kwargs(
         config=launch_config,
         job_spec=job_spec,
@@ -131,12 +175,25 @@ async def run_lease_execution(
         has_gpu=has_gpu,
         rendezvous=rendezvous,
     )
-    try:
-        container = await asyncio.to_thread(
-            launch_trainer_container, docker_client, run_kwargs=run_kwargs
+
+    container: SupportsLogs
+    if unsandboxed:
+        container = await _launch_unsandboxed(
+            run_kwargs=run_kwargs, launch_config=launch_config, rendezvous=rendezvous
         )
-    except Exception as exc:
-        raise DockerLaunchError(str(exc)) from exc
+    else:
+        assert docker_client is not None, "the container path requires a Docker client"
+        ensure_dataset_cache_volume(
+            docker_client, name=launch_config.dataset_cache_volume
+        )
+        if rendezvous is not None and rendezvous.world_size > 1:
+            ensure_rendezvous_network(docker_client, name=rendezvous.network)
+        try:
+            container = await asyncio.to_thread(
+                launch_trainer_container, docker_client, run_kwargs=run_kwargs
+            )
+        except Exception as exc:
+            raise DockerLaunchError(str(exc)) from exc
 
     logger.info(
         "trainer container launched: id=%s lease=%s job=%s has_gpu=%s rank=%s world_size=%s",

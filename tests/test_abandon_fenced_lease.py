@@ -141,7 +141,11 @@ async def test_cancelling_execution_stops_the_container(
 
     task = asyncio.ensure_future(
         execution_module.run_lease_execution(
-            docker_client=None,  # type: ignore[arg-type]
+            # A sentinel, not None: since ADR-007 addendum a None client means
+            # "this node runs unsandboxed", and the container path asserts it
+            # got a real one. Nothing here touches it — the launcher is patched
+            # above — but passing None would now select the wrong backend.
+            docker_client=object(),  # type: ignore[arg-type]
             orchestrator_http_base="http://orchestrator.invalid",
             node_id="node-1",
             access_token="token",

@@ -27,7 +27,9 @@ router = APIRouter()
 # orchestrator/api/installer.py -> orchestrator/api -> orchestrator -> repo root
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _INSTALL_SCRIPT = _REPO_ROOT / "installer" / "install.sh"
+_INSTALL_SCRIPT_PS1 = _REPO_ROOT / "installer" / "install.ps1"
 _AGENT_DIR = _REPO_ROOT / "agent"
+_TRAINER_DIR = _REPO_ROOT / "trainer"
 _PYPROJECT = _REPO_ROOT / "pyproject.toml"
 _README = _REPO_ROOT / "README.md"
 
@@ -41,6 +43,21 @@ async def get_install_script() -> str:
             status_code=status.HTTP_404_NOT_FOUND, detail="install.sh is not available"
         )
     return _INSTALL_SCRIPT.read_text(encoding="utf-8")
+
+
+@router.get("/install.ps1", response_class=PlainTextResponse)
+async def get_install_script_powershell() -> str:
+    """Serve the native-Windows bootstrap script (ADR-007 addendum).
+
+    The bash installer requires WSL2 on Windows, and GPU passthrough there needs
+    the driver plus the container toolkit *inside* WSL — enough friction to lose
+    most volunteers. This one runs in the PowerShell a Windows user already has.
+    """
+    if not _INSTALL_SCRIPT_PS1.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="install.ps1 is not available"
+        )
+    return _INSTALL_SCRIPT_PS1.read_text(encoding="utf-8")
 
 
 def _exclude_pycache(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
@@ -64,6 +81,13 @@ async def get_agent_bundle() -> Response:
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         tar.add(_AGENT_DIR, arcname="agent", filter=_exclude_pycache)
+        # trainer/ travels with the bundle because a peer running unsandboxed
+        # (ADR-007 addendum) executes train.py directly instead of pulling the
+        # trainer image. It is a handful of small .py files, and shipping it
+        # unconditionally means the peer's copy is always exactly the code this
+        # orchestrator is running — the same guarantee the agent package gets.
+        if _TRAINER_DIR.is_dir():
+            tar.add(_TRAINER_DIR, arcname="trainer", filter=_exclude_pycache)
         tar.add(_PYPROJECT, arcname="pyproject.toml")
         # pyproject.toml declares readme = "README.md"; setuptools reads that
         # file at build/metadata time, so it must travel with the bundle or a
