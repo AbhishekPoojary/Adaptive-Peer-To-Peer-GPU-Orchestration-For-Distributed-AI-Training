@@ -12,10 +12,10 @@ Every architectural choice is recorded in `docs/adr/`.
 
 ## Status
 
-**M0–M10 complete.** The system runs end to end: a peer enrolls with one
-command, heartbeats real hardware telemetry, claims a lease, trains a real model
-in a container, streams its logs and metrics live to a dashboard, checkpoints to
-object storage, and recovers onto another peer when a node dies mid-run.
+**M0–M12 complete.** The system runs end to end: a peer enrolls with one
+command, heartbeats real hardware telemetry, claims a lease, trains a real model,
+streams its logs and metrics live to a dashboard, checkpoints to object storage,
+and recovers onto another peer when a node dies mid-run.
 
 What is measured rather than asserted:
 
@@ -26,7 +26,9 @@ What is measured rather than asserted:
   2/6 — see `bench/report/`.
 - A peer SIGKILLed mid-training is detected in **5.8 s** and its job completes
   on another machine **55.9 s** after the peer vanished.
-- 279 tests against a real Postgres. No mocked database, no simulated failures.
+- A machine with **no Docker at all** trained to 96.67% on CUDA via the opt-in
+  unsandboxed path, so a peer needs only Python to contribute.
+- 300 tests against a real Postgres. No mocked database, no simulated failures.
 
 `docs/STATUS.md` is the honest account of what is done, what is explicitly not
 claimed, and where to start next.
@@ -49,7 +51,7 @@ could and could not exercise (ADR-013).
 | Reliability | Wilson lower bound over recorded lease outcomes with time decay — never assigned | ADR-009 |
 | Distributed training | `torchrun` + c10d rendezvous, `gloo` backend, real DDP | ADR-005 |
 | Checkpoints | Atomic blob-then-manifest writes to MinIO; resume on reassignment | ADR-006 |
-| Isolation | `cap_drop=ALL`, no-new-privileges, read-only rootfs, memory/pid limits | ADR-007 |
+| Isolation | `cap_drop=ALL`, no-new-privileges, read-only rootfs, memory/pid limits; opt-in subprocess path for peers without Docker | ADR-007 |
 | Machine identity | One-time enrollment token → Ed25519 challenge-response → short-lived JWT | ADR-008 |
 | Human identity | Password → scrypt → short-lived JWT with a separate audience and role | ADR-012 |
 
@@ -99,22 +101,34 @@ not enroll machines into the fleet.
 ### 3. Add a peer
 
 Sign in to the dashboard and use **Add a node**, which mints a single-use
-enrollment token and shows a one-line install command to run on the peer
-machine. The dashboard then waits for that exact node to appear.
+enrollment token and shows the install command to run on the peer machine. The
+dashboard then waits for that exact node to appear.
 
-Or from the CLI:
+**Windows** (native PowerShell — no WSL2 needed):
+
+```powershell
+$env:ORCH_TOKEN='<TOKEN>'; irm http://<orchestrator>:8090/install.ps1 | iex
+```
+
+**Linux / macOS:**
 
 ```bash
-TOKEN=$(curl -sX POST http://localhost:8090/auth/enrollment-tokens \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"created_by":"me"}' | python -c 'import json,sys;print(json.load(sys.stdin)["token"])')
-
-python -m agent --orchestrator http://localhost:8090 --enrollment-token "$TOKEN"
+curl -sSL http://<orchestrator>:8090/install.sh | bash -s -- --token <TOKEN>
 ```
+
+The only hard prerequisite is **Python 3.11+**. If the peer has Docker, jobs run
+with full container isolation (ADR-007). If it does not, the installer offers to
+run the trainer as an ordinary child process instead — it states exactly what
+that gives up and requires an explicit "yes" (ADR-007 addendum). An NVIDIA GPU
+is used when present; a machine without one enrolls honestly as a CPU node.
 
 The agent generates its own keypair on first run; the private key never leaves
 the machine.
+
+> **Reaching the orchestrator.** A peer on another network cannot see your
+> `localhost`. Put the orchestrator on a Tailscale overlay (ADR-010) or behind a
+> tunnel, and give peers that address — agents only ever dial *out*, so no peer
+> needs port forwarding or a public IP.
 
 ### 4. Submit training
 

@@ -28,8 +28,9 @@ commit is stale the moment it is written.
 | Multi-rank DDP under torchrun with real c10d rendezvous | ADR-005, M5 |
 | Real user auth; no secret in the browser bundle | ADR-012; bundle greps clean for the admin key |
 | Container isolation | `cap_drop=ALL`, read-only rootfs, no host network (ADR-007) |
+| A peer with only Python (no Docker/toolkit/WSL2) can contribute | Trained to 96.67% on a node with Docker unreachable (ADR-007 addendum) |
 
-284 tests, all against a real Postgres. No mocked database, no simulated
+300 tests, all against a real Postgres. No mocked database, no simulated
 failures outside `tests/`.
 
 ---

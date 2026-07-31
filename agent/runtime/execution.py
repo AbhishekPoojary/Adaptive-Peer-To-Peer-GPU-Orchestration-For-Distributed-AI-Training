@@ -196,7 +196,8 @@ async def run_lease_execution(
             raise DockerLaunchError(str(exc)) from exc
 
     logger.info(
-        "trainer container launched: id=%s lease=%s job=%s has_gpu=%s rank=%s world_size=%s",
+        "trainer %s launched: id=%s lease=%s job=%s has_gpu=%s rank=%s world_size=%s",
+        "subprocess" if unsandboxed else "container",
         getattr(container, "id", "?"),
         lease_id,
         job_id,
