@@ -2,204 +2,240 @@
 #
 # Usage:
 #   $env:ORCH_TOKEN='<ENROLLMENT_TOKEN>'
-#   irm http://<orchestrator-host>:<port>/install.ps1 | iex
+#   irm https://<orchestrator>/install.ps1 | iex
 #
-# or, if you have the file:
-#   .\install.ps1 -Token <ENROLLMENT_TOKEN> -Orchestrator http://<host>:<port>
+# Optional: $env:ORCH_URL overrides where the agent dials. It defaults to the
+# address you fetched this script from, which the orchestrator substitutes in
+# when it serves the file — so the common case needs no URL at all.
 #
 # Why this exists: install.sh needs WSL2 on Windows, and GPU passthrough inside
 # WSL additionally needs the NVIDIA Container Toolkit. That is enough setup to
-# lose most volunteers. This script uses the PowerShell a Windows user already
-# has, and — when Docker is absent — the agent's unsandboxed execution path
+# lose most volunteers. This uses the PowerShell a Windows user already has,
+# and — when Docker is absent — the agent's unsandboxed execution path
 # (ADR-007 addendum), so the only prerequisite is Python.
 #
-# Honest by construction, exactly like install.sh: every prerequisite check
-# either really passes or the script prints a plain-language reason and exits
-# non-zero. It never continues past a missing prerequisite and never claims
-# success it did not observe.
+# IMPORTANT STRUCTURE NOTE. Everything lives inside a function that `return`s.
+# `irm | iex` executes in the *caller's* session, where a bare `exit` terminates
+# the PowerShell host — closing the window and taking the error message with it.
+# The first version did exactly that: a peer whose reachability check failed saw
+# their terminal vanish with no explanation. Never add a top-level `exit` here,
+# and never set $ErrorActionPreference outside the function (it would leak into
+# the user's session and change how their shell behaves afterwards).
 
-[CmdletBinding()]
-param(
-    [string]$Token = $env:ORCH_TOKEN,
-    [string]$Orchestrator = $(if ($env:ORCH_URL) { $env:ORCH_URL } else { "http://localhost:8090" }),
-    [string]$StateDir = "$env:USERPROFILE\.gpu-orchestrator-agent",
-    [string]$WorkDir = "$env:USERPROFILE\.gpu-orchestrator-agent-src"
-)
+function Invoke-GpuOrchestratorInstall {
+    $Token        = $env:ORCH_TOKEN
+    # Replaced by the orchestrator at serve time with the address this script
+    # was actually downloaded from. The literal placeholder only survives when
+    # the file is run straight from a checkout.
+    $servedFrom   = '__ORCHESTRATOR_URL__'
+    $Orchestrator = if ($env:ORCH_URL) { $env:ORCH_URL }
+                    elseif ($servedFrom -notmatch '^__') { $servedFrom }
+                    else { 'http://localhost:8090' }
+    $StateDir     = "$env:USERPROFILE\.gpu-orchestrator-agent"
+    $WorkDir      = "$env:USERPROFILE\.gpu-orchestrator-agent-src"
 
-$ErrorActionPreference = "Stop"
+    function Write-Step { param($m) Write-Host "[install] $m" }
+    function Write-Fail {
+        param($m)
+        Write-Host ""
+        Write-Host "[install] ERROR: $m" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "[install] Nothing was left running. Fix the above and paste the command again." -ForegroundColor Yellow
+    }
 
-function Write-Step { param($Message) Write-Host "[install] $Message" }
-function Fail { param($Message) Write-Host "[install] ERROR: $Message" -ForegroundColor Red; exit 1 }
-
-if (-not $Token) {
-    Fail @"
-missing enrollment token.
+    if (-not $Token) {
+        Write-Fail @"
+No enrollment token.
 
 Set it and re-run:
   `$env:ORCH_TOKEN='<TOKEN>'; irm $Orchestrator/install.ps1 | iex
 
-Mint one from the dashboard's "Add a node" dialog on the Overview page.
+Ask whoever runs the orchestrator for a token - they mint one from the
+dashboard's "Add a node" button.
 "@
-}
+        return
+    }
 
-$Orchestrator = $Orchestrator.TrimEnd('/')
-Write-Step "orchestrator = $Orchestrator"
+    $Orchestrator = $Orchestrator.TrimEnd('/')
+    Write-Step "orchestrator = $Orchestrator"
 
-# --- Prerequisite: Python 3.11+ ----------------------------------------------
+    # --- Python 3.11+ --------------------------------------------------------
 
-$pythonExe = $null
-foreach ($candidate in @("python", "python3", "py")) {
-    $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
-    if (-not $cmd) { continue }
-    try {
-        $ok = & $candidate -c "import sys; print(1 if sys.version_info >= (3,11) else 0)" 2>$null
-        if ($ok -eq "1") { $pythonExe = $candidate; break }
-    } catch { continue }
-}
-
-if (-not $pythonExe) {
-    Fail @"
+    $pythonExe = $null
+    foreach ($candidate in @("python", "python3", "py")) {
+        if (-not (Get-Command $candidate -ErrorAction SilentlyContinue)) { continue }
+        try {
+            $ok = & $candidate -c "import sys; print(1 if sys.version_info >= (3,11) else 0)" 2>$null
+            if ($ok -eq "1") { $pythonExe = $candidate; break }
+        } catch { continue }
+    }
+    if (-not $pythonExe) {
+        Write-Fail @"
 Python 3.11 or newer was not found.
 
-Install it from https://www.python.org/downloads/ (tick "Add python.exe to PATH"
-during setup), then close and reopen PowerShell and run this again.
+Install it from https://www.python.org/downloads/
+IMPORTANT: tick "Add python.exe to PATH" during setup.
+Then CLOSE this window, open a new PowerShell, and paste the command again.
 "@
-}
-$pyVersion = & $pythonExe -c "import platform; print(platform.python_version())"
-Write-Step "Python OK: $pythonExe ($pyVersion)"
-
-# --- Reachability: fail here rather than after a long install ----------------
-
-try {
-    $health = Invoke-RestMethod -Uri "$Orchestrator/health" -TimeoutSec 15
-    Write-Step "orchestrator reachable (db: $($health.db))"
-} catch {
-    Fail @"
-could not reach $Orchestrator/health
-
-Check the address is right and that this machine can reach it. If the
-orchestrator is on someone else's network, they need to expose it (a tunnel or
-an overlay network) — a plain LAN address will not work from outside their
-network.
-"@
-}
-
-# --- Optional: Docker. Present = full isolation; absent = unsandboxed path ---
-
-$useDocker = $false
-if (Get-Command docker -ErrorAction SilentlyContinue) {
-    try {
-        docker info *> $null
-        if ($LASTEXITCODE -eq 0) { $useDocker = $true }
-    } catch { $useDocker = $false }
-}
-
-if ($useDocker) {
-    Write-Step "Docker is available: jobs will run in isolated containers (ADR-007)"
-} else {
-    Write-Host ""
-    Write-Host "  ----------------------------------------------------------------" -ForegroundColor Yellow
-    Write-Host "  Docker was not found, so jobs will run WITHOUT container isolation" -ForegroundColor Yellow
-    Write-Host "  ----------------------------------------------------------------" -ForegroundColor Yellow
-    Write-Host "  Training jobs will run as ordinary processes under your user"
-    Write-Host "  account. That means a job can read and write any file you can, has"
-    Write-Host "  your network access, and is not limited by the kernel."
-    Write-Host ""
-    Write-Host "  The only program run this way is this project's own trainer"
-    Write-Host "  (trainer/train.py), which you can read before agreeing. People"
-    Write-Host "  submitting jobs cannot supply code - only a dataset name from a"
-    Write-Host "  fixed list and range-checked numbers."
-    Write-Host ""
-    Write-Host "  Install Docker Desktop first if you would rather have full"
-    Write-Host "  isolation: https://docs.docker.com/get-docker/"
-    Write-Host ""
-    $answer = Read-Host "  Continue without isolation? (yes/no)"
-    if ($answer -ne "yes") {
-        Write-Step "aborted at your request; nothing was installed."
-        exit 0
+        return
     }
-}
+    $pyVersion = & $pythonExe -c "import platform; print(platform.python_version())"
+    Write-Step "Python OK: $pythonExe ($pyVersion)"
 
-# --- GPU detection: honest either way ----------------------------------------
+    # --- Reachability: fail here, not after a long install -------------------
 
-$hasGpu = $false
-if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
     try {
-        $gpuName = (nvidia-smi --query-gpu=name --format=csv,noheader 2>$null | Select-Object -First 1)
-        if ($gpuName) { $hasGpu = $true; Write-Step "NVIDIA GPU detected: $gpuName" }
-    } catch { }
-}
-if (-not $hasGpu) {
-    Write-Step "no NVIDIA GPU detected - this node will enroll honestly as CPU-only."
-}
+        $health = Invoke-RestMethod -Uri "$Orchestrator/health" -TimeoutSec 20
+        Write-Step "orchestrator reachable (db: $($health.db))"
+    } catch {
+        Write-Fail @"
+Could not reach $Orchestrator/health
 
-# --- Download the agent bundle from the orchestrator that is bootstrapping us -
+  $($_.Exception.Message)
 
-New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
-$bundle = Join-Path $WorkDir "agent-bundle.tar.gz"
+If that address says 'localhost', this script was not told where the
+orchestrator lives. Ask for the full URL and set it:
 
-Write-Step "downloading agent bundle from $Orchestrator/agent-bundle.tar.gz"
-try {
-    Invoke-WebRequest -Uri "$Orchestrator/agent-bundle.tar.gz" -OutFile $bundle -TimeoutSec 120
-} catch {
-    Fail "failed to download the agent bundle from $Orchestrator"
-}
+  `$env:ORCH_URL='https://<their-address>'
+  `$env:ORCH_TOKEN='<TOKEN>'
+  irm `$env:ORCH_URL/install.ps1 | iex
+"@
+        return
+    }
 
-Write-Step "extracting bundle into $WorkDir"
-# tar.exe ships with Windows 10 1803+ and Windows 11.
-tar -xzf $bundle -C $WorkDir
-if ($LASTEXITCODE -ne 0) { Fail "failed to extract the agent bundle (is tar.exe available?)" }
+    # --- Docker is optional: present = isolation, absent = ask for consent ---
 
-# --- Install into an isolated virtualenv -------------------------------------
+    $useDocker = $false
+    if (Get-Command docker -ErrorAction SilentlyContinue) {
+        try {
+            docker info *> $null
+            if ($LASTEXITCODE -eq 0) { $useDocker = $true }
+        } catch { $useDocker = $false }
+    }
 
-Write-Step "creating a virtualenv at $WorkDir\.venv"
-& $pythonExe -m venv "$WorkDir\.venv"
-if ($LASTEXITCODE -ne 0) { Fail "failed to create the agent virtualenv" }
-
-$venvPy = Join-Path $WorkDir ".venv\Scripts\python.exe"
-if (-not (Test-Path $venvPy)) { Fail "virtualenv creation did not produce $venvPy" }
-
-Write-Step "installing agent dependencies (a minute or so)"
-& $venvPy -m pip install --quiet --upgrade pip
-if ($LASTEXITCODE -ne 0) { Fail "failed to upgrade pip in the agent virtualenv" }
-& $venvPy -m pip install --quiet "$WorkDir[agent]"
-if ($LASTEXITCODE -ne 0) { Fail "failed to install the agent's dependencies. Check network access to PyPI." }
-
-if (-not $useDocker) {
-    # The unsandboxed path runs train.py in this venv, so PyTorch must live here
-    # rather than inside the trainer image.
-    if ($hasGpu) {
-        Write-Step "installing PyTorch with CUDA support (~2.5 GB, one time)"
-        & $venvPy -m pip install --quiet torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
+    if ($useDocker) {
+        Write-Step "Docker is available: jobs will run in isolated containers (ADR-007)"
     } else {
-        Write-Step "installing CPU-only PyTorch (~200 MB, one time)"
-        & $venvPy -m pip install --quiet torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
+        Write-Host ""
+        Write-Host "  ----------------------------------------------------------------" -ForegroundColor Yellow
+        Write-Host "  Docker was not found, so jobs would run WITHOUT container isolation" -ForegroundColor Yellow
+        Write-Host "  ----------------------------------------------------------------" -ForegroundColor Yellow
+        Write-Host "  Training jobs would run as ordinary processes under your user"
+        Write-Host "  account. That means a job can read and write any file you can, has"
+        Write-Host "  your network access, and is not limited by the kernel."
+        Write-Host ""
+        Write-Host "  The only program run this way is this project's own trainer"
+        Write-Host "  (trainer/train.py), which you can read before agreeing. People"
+        Write-Host "  submitting jobs cannot supply code - only a dataset name from a"
+        Write-Host "  fixed list and range-checked numbers."
+        Write-Host ""
+        Write-Host "  Prefer full isolation? Install Docker Desktop first:"
+        Write-Host "  https://docs.docker.com/get-docker/"
+        Write-Host ""
+        $answer = Read-Host "  Continue without isolation? (type yes to accept)"
+        if ($answer -ne "yes") {
+            Write-Step "Stopped at your request. Nothing was installed."
+            return
+        }
     }
-    if ($LASTEXITCODE -ne 0) { Fail "failed to install PyTorch. Check network access and disk space." }
-    & $venvPy -m pip install --quiet boto3==1.35.99
-    if ($LASTEXITCODE -ne 0) { Fail "failed to install boto3 (needed for checkpointing)." }
 
-    # Prove the install actually works before claiming success.
-    $torchOk = & $venvPy -c "import torch; print(torch.cuda.is_available())" 2>$null
-    Write-Step "PyTorch installed (CUDA available: $torchOk)"
-    if ($hasGpu -and $torchOk -ne "True") {
-        Write-Host "[install] WARNING: an NVIDIA GPU was detected but PyTorch cannot use it." -ForegroundColor Yellow
-        Write-Host "[install]          This node will still contribute, on CPU. Updating your" -ForegroundColor Yellow
-        Write-Host "[install]          NVIDIA driver usually fixes this." -ForegroundColor Yellow
+    # --- GPU: honest either way ---------------------------------------------
+
+    $hasGpu = $false
+    if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+        try {
+            $gpuName = (nvidia-smi --query-gpu=name --format=csv,noheader 2>$null | Select-Object -First 1)
+            if ($gpuName) { $hasGpu = $true; Write-Step "NVIDIA GPU detected: $gpuName" }
+        } catch { }
+    }
+    if (-not $hasGpu) {
+        Write-Step "No NVIDIA GPU detected - this machine will join honestly as a CPU node."
+    }
+
+    # --- Download the agent from the orchestrator bootstrapping us -----------
+
+    try {
+        New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+        $bundle = Join-Path $WorkDir "agent-bundle.tar.gz"
+        Write-Step "downloading agent from $Orchestrator/agent-bundle.tar.gz"
+        Invoke-WebRequest -Uri "$Orchestrator/agent-bundle.tar.gz" -OutFile $bundle -TimeoutSec 180
+
+        Write-Step "extracting into $WorkDir"
+        # tar.exe ships with Windows 10 1803+ and Windows 11.
+        tar -xzf $bundle -C $WorkDir
+        if ($LASTEXITCODE -ne 0) { throw "tar failed to extract the bundle (is tar.exe present?)" }
+    } catch {
+        Write-Fail "could not download or extract the agent: $($_.Exception.Message)"
+        return
+    }
+
+    # --- Install into an isolated virtualenv ---------------------------------
+
+    try {
+        Write-Step "creating a virtualenv at $WorkDir\.venv"
+        & $pythonExe -m venv "$WorkDir\.venv"
+        $venvPy = Join-Path $WorkDir ".venv\Scripts\python.exe"
+        if (-not (Test-Path $venvPy)) { throw "virtualenv creation did not produce $venvPy" }
+
+        Write-Step "installing agent dependencies (about a minute)"
+        & $venvPy -m pip install --quiet --upgrade pip
+        if ($LASTEXITCODE -ne 0) { throw "could not upgrade pip" }
+        & $venvPy -m pip install --quiet "$WorkDir[agent]"
+        if ($LASTEXITCODE -ne 0) { throw "could not install agent dependencies (check network access to PyPI)" }
+    } catch {
+        Write-Fail $_.Exception.Message
+        return
+    }
+
+    if (-not $useDocker) {
+        try {
+            if ($hasGpu) {
+                Write-Step "installing PyTorch with CUDA (~2.5 GB, one time - go get a coffee)"
+                & $venvPy -m pip install --quiet torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
+            } else {
+                Write-Step "installing CPU-only PyTorch (~200 MB, one time)"
+                & $venvPy -m pip install --quiet torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
+            }
+            if ($LASTEXITCODE -ne 0) { throw "could not install PyTorch (check network access and free disk space)" }
+            & $venvPy -m pip install --quiet boto3==1.35.99
+            if ($LASTEXITCODE -ne 0) { throw "could not install boto3 (needed for checkpointing)" }
+
+            # Prove it works rather than assuming it did.
+            $torchOk = & $venvPy -c "import torch; print(torch.cuda.is_available())" 2>$null
+            Write-Step "PyTorch installed (CUDA available: $torchOk)"
+            if ($hasGpu -and $torchOk -ne "True") {
+                Write-Host "[install] NOTE: a GPU was detected but PyTorch cannot use it." -ForegroundColor Yellow
+                Write-Host "[install]       This machine will still contribute, on CPU." -ForegroundColor Yellow
+                Write-Host "[install]       Updating your NVIDIA driver usually fixes it." -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Fail $_.Exception.Message
+            return
+        }
+    }
+
+    # --- Enroll and run ------------------------------------------------------
+
+    Write-Step "starting the agent (enrolling, then heartbeating)"
+    Write-Step "state directory: $StateDir"
+    Write-Host ""
+    Write-Host "  This window must stay open while you are sharing." -ForegroundColor Green
+    Write-Host "  Press Ctrl+C to stop at any time." -ForegroundColor Green
+    Write-Host ""
+
+    $agentArgs = @(
+        "-m", "agent",
+        "--orchestrator", $Orchestrator,
+        "--enrollment-token", $Token,
+        "--state-dir", $StateDir
+    )
+    if (-not $useDocker) { $agentArgs += "--allow-unsandboxed" }
+
+    & $venvPy @agentArgs
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "the agent stopped with exit code $LASTEXITCODE (scroll up for the reason)."
     }
 }
 
-Write-Step "agent installed."
-
-# --- Enroll and run ----------------------------------------------------------
-
-Write-Step "starting the agent (enrolling, then heartbeating)"
-Write-Step "state directory: $StateDir"
-Write-Step "press Ctrl+C to stop sharing this machine."
-Write-Host ""
-
-$agentArgs = @("-m", "agent", "--orchestrator", $Orchestrator, "--enrollment-token", $Token, "--state-dir", $StateDir)
-if (-not $useDocker) { $agentArgs += "--allow-unsandboxed" }
-
-& $venvPy @agentArgs
-exit $LASTEXITCODE
+Invoke-GpuOrchestratorInstall

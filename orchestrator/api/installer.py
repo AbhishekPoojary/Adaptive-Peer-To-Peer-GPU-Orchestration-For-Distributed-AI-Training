@@ -19,7 +19,7 @@ import io
 import tarfile
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import PlainTextResponse, Response
 
 router = APIRouter()
@@ -34,30 +34,61 @@ _PYPROJECT = _REPO_ROOT / "pyproject.toml"
 _README = _REPO_ROOT / "README.md"
 
 
+#: Placeholder the installers carry; replaced at serve time with the address the
+#: peer actually fetched from. Without this the scripts fall back to a localhost
+#: default, which is correct only on the orchestrator's own machine — and is
+#: silently wrong on every peer, which is the whole audience.
+_ORCHESTRATOR_URL_PLACEHOLDER = "__ORCHESTRATOR_URL__"
+
+
+def _public_base_url(request: Request) -> str:
+    """The base URL this peer used to reach us, from the request itself.
+
+    A peer downloads the installer from wherever the orchestrator is actually
+    reachable — a LAN address, a Tailscale IP, a tunnel hostname — and that is
+    exactly the address its agent must dial. Reading it back off the request
+    means the operator never has to remember to pass it, and it cannot drift
+    from reality.
+
+    Honours ``X-Forwarded-Proto``/``X-Forwarded-Host`` because a tunnel or
+    reverse proxy terminates TLS in front of us, so ``request.url.scheme`` would
+    say "http" for a peer that really used HTTPS. These headers are only used to
+    build a default the caller can override with ORCH_URL, so a spoofed value
+    misconfigures the spoofer and nobody else.
+    """
+    forwarded_host = request.headers.get("x-forwarded-host")
+    host = forwarded_host or request.headers.get("host")
+    if not host:
+        return "http://localhost:8090"
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+    return f"{scheme}://{host}".rstrip("/")
+
+
+def _serve_script(path: Path, name: str, request: Request) -> str:
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"{name} is not available"
+        )
+    body = path.read_text(encoding="utf-8")
+    return body.replace(_ORCHESTRATOR_URL_PLACEHOLDER, _public_base_url(request))
+
+
 @router.get("/install.sh", response_class=PlainTextResponse)
-async def get_install_script() -> str:
+async def get_install_script(request: Request) -> str:
     """Serve the real bootstrap script. 404s honestly if it isn't present on
     this deployment rather than fabricating a body."""
-    if not _INSTALL_SCRIPT.is_file():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="install.sh is not available"
-        )
-    return _INSTALL_SCRIPT.read_text(encoding="utf-8")
+    return _serve_script(_INSTALL_SCRIPT, "install.sh", request)
 
 
 @router.get("/install.ps1", response_class=PlainTextResponse)
-async def get_install_script_powershell() -> str:
+async def get_install_script_powershell(request: Request) -> str:
     """Serve the native-Windows bootstrap script (ADR-007 addendum).
 
     The bash installer requires WSL2 on Windows, and GPU passthrough there needs
     the driver plus the container toolkit *inside* WSL — enough friction to lose
     most volunteers. This one runs in the PowerShell a Windows user already has.
     """
-    if not _INSTALL_SCRIPT_PS1.is_file():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="install.ps1 is not available"
-        )
-    return _INSTALL_SCRIPT_PS1.read_text(encoding="utf-8")
+    return _serve_script(_INSTALL_SCRIPT_PS1, "install.ps1", request)
 
 
 def _exclude_pycache(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:

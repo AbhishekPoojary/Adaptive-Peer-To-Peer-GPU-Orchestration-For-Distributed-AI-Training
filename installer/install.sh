@@ -23,7 +23,13 @@
 set -u
 set -o pipefail
 
-ORCHESTRATOR="http://localhost:8090"
+# Replaced by the orchestrator at serve time with the address this script was
+# actually downloaded from, so a peer never has to be told the URL separately.
+# The literal placeholder only survives when run straight from a checkout.
+ORCHESTRATOR="__ORCHESTRATOR_URL__"
+case "$ORCHESTRATOR" in
+    __*) ORCHESTRATOR="http://localhost:8090" ;;
+esac
 TOKEN=""
 STATE_DIR="${HOME:-$PWD}/.gpu-orchestrator-agent"
 WORKDIR="${HOME:-$PWD}/.gpu-orchestrator-agent-src"
