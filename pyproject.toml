@@ -3,7 +3,12 @@ name = "gpu-orchestrator"
 version = "0.1.0"
 description = "Decentralized P2P GPU orchestration for adaptive AI training — control plane, agent, trainer."
 readme = "README.md"
-requires-python = ">=3.11"
+# Upper bound is real, not caution: the pinned pydantic-core 2.27.2 publishes
+# Windows wheels only up to cp313. On 3.14 pip falls back to building it from
+# Rust source, which needs a MSVC linker most peers do not have — a volunteer
+# hit exactly that and the install died in a wall of cargo errors. Declaring the
+# bound here makes pip refuse cleanly instead. Raise it when the pins do.
+requires-python = ">=3.11,<3.14"
 license = { text = "MIT" }
 
 dependencies = [

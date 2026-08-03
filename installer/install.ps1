@@ -59,28 +59,59 @@ dashboard's "Add a node" button.
     $Orchestrator = $Orchestrator.TrimEnd('/')
     Write-Step "orchestrator = $Orchestrator"
 
-    # --- Python 3.11+ --------------------------------------------------------
+    # --- Python 3.11-3.13 ----------------------------------------------------
+    #
+    # The upper bound is real (see pyproject.toml): pydantic-core ships Windows
+    # wheels only up to cp313, so on 3.14 pip tries to compile it from Rust and
+    # dies without a MSVC linker. A volunteer hit exactly that.
+    #
+    # Windows machines commonly have several Pythons, so this looks for a
+    # COMPATIBLE one rather than taking the first it finds — `py -3.13` often
+    # exists alongside a too-new `python`.
 
     $pythonExe = $null
-    foreach ($candidate in @("python", "python3", "py")) {
-        if (-not (Get-Command $candidate -ErrorAction SilentlyContinue)) { continue }
+    $pythonPre = @()
+    $seen = @()
+    $candidates = @(
+        @("py", @("-3.13")), @("py", @("-3.12")), @("py", @("-3.11")),
+        @("python", @()), @("python3", @()), @("py", @())
+    )
+    foreach ($entry in $candidates) {
+        $exe = $entry[0]; $pre = $entry[1]
+        if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) { continue }
         try {
-            $ok = & $candidate -c "import sys; print(1 if sys.version_info >= (3,11) else 0)" 2>$null
-            if ($ok -eq "1") { $pythonExe = $candidate; break }
+            $probe = & $exe @pre -c "import sys;print('%d.%d' % sys.version_info[:2])" 2>$null
+            if (-not $probe) { continue }
+            $seen += $probe
+            $parts = $probe.Split('.')
+            $maj = [int]$parts[0]; $min = [int]$parts[1]
+            if ($maj -eq 3 -and $min -ge 11 -and $min -le 13) {
+                $pythonExe = $exe
+                $pythonPre = $pre
+                break
+            }
         } catch { continue }
     }
-    if (-not $pythonExe) {
-        Write-Fail @"
-Python 3.11 or newer was not found.
 
-Install it from https://www.python.org/downloads/
-IMPORTANT: tick "Add python.exe to PATH" during setup.
-Then CLOSE this window, open a new PowerShell, and paste the command again.
+    if (-not $pythonExe) {
+        $found = if ($seen.Count) { ($seen | Sort-Object -Unique) -join ', ' } else { 'none' }
+        Write-Fail @"
+No compatible Python found. Need 3.11, 3.12 or 3.13 (found: $found).
+
+Python 3.14 does NOT work yet: one of our dependencies has no prebuilt package
+for it, so your machine would have to compile it from source - which needs
+Visual Studio build tools. Not worth it; just install 3.13 alongside.
+
+  1. Get 3.13 from https://www.python.org/downloads/release/python-3130/
+  2. Tick "Add python.exe to PATH" during setup
+  3. CLOSE this window, open a new PowerShell, paste the command again
+
+Installing 3.13 will not remove or break the Python you already have.
 "@
         return
     }
-    $pyVersion = & $pythonExe -c "import platform; print(platform.python_version())"
-    Write-Step "Python OK: $pythonExe ($pyVersion)"
+    $pyVersion = & $pythonExe @pythonPre -c "import platform; print(platform.python_version())"
+    Write-Step "Python OK: $pythonExe $($pythonPre -join ' ') ($pyVersion)"
 
     # --- Reachability: fail here, not after a long install -------------------
 
@@ -173,15 +204,26 @@ orchestrator lives. Ask for the full URL and set it:
 
     try {
         Write-Step "creating a virtualenv at $WorkDir\.venv"
-        & $pythonExe -m venv "$WorkDir\.venv"
+        & $pythonExe @pythonPre -m venv "$WorkDir\.venv"
         $venvPy = Join-Path $WorkDir ".venv\Scripts\python.exe"
         if (-not (Test-Path $venvPy)) { throw "virtualenv creation did not produce $venvPy" }
 
         Write-Step "installing agent dependencies (about a minute)"
         & $venvPy -m pip install --quiet --upgrade pip
         if ($LASTEXITCODE -ne 0) { throw "could not upgrade pip" }
-        & $venvPy -m pip install --quiet "$WorkDir[agent]"
-        if ($LASTEXITCODE -ne 0) { throw "could not install agent dependencies (check network access to PyPI)" }
+        & $venvPy -m pip install "$WorkDir[agent]"
+        if ($LASTEXITCODE -ne 0) {
+            throw @"
+could not install the agent's dependencies.
+
+If the output above mentions 'link.exe not found', 'cargo', 'maturin' or
+'Building wheel ... did not run successfully', your Python version has no
+prebuilt package for one of our dependencies and pip tried to compile it.
+Install Python 3.13 and run this again - see the note above.
+
+Otherwise, check this machine can reach https://pypi.org.
+"@
+        }
     } catch {
         Write-Fail $_.Exception.Message
         return
