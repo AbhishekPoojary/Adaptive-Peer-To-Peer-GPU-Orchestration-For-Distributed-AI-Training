@@ -12,11 +12,16 @@ RUN apt-get update \
 
 COPY pyproject.toml README.md ./
 COPY orchestrator ./orchestrator
-# agent/ and installer/ are not imported by the running server; they are
-# served as static/bundled artifacts by orchestrator/api/installer.py so a new
-# peer can `curl .../install.sh | bash` and download this exact agent build
+# agent/, trainer/ and installer/ are not imported by the running server; they
+# are served as static/bundled artifacts by orchestrator/api/installer.py so a
+# new peer can `curl .../install.sh | bash` and download this exact build
 # without the repo needing a public git remote (M7).
+#
+# trainer/ must be here (ADR-007 addendum): a peer running unsandboxed executes
+# train.py directly instead of pulling the trainer image, and the agent bundle
+# is the only way it gets that file.
 COPY agent ./agent
+COPY trainer ./trainer
 COPY installer ./installer
 
 RUN pip install --no-cache-dir ".[server]"

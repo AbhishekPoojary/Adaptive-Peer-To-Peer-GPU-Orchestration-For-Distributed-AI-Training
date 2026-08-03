@@ -50,3 +50,24 @@ async def test_agent_bundle_is_a_valid_gzip_tarball_with_expected_contents(
     assert "pyproject.toml" in names
     assert any(n == "agent/main.py" or n.endswith("/agent/main.py") for n in names)
     assert any(n == "agent/__init__.py" or n.endswith("/agent/__init__.py") for n in names)
+    # trainer/train.py must travel with the bundle (ADR-007 addendum): a peer
+    # running unsandboxed executes it directly, and this is the only way it
+    # gets the file. Shipping without it produced a bundle that installed and
+    # enrolled cleanly, then failed at the first claimed lease — on somebody
+    # else's laptop, which is the worst place to discover it.
+    assert any(n == "trainer/train.py" or n.endswith("/trainer/train.py") for n in names)
+
+
+@pytest.mark.asyncio
+async def test_install_ps1_is_served_for_windows_peers(app_client: AsyncClient) -> None:
+    """The bash installer needs WSL2 on Windows, which is where most volunteers
+    give up. This one runs in the PowerShell they already have."""
+    resp = await app_client.get("/install.ps1")
+
+    assert resp.status_code == 200
+    body = resp.text
+    assert "agent-bundle.tar.gz" in body
+    # It must offer the unsandboxed path explicitly rather than silently
+    # choosing it, and must not require WSL2.
+    assert "--allow-unsandboxed" in body
+    assert "WITHOUT container isolation" in body

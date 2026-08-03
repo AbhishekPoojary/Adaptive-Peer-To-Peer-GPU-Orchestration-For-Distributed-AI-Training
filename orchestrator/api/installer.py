@@ -73,21 +73,34 @@ async def get_agent_bundle() -> Response:
     """Package the live ``agent/`` source + ``pyproject.toml`` this process is
     actually running into a gzipped tarball, built in memory per request (the
     agent package is a few dozen small .py files — negligible cost)."""
-    if not _AGENT_DIR.is_dir() or not _PYPROJECT.is_file():
+    # trainer/ is required, not optional: a peer running unsandboxed (ADR-007
+    # addendum) executes train.py directly, and this bundle is the only way it
+    # gets that file. An earlier version skipped it when absent, which shipped a
+    # silently incomplete bundle — the peer installed cleanly, enrolled, claimed
+    # work, and only then failed with "could not find trainer/train.py". Failing
+    # here instead makes a mis-built image obvious to the operator rather than
+    # to their friend.
+    missing = [
+        name
+        for name, path in (
+            ("agent/", _AGENT_DIR),
+            ("trainer/", _TRAINER_DIR),
+            ("pyproject.toml", _PYPROJECT),
+        )
+        if not (path.is_dir() or path.is_file())
+    ]
+    if missing:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="agent bundle is not available on this deployment",
+            detail=(
+                f"agent bundle is incomplete on this deployment (missing: "
+                f"{', '.join(missing)}). The orchestrator image must COPY them."
+            ),
         )
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         tar.add(_AGENT_DIR, arcname="agent", filter=_exclude_pycache)
-        # trainer/ travels with the bundle because a peer running unsandboxed
-        # (ADR-007 addendum) executes train.py directly instead of pulling the
-        # trainer image. It is a handful of small .py files, and shipping it
-        # unconditionally means the peer's copy is always exactly the code this
-        # orchestrator is running — the same guarantee the agent package gets.
-        if _TRAINER_DIR.is_dir():
-            tar.add(_TRAINER_DIR, arcname="trainer", filter=_exclude_pycache)
+        tar.add(_TRAINER_DIR, arcname="trainer", filter=_exclude_pycache)
         tar.add(_PYPROJECT, arcname="pyproject.toml")
         # pyproject.toml declares readme = "README.md"; setuptools reads that
         # file at build/metadata time, so it must travel with the bundle or a
