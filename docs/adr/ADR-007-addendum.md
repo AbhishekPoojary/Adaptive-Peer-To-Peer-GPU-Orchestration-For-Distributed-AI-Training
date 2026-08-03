@@ -101,5 +101,13 @@ before agreeing to run it.
 - `bench/` artifacts must record which path a run used, since an unsandboxed
   run has different performance characteristics (no container overhead, no
   cgroup limits) and comparing across them silently would be dishonest.
+- **The two paths run different PyTorch versions**, and that is deliberate. The
+  container is pinned to `torch 2.5.1` by its image; the unsandboxed installer
+  asks for `>=2.6,<3` because PyTorch publishes no Windows wheel for 2.5.1 on
+  Python 3.13 — a peer on 3.13 could not install the pinned version at all
+  (verified against the index; 2.6.0 is the first with a `cp313 win_amd64`
+  build). The trainer uses standard APIs and runs unchanged on both, but a
+  result produced on one path is not bit-identical to the other, and anything
+  comparing them must say which was used.
 - The agent bundle must now ship `trainer/` as well as `agent/`, because a peer
   running the subprocess path needs `train.py` locally.

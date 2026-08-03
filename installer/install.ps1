@@ -231,14 +231,33 @@ Otherwise, check this machine can reach https://pypi.org.
 
     if (-not $useDocker) {
         try {
+            # Deliberately a RANGE, not the trainer image's exact 2.5.1 pin. That
+            # pin is right for the container (the image is fixed and always
+            # available) and wrong here: PyTorch publishes no Windows wheel for
+            # torch 2.5.1 on Python 3.13, so a peer on 3.13 could not install it
+            # at all. Verified against the index, not guessed — 2.6.0 is the
+            # first release with a cp313 win_amd64 build. The trainer uses
+            # standard APIs and runs unchanged on 2.6+ (this project's own dev
+            # machine is on 2.6.0).
             if ($hasGpu) {
                 Write-Step "installing PyTorch with CUDA (~2.5 GB, one time - go get a coffee)"
-                & $venvPy -m pip install --quiet torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
+                & $venvPy -m pip install "torch>=2.6,<3" "torchvision>=0.21,<1" --index-url https://download.pytorch.org/whl/cu124
             } else {
                 Write-Step "installing CPU-only PyTorch (~200 MB, one time)"
-                & $venvPy -m pip install --quiet torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
+                & $venvPy -m pip install "torch>=2.6,<3" "torchvision>=0.21,<1" --index-url https://download.pytorch.org/whl/cpu
             }
-            if ($LASTEXITCODE -ne 0) { throw "could not install PyTorch (check network access and free disk space)" }
+            if ($LASTEXITCODE -ne 0) {
+                throw @"
+could not install PyTorch.
+
+If the output above says 'Could not find a version that satisfies', PyTorch
+publishes no build for this Python version on this platform. Python 3.13 is
+known good; 3.14 is not supported by PyTorch yet.
+
+Otherwise check network access to download.pytorch.org and free disk space
+(the CUDA build needs ~3 GB).
+"@
+            }
             & $venvPy -m pip install --quiet boto3==1.35.99
             if ($LASTEXITCODE -ne 0) { throw "could not install boto3 (needed for checkpointing)" }
 
