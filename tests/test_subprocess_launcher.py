@@ -175,11 +175,17 @@ def test_the_trainer_env_matches_the_container_path(tmp_path: Path) -> None:
 
 def test_a_missing_trainer_script_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A peer without train.py must fail its lease honestly, not appear to run
-    and report nothing."""
+    and report nothing.
+
+    Both search roots are redirected: on a machine that has actually run the
+    installer, the real ``~/.gpu-orchestrator-agent-src`` exists and would
+    satisfy the lookup, making this pass for the wrong reason.
+    """
     monkeypatch.delenv("TRAINER_SCRIPT", raising=False)
     monkeypatch.setattr(
         "agent.runtime.subprocess_launcher._PACKAGE_ROOT", tmp_path / "nowhere"
     )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "nohome"))
     with pytest.raises(TrainerSourceNotFoundError, match="train.py"):
         find_trainer_script()
 
@@ -187,6 +193,70 @@ def test_a_missing_trainer_script_raises(tmp_path: Path, monkeypatch: pytest.Mon
 def test_an_explicit_script_path_wins(tmp_path: Path) -> None:
     script = _fake_trainer(tmp_path, "pass")
     assert find_trainer_script(str(script)) == script
+
+
+def test_trainer_is_in_the_installed_package_set() -> None:
+    """pip must install trainer/ alongside agent/, or the unsandboxed path dies.
+
+    This is the bug that broke the first real peer. `pip install .[agent]` put
+    `agent` into site-packages and left `trainer/` behind in the extracted
+    source, so the agent enrolled, claimed work, and failed every lease with
+    "could not find trainer/train.py".
+
+    Every existing test passed throughout, because they run from a checkout
+    where `<repo>/trainer/train.py` sits exactly where the lookup expects. Only
+    the *installed* layout differs — so this asserts the packaging config
+    directly, which is the thing that was actually wrong.
+    """
+    import tomllib
+
+    repo_root = Path(__file__).resolve().parents[1]
+    config = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
+    include = config["tool"]["setuptools"]["packages"]["find"]["include"]
+
+    assert any(pattern.startswith("trainer") for pattern in include), (
+        "pyproject must install trainer* — without it a pip-installed agent "
+        f"cannot find train.py. Current include list: {include}"
+    )
+
+
+def test_the_extracted_bundle_is_a_fallback_location(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A peer whose install put trainer/ only in the extracted source — the
+    exact broken state the first peer was in — must still find it."""
+    monkeypatch.delenv("TRAINER_SCRIPT", raising=False)
+    monkeypatch.setattr(
+        "agent.runtime.subprocess_launcher._PACKAGE_ROOT", tmp_path / "site-packages"
+    )
+    fake_home = tmp_path / "home"
+    bundle_trainer = fake_home / ".gpu-orchestrator-agent-src" / "trainer"
+    bundle_trainer.mkdir(parents=True)
+    (bundle_trainer / "train.py").write_text("pass", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    assert find_trainer_script() == bundle_trainer / "train.py"
+
+
+def test_the_error_names_every_path_it_tried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first peer's failure said only "could not find trainer/train.py",
+    which was true and useless — it took reading the source to work out where it
+    had looked. The message must be diagnosable on its own."""
+    monkeypatch.delenv("TRAINER_SCRIPT", raising=False)
+    monkeypatch.setattr(
+        "agent.runtime.subprocess_launcher._PACKAGE_ROOT", tmp_path / "nowhere"
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "nohome"))
+
+    with pytest.raises(TrainerSourceNotFoundError) as excinfo:
+        find_trainer_script()
+
+    message = str(excinfo.value)
+    assert "Looked in:" in message
+    assert "nowhere" in message
+    assert ".gpu-orchestrator-agent-src" in message
 
 
 # --- The memory guard (a mitigation, not cgroups) -----------------------------

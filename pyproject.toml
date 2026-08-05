@@ -60,7 +60,13 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["orchestrator*", "agent*", "bench*"]
+# trainer* is here because a peer running unsandboxed (ADR-007 addendum)
+# executes trainer/train.py as a child process. Without it, pip installs `agent`
+# into site-packages and leaves trainer/ behind in the extracted source, so the
+# agent enrolls, claims work, and fails every lease with "could not find
+# trainer/train.py" — which is exactly what happened to the first real peer.
+# Running from a checkout hid it, because there the layout works by accident.
+include = ["orchestrator*", "agent*", "bench*", "trainer*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

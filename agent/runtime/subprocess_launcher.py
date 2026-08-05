@@ -51,22 +51,33 @@ class TrainerSourceNotFoundError(Exception):
 def find_trainer_script(explicit: str | None = None) -> Path:
     """Locate ``train.py``. Raises :class:`TrainerSourceNotFoundError` if absent.
 
-    Checked in order: an explicit path, the ``TRAINER_SCRIPT`` environment
-    variable, then ``trainer/train.py`` beside the installed agent package —
-    which is where the agent bundle puts it.
+    Searched in order: an explicit path, ``TRAINER_SCRIPT``, ``trainer/`` beside
+    the installed agent package (where pip puts it — see the ``trainer*`` entry
+    in pyproject's package list), then the extracted agent bundle's source
+    directory, which is where the installer leaves a copy.
+
+    The last location is a genuine fallback, not belt-and-braces: the first real
+    peer failed every lease because ``trainer`` was not in the installed package
+    set, so only the extracted copy existed. Looking in both means a peer whose
+    install is half-right still works, and the error below names every path
+    tried so the next failure is diagnosable from the message alone.
     """
+    home = Path.home()
     candidates = [
         Path(explicit) if explicit else None,
         Path(os.environ["TRAINER_SCRIPT"]) if os.environ.get("TRAINER_SCRIPT") else None,
         _PACKAGE_ROOT / "trainer" / "train.py",
+        home / ".gpu-orchestrator-agent-src" / "trainer" / "train.py",
     ]
+    tried = [str(c) for c in candidates if c is not None]
     for candidate in candidates:
         if candidate is not None and candidate.is_file():
             return candidate
     raise TrainerSourceNotFoundError(
-        "could not find trainer/train.py on this machine. The agent bundle "
-        "ships it next to the agent package; re-run the installer, or point "
-        "TRAINER_SCRIPT at a checkout."
+        "could not find trainer/train.py on this machine. Looked in: "
+        + "; ".join(tried)
+        + ". Re-run the installer, or set TRAINER_SCRIPT to a checkout's "
+        "trainer/train.py."
     )
 
 
