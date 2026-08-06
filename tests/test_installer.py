@@ -99,6 +99,28 @@ async def test_a_tls_terminating_tunnel_yields_an_https_url(
 
 
 @pytest.mark.asyncio
+async def test_the_installer_carries_this_deployment_s_trainer_image(
+    app_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A peer must launch the image this orchestrator is configured for.
+
+    Told out of band, the fleet drifts onto mixed images and nobody notices;
+    served from config, a published reference reaches every peer automatically
+    the moment the operator sets TRAINER_IMAGE.
+    """
+    from orchestrator.core.config import get_settings
+
+    monkeypatch.setenv("TRAINER_IMAGE", "someuser/gpu-orchestrator-trainer:v2")
+    get_settings.cache_clear()
+    try:
+        body = (await app_client.get("/install.ps1")).text
+        assert "__TRAINER_IMAGE__" not in body, "the placeholder must be substituted"
+        assert "someuser/gpu-orchestrator-trainer:v2" in body
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
 async def test_install_ps1_never_calls_exit_at_top_level(
     app_client: AsyncClient,
 ) -> None:

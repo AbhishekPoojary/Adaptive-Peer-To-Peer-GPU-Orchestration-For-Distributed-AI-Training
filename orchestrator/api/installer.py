@@ -22,6 +22,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import PlainTextResponse, Response
 
+from orchestrator.core.config import get_settings
+
 router = APIRouter()
 
 # orchestrator/api/installer.py -> orchestrator/api -> orchestrator -> repo root
@@ -64,13 +66,20 @@ def _public_base_url(request: Request) -> str:
     return f"{scheme}://{host}".rstrip("/")
 
 
+#: Replaced at serve time with this deployment's configured trainer image, so a
+#: peer is never told the name out of band and the fleet cannot end up running
+#: mixed images.
+_TRAINER_IMAGE_PLACEHOLDER = "__TRAINER_IMAGE__"
+
+
 def _serve_script(path: Path, name: str, request: Request) -> str:
     if not path.is_file():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"{name} is not available"
         )
     body = path.read_text(encoding="utf-8")
-    return body.replace(_ORCHESTRATOR_URL_PLACEHOLDER, _public_base_url(request))
+    body = body.replace(_ORCHESTRATOR_URL_PLACEHOLDER, _public_base_url(request))
+    return body.replace(_TRAINER_IMAGE_PLACEHOLDER, get_settings().trainer_image)
 
 
 @router.get("/install.sh", response_class=PlainTextResponse)

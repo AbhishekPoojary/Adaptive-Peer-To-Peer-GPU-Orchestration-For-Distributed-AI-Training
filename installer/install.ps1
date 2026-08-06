@@ -33,8 +33,13 @@ function Invoke-GpuOrchestratorInstall {
                     else { 'http://localhost:8090' }
     $StateDir     = "$env:USERPROFILE\.gpu-orchestrator-agent"
     $WorkDir      = "$env:USERPROFILE\.gpu-orchestrator-agent-src"
-    # Must match agent/runtime/docker_launcher.py's DEFAULT_TRAINER_IMAGE.
-    $TrainerImage = "gpu-orchestrator-trainer:latest"
+    # Substituted by the orchestrator at serve time with the image THIS
+    # deployment uses, so a peer is never told it out of band and the fleet
+    # cannot drift onto mixed images. The literal placeholder only survives
+    # when the file is run straight from a checkout.
+    $servedImage  = '__TRAINER_IMAGE__'
+    $TrainerImage = if ($servedImage -notmatch '^__') { $servedImage }
+                    else { 'gpu-orchestrator-trainer:latest' }
     # The bundle is extracted later, but the image check below may need to
     # build from it; same path, named separately so the intent is obvious.
     $WorkDirPending = $WorkDir
@@ -174,6 +179,13 @@ orchestrator lives. Ask for the full URL and set it:
         # an auth problem and is nothing of the sort. A real peer hit exactly
         # that, so this is checked before anything is installed.
         docker image inspect $TrainerImage *> $null
+        if ($LASTEXITCODE -ne 0) {
+            # A published image just works: pull it and carry on with full
+            # isolation. Only fall through to the awkward choice below when the
+            # image genuinely cannot be obtained (i.e. it was never published).
+            Write-Step "trainer image not local; trying to pull $TrainerImage"
+            docker pull $TrainerImage *> $null
+        }
         if ($LASTEXITCODE -ne 0) {
             Write-Host ""
             Write-Host "  ----------------------------------------------------------------" -ForegroundColor Yellow
@@ -334,7 +346,8 @@ Otherwise check network access to download.pytorch.org and free disk space
         "-m", "agent",
         "--orchestrator", $Orchestrator,
         "--enrollment-token", $Token,
-        "--state-dir", $StateDir
+        "--state-dir", $StateDir,
+        "--trainer-image", $TrainerImage
     )
     if (-not $useDocker) { $agentArgs += "--allow-unsandboxed" }
 

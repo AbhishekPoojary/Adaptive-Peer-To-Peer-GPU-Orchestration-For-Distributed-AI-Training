@@ -133,6 +133,14 @@ class Settings(BaseSettings):
     # merely slow to poll.
     failed_attempt_backoff_seconds: float = 45.0
 
+    # Trainer image every peer launches. Served into the installers so a peer
+    # never has to be told it separately and the fleet cannot drift onto mixed
+    # images. The default is the locally-built name, which only exists on a
+    # machine that built it — set this to a published reference
+    # (e.g. docker.io/<user>/gpu-orchestrator-trainer:latest) and peers with
+    # Docker will simply pull it.
+    trainer_image: str = "gpu-orchestrator-trainer:latest"
+
     # --- Distributed training / rendezvous (ADR-005, M5) ---
     # TCP port the c10d rendezvous host binds for a multi-rank cohort; every rank
     # dials <rendezvous host>:<this port>. High port so no CAP_NET_BIND_SERVICE
