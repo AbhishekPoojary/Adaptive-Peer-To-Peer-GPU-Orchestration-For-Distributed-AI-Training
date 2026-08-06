@@ -56,7 +56,11 @@ from agent.leases import (
     renew_lease,
 )
 from agent.metrics_server import AgentMetricsState, start_metrics_server
-from agent.runtime.docker_launcher import RendezvousSpec, TrainerLaunchConfig
+from agent.runtime.docker_launcher import (
+    RendezvousSpec,
+    TrainerLaunchConfig,
+    trainer_image_available,
+)
 from agent.runtime.execution import DockerLaunchError, ExecutionResult, run_lease_execution
 from agent.telemetry.latency import RttEwma, Stopwatch
 from agent.telemetry.nvml import GpuInventoryEntry, GpuTelemetryEntry, collect_gpu_telemetry
@@ -612,6 +616,59 @@ async def _service_lease(
     return executing
 
 
+def _handle_missing_trainer_image(
+    *, image: str, allow_unsandboxed: bool, memory_limit: str
+) -> docker.DockerClient | None:
+    """Decide what a Docker-capable peer does when it has no trainer image.
+
+    The image is built locally and pushed to no registry, so a peer that has
+    never built it cannot obtain it. Returning ``None`` routes execution down
+    the unsandboxed path (the caller treats a null client that way), which is
+    both available and lighter here — building the image pulls a ~7 GB CUDA
+    base, while the subprocess path needs only PyTorch.
+
+    Without consent there is nothing safe to fall back to, so the node stays
+    enrolled and honest: it will fail claimed leases rather than pretend.
+    """
+    if allow_unsandboxed:
+        logger.warning(
+            "Docker is available but the trainer image %s is not on this machine, "
+            "and it is published to no registry — so Docker cannot run it. "
+            "Falling back to the unsandboxed path, which was permitted.",
+            image,
+        )
+        _log_unsandboxed_consent(
+            RuntimeError(f"trainer image {image} is not present"), memory_limit
+        )
+        return None
+
+    logger.error(
+        "\n"
+        "  ────────────────────────────────────────────────────────────────\n"
+        "  CANNOT RUN JOBS: the trainer image is missing\n"
+        "  ────────────────────────────────────────────────────────────────\n"
+        "  Docker works here, but the image %s is not on this machine and is\n"
+        "  published to no registry, so Docker cannot pull it. Every claimed\n"
+        "  lease will fail until this is fixed.\n"
+        "\n"
+        "  Pick one:\n"
+        "\n"
+        "  1. Run without a container (smaller download, no image needed):\n"
+        "       re-run the installer and accept the unsandboxed option, or add\n"
+        "       --allow-unsandboxed to the agent command.\n"
+        "\n"
+        "  2. Build the image yourself from the files already downloaded:\n"
+        "       docker build -t %s \\\n"
+        "         -f ~/.gpu-orchestrator-agent-src/trainer/Dockerfile \\\n"
+        "         ~/.gpu-orchestrator-agent-src\n"
+        "     (pulls a ~7 GB CUDA base image the first time)\n"
+        "  ────────────────────────────────────────────────────────────────",
+        image,
+        image,
+    )
+    return None
+
+
 def _log_unsandboxed_consent(docker_error: Exception, memory_limit: str) -> None:
     """State plainly what running without a container gives up (ADR-007 addendum).
 
@@ -861,7 +918,25 @@ async def run(args: argparse.Namespace) -> None:
             try:
                 docker_client = docker.from_env()
                 docker_client.ping()
-                logger.info("Docker daemon reachable: this node can execute training jobs")
+                # Docker being installed is not the same fact as Docker being
+                # able to run our trainer. The image is built locally and
+                # published to no registry, so on a peer that has never built
+                # it containers.run() tries to PULL and dies with a registry
+                # 404 that reads like an auth failure. Check now and say what
+                # is really wrong, rather than failing every claimed lease with
+                # "pull access denied".
+                if trainer_image_available(docker_client, launch_config.image):
+                    logger.info(
+                        "Docker reachable and trainer image %s present: this node "
+                        "can execute training jobs in containers",
+                        launch_config.image,
+                    )
+                else:
+                    docker_client = _handle_missing_trainer_image(
+                        image=launch_config.image,
+                        allow_unsandboxed=args.allow_unsandboxed,
+                        memory_limit=launch_config.memory_limit,
+                    )
             except Exception as exc:  # noqa: BLE001 - any Docker SDK/daemon failure
                 if args.allow_unsandboxed:
                     _log_unsandboxed_consent(exc, launch_config.memory_limit)

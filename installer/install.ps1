@@ -33,6 +33,11 @@ function Invoke-GpuOrchestratorInstall {
                     else { 'http://localhost:8090' }
     $StateDir     = "$env:USERPROFILE\.gpu-orchestrator-agent"
     $WorkDir      = "$env:USERPROFILE\.gpu-orchestrator-agent-src"
+    # Must match agent/runtime/docker_launcher.py's DEFAULT_TRAINER_IMAGE.
+    $TrainerImage = "gpu-orchestrator-trainer:latest"
+    # The bundle is extracted later, but the image check below may need to
+    # build from it; same path, named separately so the intent is obvious.
+    $WorkDirPending = $WorkDir
 
     function Write-Step { param($m) Write-Host "[install] $m" }
     function Write-Fail {
@@ -134,6 +139,23 @@ orchestrator lives. Ask for the full URL and set it:
         return
     }
 
+    # --- Download the agent from the orchestrator bootstrapping us -----------
+
+    try {
+        New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+        $bundle = Join-Path $WorkDir "agent-bundle.tar.gz"
+        Write-Step "downloading agent from $Orchestrator/agent-bundle.tar.gz"
+        Invoke-WebRequest -Uri "$Orchestrator/agent-bundle.tar.gz" -OutFile $bundle -TimeoutSec 180
+
+        Write-Step "extracting into $WorkDir"
+        # tar.exe ships with Windows 10 1803+ and Windows 11.
+        tar -xzf $bundle -C $WorkDir
+        if ($LASTEXITCODE -ne 0) { throw "tar failed to extract the bundle (is tar.exe present?)" }
+    } catch {
+        Write-Fail "could not download or extract the agent: $($_.Exception.Message)"
+        return
+    }
+
     # --- Docker is optional: present = isolation, absent = ask for consent ---
 
     $useDocker = $false
@@ -145,8 +167,49 @@ orchestrator lives. Ask for the full URL and set it:
     }
 
     if ($useDocker) {
-        Write-Step "Docker is available: jobs will run in isolated containers (ADR-007)"
-    } else {
+        # Docker being installed is not the same fact as Docker being able to
+        # run our trainer. The image is built locally and published to no
+        # registry, so a peer that has never built it gets a bare registry 404
+        # ("pull access denied") on its first claimed lease — which reads like
+        # an auth problem and is nothing of the sort. A real peer hit exactly
+        # that, so this is checked before anything is installed.
+        docker image inspect $TrainerImage *> $null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ""
+            Write-Host "  ----------------------------------------------------------------" -ForegroundColor Yellow
+            Write-Host "  Docker works here, but the trainer image is not on this machine" -ForegroundColor Yellow
+            Write-Host "  ----------------------------------------------------------------" -ForegroundColor Yellow
+            Write-Host "  The image ($TrainerImage) is built locally by whoever"
+            Write-Host "  runs the orchestrator and is not published anywhere, so Docker"
+            Write-Host "  cannot download it. Two ways forward:"
+            Write-Host ""
+            Write-Host "   [1] Run without a container  (recommended)" -ForegroundColor Green
+            Write-Host "       Downloads only PyTorch (~200 MB CPU / ~2.5 GB CUDA)."
+            Write-Host "       Jobs run as normal processes under your account - no"
+            Write-Host "       container isolation. Details shown before you confirm."
+            Write-Host ""
+            Write-Host "   [2] Build the image here"
+            Write-Host "       Full container isolation, but pulls a ~7 GB CUDA base"
+            Write-Host "       image first and needs GPU passthrough set up for Docker."
+            Write-Host ""
+            $choice = Read-Host "  Choose 1 or 2"
+            if ($choice -eq "2") {
+                Write-Step "building $TrainerImage (this pulls several GB the first time)"
+                docker build -t $TrainerImage -f "$WorkDirPending	rainer\Dockerfile" $WorkDirPending
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Fail "the image build failed (scroll up). You can re-run and choose 1 instead."
+                    return
+                }
+                Write-Step "image built: jobs will run in isolated containers"
+            } else {
+                Write-Step "will run without container isolation"
+                $useDocker = $false
+            }
+        } else {
+            Write-Step "Docker is available and the trainer image is present (ADR-007 isolation)"
+        }
+    }
+    if (-not $useDocker) {
         Write-Host ""
         Write-Host "  ----------------------------------------------------------------" -ForegroundColor Yellow
         Write-Host "  Docker was not found, so jobs would run WITHOUT container isolation" -ForegroundColor Yellow
@@ -181,23 +244,6 @@ orchestrator lives. Ask for the full URL and set it:
     }
     if (-not $hasGpu) {
         Write-Step "No NVIDIA GPU detected - this machine will join honestly as a CPU node."
-    }
-
-    # --- Download the agent from the orchestrator bootstrapping us -----------
-
-    try {
-        New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
-        $bundle = Join-Path $WorkDir "agent-bundle.tar.gz"
-        Write-Step "downloading agent from $Orchestrator/agent-bundle.tar.gz"
-        Invoke-WebRequest -Uri "$Orchestrator/agent-bundle.tar.gz" -OutFile $bundle -TimeoutSec 180
-
-        Write-Step "extracting into $WorkDir"
-        # tar.exe ships with Windows 10 1803+ and Windows 11.
-        tar -xzf $bundle -C $WorkDir
-        if ($LASTEXITCODE -ne 0) { throw "tar failed to extract the bundle (is tar.exe present?)" }
-    } catch {
-        Write-Fail "could not download or extract the agent: $($_.Exception.Message)"
-        return
     }
 
     # --- Install into an isolated virtualenv ---------------------------------

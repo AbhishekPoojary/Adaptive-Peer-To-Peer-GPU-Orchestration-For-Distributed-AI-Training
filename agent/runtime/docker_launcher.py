@@ -283,6 +283,32 @@ def ensure_rendezvous_network(client: docker.DockerClient, *, name: str) -> None
         logger.info("rendezvous network %r already present (%s)", name, exc)
 
 
+def trainer_image_available(client: docker.DockerClient, image: str) -> bool:
+    """True iff ``image`` is already present on this machine.
+
+    Checked once at agent startup, because "Docker is installed" and "Docker
+    can run our trainer" are different facts and only the second one matters.
+    The trainer image is built locally and published to no registry, so on a
+    peer that has never built it ``containers.run`` tries to *pull* it and
+    fails with a bare registry 404:
+
+        pull access denied for gpu-orchestrator-trainer, repository does not
+        exist or may require 'docker login'
+
+    which reads like an auth problem and is nothing of the sort. Detecting it
+    up front lets the agent say what is actually wrong, and fall back to the
+    unsandboxed path when that has been permitted.
+    """
+    try:
+        client.images.get(image)
+        return True
+    except docker.errors.ImageNotFound:
+        return False
+    except docker.errors.APIError as exc:  # daemon reachable but unhappy
+        logger.warning("could not check for the trainer image %s: %s", image, exc)
+        return False
+
+
 def launch_trainer_container(client: docker.DockerClient, *, run_kwargs: dict[str, Any]) -> Any:
     """Start the trainer container for real. Raises on any Docker-level launch
     failure (missing image, GPU request rejected, daemon unreachable, ...) —
