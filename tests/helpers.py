@@ -241,18 +241,30 @@ def auth_headers(token: str) -> dict[str, str]:
 
 
 async def seed_user(
-    session: AsyncSession, *, username: str, role: UserRole
+    session: AsyncSession,
+    *,
+    username: str,
+    role: UserRole,
+    email: str | None = None,
+    google_sub: str | None = None,
+    with_password: bool = True,
 ) -> User:
     """Insert a user with the pre-computed test password hash. Commits.
 
     Deliberately bypasses ``services.users.create_user`` so setup does not pay
     the scrypt cost per test — the row it writes is byte-for-byte what
     ``create_user`` would have written for the same password.
+
+    ``email``/``google_sub`` support the Google sign-in tests (ADR-012 addendum);
+    ``with_password=False`` seeds a Google-only account, whose ``password_hash``
+    is NULL exactly as ``create_user(password=None)`` would leave it.
     """
     user = User(
         id=uuid.uuid4(),
         username=username,
-        password_hash=_TEST_PASSWORD_HASH,
+        password_hash=_TEST_PASSWORD_HASH if with_password else None,
+        email=email.strip().lower() if email is not None else None,
+        google_sub=google_sub,
         role=role,
     )
     session.add(user)

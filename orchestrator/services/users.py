@@ -1,11 +1,17 @@
-"""User account service (ADR-012): creation and password authentication.
+"""User account service (ADR-012): creation, password and Google authentication.
 
 Authentication deliberately does the same amount of work whether or not the
 username exists — see :func:`authenticate_user`.
+
+Google sign-in (ADR-012 addendum) lands here already verified: by the time
+:func:`authenticate_google_identity` is called, :mod:`google_oidc` has proved
+Google asserted the identity. This module's only job is deciding whether that
+identity corresponds to an account, and it never creates one.
 """
 
 from __future__ import annotations
 
+import enum
 import uuid
 
 from sqlalchemy import func, select, update
@@ -14,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.core.security import hash_password, verify_password
 from orchestrator.models.user import User, UserRole
+from orchestrator.services.google_oidc import GoogleIdentity
 
 #: A syntactically valid scrypt hash of a random throwaway password, computed
 #: once at import. authenticate_user verifies the submitted password against
@@ -28,29 +35,55 @@ MIN_PASSWORD_LENGTH = 12
 
 
 class UserExistsError(Exception):
-    """Raised when the requested username is already taken."""
+    """Raised when the requested username or email is already taken."""
 
 
 class WeakPasswordError(Exception):
     """Raised when a password fails the length floor."""
 
 
-async def create_user(
-    session: AsyncSession, *, username: str, password: str, role: UserRole
-) -> User:
-    """Create an account with a scrypt-hashed password. Caller commits.
+class NoCredentialError(Exception):
+    """Raised when an account would be created with no way to sign in at all.
 
-    Uniqueness is enforced by the database's unique index and the resulting
-    IntegrityError is translated here, rather than by a check-then-insert that
-    two concurrent creations could both pass.
+    A row with neither a password nor an email is unreachable by both auth paths.
+    Creating one silently would look like success and produce an account nobody
+    can use, so it is refused at the boundary.
     """
-    if len(password) < MIN_PASSWORD_LENGTH:
+
+
+async def create_user(
+    session: AsyncSession,
+    *,
+    username: str,
+    password: str | None,
+    role: UserRole,
+    email: str | None = None,
+) -> User:
+    """Create an account. Caller commits.
+
+    ``password`` may be ``None`` to create a Google-only account (ADR-012
+    addendum), in which case ``email`` is required — otherwise the row would have
+    no credential of either kind and nobody could ever sign in to it.
+
+    Uniqueness is enforced by the database's unique indexes and the resulting
+    IntegrityError is translated here, rather than by a check-then-insert that two
+    concurrent creations could both pass.
+    """
+    normalized_email = normalize_email(email) if email is not None else None
+
+    if password is None and normalized_email is None:
+        raise NoCredentialError(
+            "an account needs either a password or an email to sign in with Google"
+        )
+    if password is not None and len(password) < MIN_PASSWORD_LENGTH:
         raise WeakPasswordError(
             f"password must be at least {MIN_PASSWORD_LENGTH} characters"
         )
+
     user = User(
         username=username,
-        password_hash=hash_password(password),
+        password_hash=hash_password(password) if password is not None else None,
+        email=normalized_email,
         role=role,
     )
     session.add(user)
@@ -58,6 +91,13 @@ async def create_user(
         await session.flush()
     except IntegrityError as exc:
         await session.rollback()
+        # Name the field that actually collided. "username is taken" when the
+        # real clash was the email sends an admin renaming the wrong thing.
+        detail = str(exc.orig) if exc.orig is not None else str(exc)
+        if "ix_users_email" in detail:
+            raise UserExistsError(
+                f"email {normalized_email!r} is already on another account"
+            ) from exc
         raise UserExistsError(f"username {username!r} is already taken") from exc
     await session.refresh(user)
     return user
@@ -82,6 +122,13 @@ async def authenticate_user(
     if user is None:
         verify_password(password, _DUMMY_HASH)
         return None
+    if user.password_hash is None:
+        # A Google-only account (ADR-012 addendum). NULL is a refusal, never a
+        # wildcard: no password can satisfy it. The dummy KDF still runs so the
+        # timing does not reveal that this username signs in with Google —
+        # which would otherwise let a prober map the accounts worth phishing.
+        verify_password(password, _DUMMY_HASH)
+        return None
     if not verify_password(password, user.password_hash):
         return None
     if not user.is_active:
@@ -89,6 +136,106 @@ async def authenticate_user(
         # flag before doing the KDF work would reintroduce the timing signal.
         return None
     return user
+
+
+# --- Google sign-in (ADR-012 addendum) ---------------------------------------
+
+
+def normalize_email(email: str) -> str:
+    """Return the form of ``email`` used for storage and lookup.
+
+    Lowercased and stripped, so an admin who types ``Priya@Example.com`` and a
+    Google token carrying ``priya@example.com`` describe the same account. The
+    local part of an address is technically case-sensitive per RFC 5321, but no
+    mail provider in practice treats it that way, and matching case-sensitively
+    here would produce a sign-in that fails for reasons invisible to the user.
+
+    Nothing else is normalized. Notably Gmail's dot-insensitivity and ``+tag``
+    suffixes are left alone: collapsing them would silently merge addresses that
+    an admin entered as distinct, and this system cannot afford to guess that two
+    identities are the same person.
+    """
+    return email.strip().lower()
+
+
+class GoogleAuthOutcome(enum.Enum):
+    """Why a verified Google identity was or was not admitted.
+
+    Separate from the HTTP layer so the reason can be logged precisely while the
+    client still receives one flat message (see api.auth).
+    """
+
+    #: Matched an enabled account. The user is returned.
+    OK = "OK"
+    #: Google's assertion was valid, but no account carries this identity.
+    #: Deliberately not a signup: an account here is permission to run
+    #: containers on other people's machines.
+    NO_ACCOUNT = "NO_ACCOUNT"
+    #: The account exists but has been disabled.
+    DISABLED = "DISABLED"
+    #: The email matches an account already bound to a *different* Google
+    #: subject. Refused rather than rebound — see :func:`authenticate_google_identity`.
+    SUBJECT_MISMATCH = "SUBJECT_MISMATCH"
+
+
+async def get_user_by_google_sub(
+    session: AsyncSession, *, google_sub: str
+) -> User | None:
+    """Look up an account by Google's immutable subject identifier."""
+    result = await session.execute(select(User).where(User.google_sub == google_sub))
+    return result.scalar_one_or_none()
+
+
+async def get_user_by_email(session: AsyncSession, *, email: str) -> User | None:
+    """Look up an account by normalized email."""
+    result = await session.execute(
+        select(User).where(User.email == normalize_email(email))
+    )
+    return result.scalar_one_or_none()
+
+
+async def authenticate_google_identity(
+    session: AsyncSession, *, identity: GoogleIdentity
+) -> tuple[User | None, GoogleAuthOutcome]:
+    """Map a *already-verified* Google identity to an account. Caller commits.
+
+    Matching is by ``google_sub`` first and email only as a fallback, because the
+    two claims have different durability. ``sub`` is immutable for the life of
+    the Google account; an email address — especially a Workspace or school one —
+    can be reassigned to a different human after the original holder leaves. If
+    email were the standing match, whoever inherits ``priya@college.edu`` would
+    inherit Priya's fleet access.
+
+    So email is the *introduction* and ``sub`` is the *identity*: the first
+    successful sign-in binds ``sub`` to the row (trust on first use), and every
+    later sign-in matches on that. An email whose account is already bound to a
+    different ``sub`` is refused outright rather than rebound, because a rebind
+    is indistinguishable from exactly the takeover described above.
+
+    This function never creates an account. An unrecognized identity is a
+    :attr:`GoogleAuthOutcome.NO_ACCOUNT` refusal, and that is the whole reason
+    the addendum can add Google sign-in without weakening ADR-012's premise.
+    """
+    user = await get_user_by_google_sub(session, google_sub=identity.subject)
+
+    if user is None:
+        # First sign-in for this Google account: fall back to the email an admin
+        # set in advance, and bind the subject if it fits.
+        candidate = await get_user_by_email(session, email=identity.email)
+        if candidate is None:
+            return None, GoogleAuthOutcome.NO_ACCOUNT
+        if candidate.google_sub is not None:
+            # The address now belongs to someone other than whoever first signed
+            # in with it. Refuse; an admin must intervene deliberately.
+            return None, GoogleAuthOutcome.SUBJECT_MISMATCH
+        if not candidate.is_active:
+            return None, GoogleAuthOutcome.DISABLED
+        candidate.google_sub = identity.subject
+        user = candidate
+    elif not user.is_active:
+        return None, GoogleAuthOutcome.DISABLED
+
+    return user, GoogleAuthOutcome.OK
 
 
 async def record_login(session: AsyncSession, *, user_id: uuid.UUID) -> None:

@@ -26,9 +26,13 @@ export const api = createClient<paths>({ baseUrl: "/api" });
  * because each call site decided its own auth. A request that forgets its
  * credential here is not possible.
  *
- * `/auth/login` is exempt from the 401 handling — a wrong password is a form
- * error to show the user, not an expired session to sign them out of.
+ * The sign-in endpoints are exempt from the 401 handling — a wrong password or
+ * a refused Google identity is a form error to show the user, not an expired
+ * session to sign them out of. `/auth/google` is on that list for exactly the
+ * same reason as `/auth/login`: nobody is signed in yet when it 401s.
  */
+const SIGN_IN_PATHS = ["/auth/login", "/auth/google"];
+
 api.use({
   onRequest({ request }) {
     const token = getToken();
@@ -36,7 +40,8 @@ api.use({
     return request;
   },
   onResponse({ request, response }) {
-    if (response.status === 401 && !request.url.endsWith("/auth/login")) {
+    const isSignIn = SIGN_IN_PATHS.some((path) => request.url.endsWith(path));
+    if (response.status === 401 && !isSignIn) {
       // The token expired or was revoked server-side. Drop it so the route
       // guard redirects to the login page instead of the UI silently showing
       // stale data behind a dead session.

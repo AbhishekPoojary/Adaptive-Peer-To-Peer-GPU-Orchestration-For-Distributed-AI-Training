@@ -58,7 +58,30 @@ class User(Base):
     # scrypt hash in orchestrator.core.security's self-describing format
     # ("scrypt$n$r$p$salt$hash"). The plaintext password is never stored,
     # logged, or returned by any endpoint.
-    password_hash: Mapped[str] = mapped_column(String(256), nullable=False)
+    #
+    # Nullable since the ADR-012 addendum: an account may exist that signs in
+    # only with Google and therefore has no password to hash. NULL means "this
+    # account has no password", which is a refusal to authenticate by password —
+    # never an empty or wildcard credential. See services.users.authenticate_user.
+    password_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # Verified email address, stored lowercased (see services.users.normalize_email).
+    # This is the only thing an admin sets in advance to permit a Google sign-in:
+    # the addendum deliberately does **not** self-provision accounts, so a Google
+    # identity with no matching row here is refused.
+    #
+    # There is no `citext`: matching is made reliable by normalizing on write and
+    # on lookup rather than by adding a Postgres extension to every deployment.
+    email: Mapped[str | None] = mapped_column(
+        String(320), unique=True, index=True, nullable=True
+    )
+    # Google's immutable subject identifier, bound on the first successful Google
+    # sign-in and matched ahead of email on every later one. Email is the *initial*
+    # link only, because a Google Workspace address can be reassigned to a
+    # different person; `sub` cannot. Binding on first use means a reassigned
+    # address cannot inherit an existing account (ADR-012 addendum §4).
+    google_sub: Mapped[str | None] = mapped_column(
+        String(255), unique=True, index=True, nullable=True
+    )
     role: Mapped[UserRole] = mapped_column(_user_role_enum, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

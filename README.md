@@ -171,6 +171,50 @@ your shell history and the process table.
 > If you changed `POSTGRES_PORT` in `deploy/.env`, use that port in
 > `DATABASE_URL` instead of `5432`.
 
+<details>
+<summary><b>Optional: let people sign in with Google</b></summary>
+
+Password sign-in always works and needs no setup. Google is an extra convenience,
+and turning it on takes two steps.
+
+**1. Get a client ID.** In the [Google Cloud console](https://console.cloud.google.com/apis/credentials),
+create an *OAuth client ID* of type **Web application**, and add your dashboard
+origin (`http://localhost:5173`) under **Authorized JavaScript origins**. There
+is no redirect URI to add and no client secret to copy — this uses the ID-token
+flow, so there is no secret in the system at all. Put the ID in `deploy/.env`:
+
+```
+GOOGLE_OAUTH_CLIENT_ID=1234567890-abcdef.apps.googleusercontent.com
+```
+
+Restart the orchestrator and a **Sign in with Google** button appears.
+
+**2. Put the address on an account.** This is the part people miss:
+
+> **Google sign-in cannot create an account.** It only proves you are the holder
+> of one that already exists. On this system an account is permission to run
+> containers on other people's machines — Google can vouch for who you are, but
+> it cannot grant that.
+
+```bash
+# Add Google as an option on an existing password account
+python -m scripts.create_user --username abhishek --role ADMIN \
+    --email abhishek@example.com --update
+
+# Or a classmate who only ever uses Google, with no password at all
+python -m scripts.create_user --username priya --role OPERATOR \
+    --email priya@example.com --google-only
+```
+
+Signing in with an address nobody has added gives a refusal, by design.
+
+Leave `GOOGLE_OAUTH_CLIENT_ID` unset and the orchestrator never contacts Google —
+which is what keeps an offline deployment working. Details, including the
+replay-window limitation this accepts, are in
+[`docs/adr/ADR-012-addendum.md`](docs/adr/ADR-012-addendum.md).
+
+</details>
+
 ### 3. Open the dashboard
 
 ```bash
@@ -275,6 +319,7 @@ Each row links to the ADR explaining *why* — worth reading if a choice looks o
 | Isolation | `cap_drop=ALL`, no-new-privileges, read-only rootfs, memory/PID limits; opt-in subprocess path for peers without Docker | ADR-007 |
 | Machine identity | One-time token → Ed25519 challenge-response → short-lived JWT | ADR-008 |
 | Human identity | Password → scrypt → short-lived JWT with a separate audience and role | ADR-012 |
+| Google sign-in | Optional. Google ID token verified against Google's keys → the *same* user JWT. Never creates an account | ADR-012 addendum |
 
 ## Repository layout
 

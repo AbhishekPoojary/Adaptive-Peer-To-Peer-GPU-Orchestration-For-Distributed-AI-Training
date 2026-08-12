@@ -34,6 +34,28 @@ Reset a forgotten password on an existing account::
 
     python -m scripts.create_user --username abhishek --role ADMIN --update
 
+Google sign-in (ADR-012 addendum)
+---------------------------------
+``POST /auth/google`` never creates accounts, so a Google identity can only sign
+in to a row that already carries its address. Setting that address is this
+script's job too.
+
+Give an existing password account the option of Google sign-in::
+
+    python -m scripts.create_user --username abhishek --role ADMIN \
+        --email abhishek@example.com --update
+
+A classmate who only ever uses Google, with no password at all::
+
+    python -m scripts.create_user --username priya --role OPERATOR \
+        --email priya@example.com --google-only
+
+The email is the *introduction*; Google's immutable ``sub`` is bound on the first
+successful sign-in and matched ahead of the address afterwards. Changing
+``--email`` on an existing account therefore clears that binding, so the next
+sign-in re-binds from the new address — otherwise reassigning a school address
+would hand the new holder the old holder's fleet access.
+
 Requires ``DATABASE_URL`` to point at the orchestrator database (the same
 value the server uses).
 """
@@ -46,6 +68,7 @@ import getpass
 import os
 import sys
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from orchestrator.core.config import get_settings
@@ -54,10 +77,12 @@ from orchestrator.core.security import hash_password
 from orchestrator.models.user import UserRole
 from orchestrator.services.users import (
     MIN_PASSWORD_LENGTH,
+    NoCredentialError,
     UserExistsError,
     WeakPasswordError,
     create_user,
     get_user_by_username,
+    normalize_email,
 )
 
 _PASSWORD_ENV = "ORCH_USER_PASSWORD"
@@ -88,7 +113,12 @@ def _read_password(*, prompt: bool) -> str:
 
 
 async def _run(
-    *, username: str, role: UserRole, password: str, update: bool
+    *,
+    username: str,
+    role: UserRole,
+    password: str | None,
+    update: bool,
+    email: str | None,
 ) -> int:
     settings = get_settings()
     engine = get_engine(settings)
@@ -105,24 +135,59 @@ async def _run(
                     file=sys.stderr,
                 )
                 return 1
-            if len(password) < MIN_PASSWORD_LENGTH:
+            if password is not None and len(password) < MIN_PASSWORD_LENGTH:
                 print(
                     f"error: password must be at least {MIN_PASSWORD_LENGTH} "
                     f"characters.",
                     file=sys.stderr,
                 )
                 return 2
-            existing.password_hash = hash_password(password)
+            if password is not None:
+                existing.password_hash = hash_password(password)
+            if email is not None:
+                # Changing the email moves Google sign-in to a different address,
+                # so the previously bound Google account must not keep access
+                # under the old binding. Clearing google_sub makes the next
+                # sign-in re-bind from the new address (ADR-012 addendum §4).
+                new_email = normalize_email(email)
+                if existing.email != new_email:
+                    existing.email = new_email
+                    existing.google_sub = None
             existing.role = role
-            await session.commit()
-            print(f"Updated user {username!r} (role={role.value}).")
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                print(
+                    f"error: email {email!r} is already on another account.",
+                    file=sys.stderr,
+                )
+                return 1
+            changed = ", ".join(
+                filter(
+                    None,
+                    [
+                        "password" if password is not None else None,
+                        "email" if email is not None else None,
+                        f"role={role.value}",
+                    ],
+                )
+            )
+            print(f"Updated user {username!r} ({changed}).")
             return 0
 
         try:
             user = await create_user(
-                session, username=username, password=password, role=role
+                session,
+                username=username,
+                password=password,
+                role=role,
+                email=email,
             )
         except WeakPasswordError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        except NoCredentialError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         except UserExistsError as exc:
@@ -131,7 +196,11 @@ async def _run(
             print(f"error: {exc}", file=sys.stderr)
             return 1
         await session.commit()
-        print(f"Created user {user.username!r} (role={user.role.value}, id={user.id}).")
+        how = "Google only" if password is None else "password"
+        print(
+            f"Created user {user.username!r} (role={user.role.value}, "
+            f"sign-in={how}, email={user.email or '-'}, id={user.id})."
+        )
         return 0
 
 
@@ -161,15 +230,36 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help=f"Fail instead of prompting; requires {_PASSWORD_ENV}.",
     )
+    parser.add_argument(
+        "--email",
+        default=None,
+        help="Verified email that Google sign-in matches this account by. "
+        "Required with --google-only. Changing it unbinds any Google account "
+        "previously linked, so the next sign-in re-binds from the new address.",
+    )
+    parser.add_argument(
+        "--google-only",
+        action="store_true",
+        help="Create the account with no password: it signs in with Google "
+        "alone. Requires --email.",
+    )
     args = parser.parse_args(argv)
 
-    password = _read_password(prompt=not args.no_prompt)
+    if args.google_only and not args.email:
+        parser.error("--google-only requires --email (there would be no way to sign in)")
+
+    # A Google-only account has no password to read, so do not prompt for one —
+    # prompting and discarding it would teach the operator the wrong model of
+    # what this account is.
+    password = None if args.google_only else _read_password(prompt=not args.no_prompt)
+
     return asyncio.run(
         _run(
             username=args.username,
             role=UserRole(args.role),
             password=password,
             update=args.update,
+            email=args.email,
         )
     )
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
 import uuid
 from datetime import UTC, datetime
 
@@ -47,12 +48,15 @@ from orchestrator.models.enrollment import EnrollmentToken
 from orchestrator.models.node import Node
 from orchestrator.models.user import User
 from orchestrator.schemas.auth import (
+    AuthProvidersResponse,
     ChallengeRequest,
     ChallengeResponse,
     EnrollmentTokenCreateRequest,
     EnrollmentTokenCreateResponse,
     EnrollmentTokenListResponse,
     EnrollmentTokenOut,
+    GoogleLoginRequest,
+    GoogleProviderOut,
     LoginRequest,
     LoginResponse,
     TokenRefreshRequest,
@@ -66,7 +70,18 @@ from orchestrator.services.enrollment import (
     list_enrollment_tokens,
     revoke_enrollment_token,
 )
-from orchestrator.services.users import authenticate_user, record_login
+from orchestrator.services.google_oidc import (
+    GoogleTokenError,
+    GoogleUnavailableError,
+    verify_google_id_token,
+)
+from orchestrator.services.users import (
+    authenticate_google_identity,
+    authenticate_user,
+    record_login,
+)
+
+logger = logging.getLogger("orchestrator.auth")
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -84,6 +99,18 @@ _INVALID_CREDENTIALS = HTTPException(
 )
 
 
+# One message for every Google sign-in failure, for the same reason as
+# _INVALID_CREDENTIALS: "no account for that address" would confirm to anyone
+# with a Google account whether a given person is on this fleet, and
+# "email not verified" or "bound to another subject" narrate the security model
+# to whoever is probing it. The precise reason is logged server-side.
+_GOOGLE_SIGN_IN_REFUSED = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="Google sign-in was refused. Ask whoever runs the fleet to add your address.",
+    headers={"WWW-Authenticate": "Bearer"},
+)
+
+
 def _user_out(user: User) -> UserOut:
     return UserOut(
         id=user.id,
@@ -91,6 +118,7 @@ def _user_out(user: User) -> UserOut:
         role=user.role.value,
         created_at=user.created_at,
         last_login_at=user.last_login_at,
+        email=user.email,
     )
 
 
@@ -228,6 +256,109 @@ async def login(
     if user is None:
         raise _INVALID_CREDENTIALS
 
+    await record_login(session, user_id=user.id)
+    await session.commit()
+    await session.refresh(user)
+
+    access_token = create_user_jwt(
+        user_id=str(user.id),
+        username=user.username,
+        role=user.role.value,
+        signing_key=settings.jwt_signing_key,
+        ttl_seconds=settings.user_access_token_ttl_seconds,
+    )
+    return LoginResponse(
+        access_token=access_token,
+        expires_in=settings.user_access_token_ttl_seconds,
+        user=_user_out(user),
+    )
+
+
+@router.get("/providers", response_model=AuthProvidersResponse)
+async def providers(
+    settings: Settings = Depends(get_settings_dep),
+) -> AuthProvidersResponse:
+    """Report which sign-in mechanisms this deployment offers.
+
+    Unauthenticated by necessity: the sign-in page must know whether to draw a
+    Google button before anyone has signed in. It returns only the public client
+    ID, so an operator can turn Google sign-in on or off by configuration alone
+    without rebuilding the dashboard bundle — which is also why the client ID is
+    served from here rather than inlined at build time as a ``VITE_`` variable.
+    """
+    client_id = settings.google_oauth_client_id
+    return AuthProvidersResponse(
+        password=True,
+        google=GoogleProviderOut(enabled=client_id is not None, client_id=client_id),
+    )
+
+
+@router.post("/google", response_model=LoginResponse)
+async def google_login(
+    request: Request,
+    body: GoogleLoginRequest,
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings_dep),
+) -> LoginResponse:
+    """Exchange a Google ID token for the same short-lived user access token.
+
+    The token this returns is byte-for-byte the same kind of credential
+    ``POST /auth/login`` issues — same ``aud="user"``, same TTL, same role claim.
+    Google is an additional way to *prove* who you are, not a second
+    authorization path, so nothing downstream of here knows or cares which
+    mechanism was used (ADR-012 addendum §3).
+
+    This never creates an account. An identity Google vouches for that matches no
+    row is refused, because on this system an account is permission to run
+    containers on other people's machines.
+    """
+    # Shares the password login bucket deliberately: both are "attempts to
+    # obtain a user token from this IP", and letting an attacker reset their
+    # budget by switching endpoints would defeat the point.
+    enforce_rate_limit(get_login_limiter(), request, bucket="login")
+
+    client_id = settings.google_oauth_client_id
+    if client_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google sign-in is not configured on this orchestrator",
+        )
+
+    try:
+        identity = await verify_google_id_token(
+            body.credential,
+            client_id=client_id,
+            max_age_seconds=settings.google_id_token_max_age_seconds,
+            jwks_cache_seconds=settings.google_jwks_cache_seconds,
+            jwks_timeout_seconds=settings.google_jwks_timeout_seconds,
+        )
+    except GoogleUnavailableError as exc:
+        # Our dependency is down, not the caller's fault. Saying "invalid login"
+        # here would send someone hunting for a credential problem that does not
+        # exist, so this is a 503 that names the real cause.
+        logger.warning("google_sign_in_unavailable", extra={"reason": str(exc)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "could not reach Google to verify the sign-in; "
+                "use a password while this persists"
+            ),
+        ) from exc
+    except GoogleTokenError as exc:
+        logger.info("google_sign_in_rejected", extra={"reason": str(exc)})
+        raise _GOOGLE_SIGN_IN_REFUSED from exc
+
+    user, outcome = await authenticate_google_identity(session, identity=identity)
+    if user is None:
+        await session.rollback()
+        logger.info(
+            "google_sign_in_refused",
+            extra={"outcome": outcome.value, "google_sub": identity.subject},
+        )
+        raise _GOOGLE_SIGN_IN_REFUSED
+
+    # authenticate_google_identity may have bound google_sub on first use; that
+    # write and the login stamp commit together.
     await record_login(session, user_id=user.id)
     await session.commit()
     await session.refresh(user)

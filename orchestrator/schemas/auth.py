@@ -115,6 +115,51 @@ class UserOut(BaseModel):
     role: str
     created_at: datetime
     last_login_at: datetime | None
+    #: The address Google sign-in matches, when one is set. Returned because the
+    #: dashboard shows the signed-in identity; it is the account's own email being
+    #: shown back to its owner, not a directory anyone can enumerate.
+    email: str | None = None
+
+
+class GoogleLoginRequest(BaseModel):
+    """Body of POST /auth/google (ADR-012 addendum).
+
+    ``credential`` is the raw ID token (a JWT) that Google Identity Services
+    hands the browser. There is no authorization code and no client secret: the
+    browser receives the assertion directly and forwards it, which is what lets
+    this flow work without registering a redirect URI on a system whose whole
+    premise is machines behind NATs.
+    """
+
+    model_config = _FORBID
+
+    # Bounded so an oversized body cannot reach the JWT parser. A Google ID token
+    # is on the order of 1 KB; 4 KB is generous without being unbounded.
+    credential: str = Field(min_length=1, max_length=4096)
+
+
+class GoogleProviderOut(BaseModel):
+    """Whether Google sign-in is usable, and the public client ID if so."""
+
+    enabled: bool
+    #: OAuth *client* ID — public by design; the browser must send it to Google.
+    #: ``None`` whenever ``enabled`` is false, so a client cannot render a button
+    #: that could only fail.
+    client_id: str | None
+
+
+class AuthProvidersResponse(BaseModel):
+    """Body of GET /auth/providers.
+
+    Unauthenticated on purpose: a sign-in page has to know what to render before
+    anyone has signed in. It exposes only which mechanisms exist and a public
+    client ID — no account data, and nothing that is a secret.
+    """
+
+    #: Password sign-in is always available; it is the offline path and the
+    #: bootstrap path, so nothing can switch it off.
+    password: bool = True
+    google: GoogleProviderOut
 
 
 class LoginResponse(BaseModel):

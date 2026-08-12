@@ -26,6 +26,11 @@ server = [
     "pyjwt==2.10.1",
     "cryptography==44.0.0",
     "prometheus-client==0.21.1",
+    # Fetches Google's JWKS for Google sign-in (ADR-012 addendum). Async, so a
+    # key refetch does not block the event loop the way urllib would. Same pin
+    # the agent and bench extras already carry, so this adds no new version to
+    # the install matrix.
+    "httpx==0.28.1",
 ]
 agent = [
     "psutil==6.1.1",

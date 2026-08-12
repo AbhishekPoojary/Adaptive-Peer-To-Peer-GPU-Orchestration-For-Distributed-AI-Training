@@ -25,6 +25,12 @@ export interface SessionUser {
   role: string;
   created_at: string;
   last_login_at: string | null;
+  /**
+   * Address Google sign-in matches this account by, when one is set (ADR-012
+   * addendum). Optional because password-only accounts have none, and because a
+   * session stored before this field existed will not carry it.
+   */
+  email?: string | null;
 }
 
 type Listener = () => void;

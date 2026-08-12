@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, unwrap } from "./client";
+import { ApiError, api, unwrap } from "./client";
 import { clearSession, setSession, type SessionUser } from "./session";
 
 /**
@@ -58,6 +58,100 @@ export function useCurrentUserQuery(enabled: boolean) {
     enabled,
     retry: false,
     staleTime: 60_000,
+  });
+}
+
+/**
+ * Google sign-in (ADR-012 addendum).
+ *
+ * `/auth/providers` and `/auth/google` are called with plain `fetch` rather than
+ * the generated `api` client, because `schema.gen.ts` predates them. Run
+ * `npm run generate:api` against a running orchestrator and these two should be
+ * moved onto `api.GET`/`api.POST` like everything else — the hand-written types
+ * below are a temporary bridge, not a new pattern. They deliberately reuse
+ * `ApiError` so the UI's error handling is identical either way.
+ */
+
+const API_BASE = "/api";
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    // Network-level failure: the orchestrator or the dev proxy is unreachable.
+    throw new ApiError(
+      "Couldn't reach the orchestrator. It may be restarting or temporarily unreachable.",
+      0,
+    );
+  }
+
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail =
+      typeof payload === "object" &&
+      payload !== null &&
+      "detail" in payload &&
+      typeof (payload as { detail?: unknown }).detail === "string"
+        ? (payload as { detail: string }).detail
+        : undefined;
+    throw new ApiError(
+      detail ?? "The orchestrator couldn't complete this request.",
+      response.status,
+    );
+  }
+  return payload as T;
+}
+
+export interface AuthProviders {
+  password: boolean;
+  google: { enabled: boolean; client_id: string | null };
+}
+
+/**
+ * Which sign-in mechanisms this deployment offers.
+ *
+ * Asked at runtime rather than baked in at build time so an operator can enable
+ * Google sign-in by setting one environment variable, without rebuilding the
+ * bundle. On failure the caller falls back to password-only — the offline path
+ * must never be gated on an answer we couldn't get.
+ */
+export function useAuthProvidersQuery() {
+  return useQuery({
+    queryKey: ["auth", "providers"],
+    queryFn: async (): Promise<AuthProviders> => {
+      const response = await fetch(`${API_BASE}/auth/providers`);
+      if (!response.ok) throw new ApiError("Couldn't load sign-in options");
+      return (await response.json()) as AuthProviders;
+    },
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
+}
+
+interface LoginResult {
+  access_token: string;
+  user: SessionUser;
+}
+
+export function useGoogleLoginMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    // `credential` is the ID token Google Identity Services hands the browser.
+    // It is forwarded verbatim; the orchestrator verifies it against Google's
+    // published keys, so nothing here has to be trusted.
+    mutationFn: async (credential: string) => {
+      const result = await postJson<LoginResult>("/auth/google", { credential });
+      setSession(result.access_token, result.user);
+      return result;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries();
+    },
   });
 }
 

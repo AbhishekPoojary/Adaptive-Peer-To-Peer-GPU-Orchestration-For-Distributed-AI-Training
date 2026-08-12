@@ -66,6 +66,31 @@ class Settings(BaseSettings):
     node_auth_rate_limit_attempts: int = 60
     node_auth_rate_limit_window_seconds: float = 60.0
 
+    # --- Google sign-in (ADR-012 addendum) ---
+    # OAuth *client ID* for the Google Identity Services button. Public by
+    # design — it ships in the dashboard bundle and is served from
+    # GET /auth/providers, which is why there is no client *secret* anywhere in
+    # this file: the ID-token flow never uses one (ADR-012 addendum §2).
+    #
+    # None disables Google sign-in entirely: POST /auth/google returns 503 and
+    # the dashboard renders only the password form. That default is what keeps
+    # an offline deployment working, so it is not merely a convenience.
+    google_oauth_client_id: str | None = None
+    # Reject a Google ID token issued longer ago than this. Google mints them
+    # with roughly an hour of validity; a stolen one is a bearer credential for
+    # its whole lifetime, and nothing in the token makes it single-use. Demanding
+    # freshness shrinks the replay window from ~1 h to minutes at zero cost,
+    # because a real sign-in posts the token within seconds of receiving it.
+    google_id_token_max_age_seconds: int = 300
+    # How long Google's signing keys (JWKS) are cached. Google rotates them
+    # slowly and publishes the rotation ahead of use; an hour keeps a normal
+    # sign-in off the network path without pinning a retired key for long. A
+    # cache miss on an unknown `kid` forces a refetch regardless of this.
+    google_jwks_cache_seconds: int = 3600
+    # Timeout for fetching Google's JWKS. Short and explicit: a hung fetch would
+    # otherwise stall the login endpoint for a client that cannot be helped.
+    google_jwks_timeout_seconds: float = 5.0
+
     # --- Telemetry / RTT (ADR-004) ---
     # Smoothing factor for the round-trip-time EWMA the heartbeat handler
     # maintains from agent-measured RTT. Never used to invent an RTT — only to
