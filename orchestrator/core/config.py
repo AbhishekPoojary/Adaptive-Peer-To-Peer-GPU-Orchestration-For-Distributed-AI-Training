@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -228,6 +229,24 @@ class Settings(BaseSettings):
     # Default / max number of telemetry samples GET /nodes/{id} returns.
     node_detail_default_samples: int = 50
     node_detail_max_samples: int = 500
+
+    @field_validator("google_oauth_client_id", mode="after")
+    @classmethod
+    def _blank_client_id_is_absent(cls, value: str | None) -> str | None:
+        """Treat an empty or whitespace-only client ID as unset.
+
+        Not defensive padding — it is the difference between Google sign-in being
+        off and being advertised as on while broken. ``deploy/compose.yaml`` sets
+        this with ``${GOOGLE_OAUTH_CLIENT_ID:-}``, and Compose's ``:-`` default
+        makes the variable *present and empty* rather than absent. Without this,
+        an unconfigured deployment would report ``enabled: true`` from
+        ``GET /auth/providers``, the dashboard would draw a Google button, and it
+        would fail inside Google's script with nothing pointing back at the cause.
+        """
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
 
 
 @lru_cache

@@ -70,6 +70,15 @@ services:
       LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${LOGIN_RATE_LIMIT_WINDOW_SECONDS:-60.0}
       NODE_AUTH_RATE_LIMIT_ATTEMPTS: ${NODE_AUTH_RATE_LIMIT_ATTEMPTS:-60}
       NODE_AUTH_RATE_LIMIT_WINDOW_SECONDS: ${NODE_AUTH_RATE_LIMIT_WINDOW_SECONDS:-60.0}
+      # Google sign-in (ADR-012 addendum). Empty default = disabled, which is
+      # what keeps an offline deployment working. This list is explicit rather
+      # than env_file-wide, so a setting absent here never reaches the container
+      # no matter what deploy/.env says — which is exactly how the first cut of
+      # this feature shipped a variable that silently did nothing.
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_ID_TOKEN_MAX_AGE_SECONDS: ${GOOGLE_ID_TOKEN_MAX_AGE_SECONDS:-300}
+      GOOGLE_JWKS_CACHE_SECONDS: ${GOOGLE_JWKS_CACHE_SECONDS:-3600}
+      GOOGLE_JWKS_TIMEOUT_SECONDS: ${GOOGLE_JWKS_TIMEOUT_SECONDS:-5.0}
       RTT_EWMA_ALPHA: ${RTT_EWMA_ALPHA:-0.3}
       RELIABILITY_PRIOR_ALPHA: ${RELIABILITY_PRIOR_ALPHA:-1.0}
       RELIABILITY_PRIOR_BETA: ${RELIABILITY_PRIOR_BETA:-1.0}
