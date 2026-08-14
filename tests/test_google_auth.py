@@ -520,33 +520,101 @@ async def test_refuses_when_email_is_bound_to_another_subject(
     assert response.status_code == 401
 
 
-async def test_refusal_message_does_not_reveal_which_check_failed(
+async def test_token_verification_failures_are_indistinguishable(
+    google_client: AsyncClient, rsa_key: rsa.RSAPrivateKey
+) -> None:
+    """A token that does not verify gets one flat message.
+
+    Here the caller has proved nothing, so naming the failed check would only
+    teach whoever is probing how verification works. Three different causes must
+    read identically.
+    """
+    causes = [
+        make_id_token(rsa_key, audience="other-client.apps.googleusercontent.com"),
+        make_id_token(rsa_key, issuer="https://evil.example.com"),
+        make_id_token(rsa_key, email_verified=False),
+    ]
+    details = set()
+    for credential in causes:
+        response = await google_client.post(
+            "/auth/google", json={"credential": credential}
+        )
+        assert response.status_code == 401
+        details.add(response.json()["detail"])
+
+    assert len(details) == 1, f"verification failures leaked their cause: {details}"
+
+
+async def test_account_refusal_names_the_verified_address(
     google_client: AsyncClient, rsa_key: rsa.RSAPrivateKey, session: Any
 ) -> None:
-    """Every refusal reads the same, so probing teaches nothing.
+    """Once Google has vouched for the caller, the refusal is specific.
 
-    "No account for that address" would let anyone with a Google account
-    enumerate who is on this fleet.
+    This is not the enumeration oracle the flat message was guarding against: to
+    reach this branch the caller must hold a Google ID token for the address, so
+    they can only ever probe their own. Telling them nothing was the actual bug —
+    the operator could not learn which address to add, and the user could not
+    tell a missing account from a disabled one.
     """
     async with session as db:
-        await seed_user(
-            db, username="real", role=UserRole.OPERATOR, email="real@example.com"
+        disabled = await seed_user(
+            db, username="off", role=UserRole.OPERATOR, email="off@example.com"
         )
+        disabled.disabled_at = datetime.now(UTC)
+        await db.commit()
 
     unknown = await google_client.post(
         "/auth/google",
         json={"credential": make_id_token(rsa_key, email="nobody@example.com")},
     )
-    unverified = await google_client.post(
+    assert unknown.status_code == 401
+    assert "nobody@example.com" in unknown.json()["detail"]
+    assert "cannot create one" in unknown.json()["detail"]
+
+    off = await google_client.post(
+        "/auth/google",
+        json={"credential": make_id_token(rsa_key, email="off@example.com")},
+    )
+    assert off.status_code == 401
+    assert "off@example.com" in off.json()["detail"]
+    assert "disabled" in off.json()["detail"]
+
+    # ...and the two situations are distinguishable, which is the point.
+    assert unknown.json()["detail"] != off.json()["detail"]
+
+
+async def test_account_refusal_never_names_another_persons_address(
+    google_client: AsyncClient, rsa_key: rsa.RSAPrivateKey, session: Any
+) -> None:
+    """The message echoes only the address in the presented token.
+
+    A subject mismatch means this address is bound to someone else's Google
+    account. The refusal must not disclose anything about that other identity.
+    """
+    async with session as db:
+        await seed_user(
+            db,
+            username="shared",
+            role=UserRole.OPERATOR,
+            email="shared@example.com",
+            google_sub="the-incumbent-subject",
+        )
+
+    response = await google_client.post(
         "/auth/google",
         json={
             "credential": make_id_token(
-                rsa_key, email="real@example.com", email_verified=False
+                rsa_key, subject="a-newcomer-subject", email="shared@example.com"
             )
         },
     )
-    assert unknown.status_code == unverified.status_code == 401
-    assert unknown.json()["detail"] == unverified.json()["detail"]
+    assert response.status_code == 401
+    detail = response.json()["detail"]
+    assert "shared@example.com" in detail
+    assert "the-incumbent-subject" not in detail, "leaked the bound Google subject"
+    assert "shared" not in detail.replace("shared@example.com", ""), (
+        "leaked the username"
+    )
 
 
 # --- Interaction with the password path --------------------------------------

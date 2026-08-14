@@ -76,6 +76,7 @@ from orchestrator.services.google_oidc import (
     verify_google_id_token,
 )
 from orchestrator.services.users import (
+    GoogleAuthOutcome,
     authenticate_google_identity,
     authenticate_user,
     record_login,
@@ -99,16 +100,52 @@ _INVALID_CREDENTIALS = HTTPException(
 )
 
 
-# One message for every Google sign-in failure, for the same reason as
-# _INVALID_CREDENTIALS: "no account for that address" would confirm to anyone
-# with a Google account whether a given person is on this fleet, and
-# "email not verified" or "bound to another subject" narrate the security model
-# to whoever is probing it. The precise reason is logged server-side.
-_GOOGLE_SIGN_IN_REFUSED = HTTPException(
+# A token that does not verify gets one flat message. Here the caller has proved
+# nothing, so naming which check failed ("issuer", "audience", "email not
+# verified") only teaches whoever is probing how the verification works.
+_GOOGLE_TOKEN_REFUSED = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
-    detail="Google sign-in was refused. Ask whoever runs the fleet to add your address.",
+    detail="Google sign-in failed. Please try again.",
     headers={"WWW-Authenticate": "Bearer"},
 )
+
+
+def _account_refusal(outcome: GoogleAuthOutcome, email: str) -> HTTPException:
+    """Explain, to someone Google has already vouched for, why they got nothing.
+
+    This deliberately names the address and the situation, which the first cut of
+    this endpoint did not. That caution was borrowed from password login and is
+    wrong here: on ``/auth/login`` an attacker types any username they like, so a
+    specific error is an enumeration oracle. On this path Google has already
+    proved the caller controls this address, so telling them its status reveals
+    nothing they could not learn by simply signing in — and reveals nothing at
+    all about anybody else's. An attacker can only probe addresses they can
+    authenticate to Google as, which is to say their own.
+
+    The cost of the vague version was real: "ask whoever runs the fleet to add
+    your address" gave the operator no way to know *which* address, and the user
+    no way to tell a missing account from a disabled one.
+    """
+    if outcome is GoogleAuthOutcome.DISABLED:
+        detail = (
+            f"The account for {email} has been disabled. "
+            "Ask whoever runs the fleet to re-enable it."
+        )
+    elif outcome is GoogleAuthOutcome.SUBJECT_MISMATCH:
+        detail = (
+            f"{email} is already linked to a different Google account. "
+            "Ask whoever runs the fleet to re-link it."
+        )
+    else:  # NO_ACCOUNT
+        detail = (
+            f"No account is linked to {email}. Google sign-in cannot create one — "
+            "ask whoever runs the fleet to add this address to your account."
+        )
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=detail,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 def _user_out(user: User) -> UserOut:
@@ -336,7 +373,7 @@ async def google_login(
         # Our dependency is down, not the caller's fault. Saying "invalid login"
         # here would send someone hunting for a credential problem that does not
         # exist, so this is a 503 that names the real cause.
-        logger.warning("google_sign_in_unavailable", extra={"reason": str(exc)})
+        logger.warning("google sign-in could not reach Google: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
@@ -345,17 +382,28 @@ async def google_login(
             ),
         ) from exc
     except GoogleTokenError as exc:
-        logger.info("google_sign_in_rejected", extra={"reason": str(exc)})
-        raise _GOOGLE_SIGN_IN_REFUSED from exc
+        # Interpolated into the message, not passed as `extra`: the configured
+        # formatter is "%(asctime)s %(levelname)s %(name)s %(message)s", which
+        # renders no extra fields at all. The first cut logged through `extra`
+        # and produced a bare "google_sign_in_rejected" with every useful detail
+        # silently dropped.
+        logger.info("google sign-in rejected an ID token: %s", exc)
+        raise _GOOGLE_TOKEN_REFUSED from exc
 
     user, outcome = await authenticate_google_identity(session, identity=identity)
     if user is None:
         await session.rollback()
-        logger.info(
-            "google_sign_in_refused",
-            extra={"outcome": outcome.value, "google_sub": identity.subject},
+        # The address is the one fact an operator needs to act on this, since the
+        # user's error message tells them to go ask for it to be added.
+        logger.warning(
+            "google sign-in refused %s for %s (google sub %s); "
+            "link it with: scripts/create_user.py --email %s --update",
+            outcome.value,
+            identity.email,
+            identity.subject,
+            identity.email,
         )
-        raise _GOOGLE_SIGN_IN_REFUSED
+        raise _account_refusal(outcome, identity.email)
 
     # authenticate_google_identity may have bound google_sub on first use; that
     # write and the login stamp commit together.

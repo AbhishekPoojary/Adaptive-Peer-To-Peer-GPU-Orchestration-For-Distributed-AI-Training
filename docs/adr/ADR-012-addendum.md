@@ -103,22 +103,49 @@ rebind and a takeover are indistinguishable from here.
 Changing `--email` on an existing account clears `google_sub` for the same
 reason, so the next sign-in re-binds from the new address.
 
-### 5. Uniform refusals
+### 5. Refusals are uniform before verification, specific after it
 
-Every rejection — unknown address, unverified email, disabled account, subject
-mismatch, bad token — returns one identical 401. The precise reason is logged
-server-side.
+The dividing line is whether Google has vouched for the caller yet.
 
-"No account for that address" would let anyone holding a Google account
-enumerate who is on this fleet, and "email not verified" narrates the security
-model to whoever is probing it. This mirrors the existing single message for
-password login, and there is a test asserting two different failure causes
-produce byte-identical responses.
+**A token that does not verify** — wrong audience, wrong issuer, expired, stale,
+unverified email, bad signature — returns one identical 401. The caller has
+proved nothing, so naming the failed check would only teach whoever is probing
+how verification works. A test asserts three distinct causes read identically.
 
-Google being *unreachable* is the deliberate exception: that returns 503, not
-401, because telling someone "invalid login" when the real problem is that the
-orchestrator has no route to Google sends them hunting for a credential fault
-that does not exist.
+**An account refusal** — no account, disabled, subject mismatch — names the
+address and the situation.
+
+This second half reverses how this endpoint first shipped, and the reversal is
+worth recording because the original was a reasoned mistake rather than an
+oversight. The flat "Google sign-in was refused, ask whoever runs the fleet to
+add your address" was borrowed from `POST /auth/login`, where it is correct: an
+attacker there types any username they like, so a specific error is an
+enumeration oracle.
+
+That reasoning does not transfer. To reach the account-matching branch at all, a
+caller must present a Google ID token for the address, which means controlling
+that Google account. They can therefore only ever probe *their own* address, and
+learn nothing they could not learn by simply signing in. There is no oracle, so
+the redaction bought nothing — and it cost two concrete things:
+
+- the operator had no way to know which address to add, even though the error
+  told the user to go and ask for exactly that;
+- the user could not tell a missing account from a disabled one, which are
+  different problems with different fixes.
+
+The message still echoes only the address in the presented token. A subject
+mismatch does not disclose the incumbent Google subject or the account's
+username, and there is a test asserting that.
+
+The same fix applies to the log. The refusal was logged through `extra={...}`,
+which the configured formatter (`"%(asctime)s %(levelname)s %(name)s
+%(message)s"`) renders not at all — so it emitted a bare `google_sign_in_refused`
+with every useful field dropped. Operational facts now go in the message, which
+is what the rest of the codebase does.
+
+Google being *unreachable* remains a 503 rather than a 401, because telling
+someone "invalid login" when the real problem is that the orchestrator has no
+route to Google sends them hunting for a credential fault that does not exist.
 
 ### 6. Accepted limitations
 
