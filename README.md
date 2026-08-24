@@ -260,7 +260,62 @@ What happens on that machine:
 
 ### 5. Train something
 
-Use the dashboard's **Submit** page, or the API directly:
+Use the dashboard's **Submit** page, or the API directly.
+
+<details open>
+<summary><b>Training on your own images</b></summary>
+
+Built-in `cifar10` and `mnist` need no setup. To train on **your own data**,
+upload it first on the **Datasets** page (or `POST /datasets`).
+
+**Format.** A `.zip` of class folders, with both splits:
+
+```
+train/cat/img001.png     test/cat/img900.png
+train/cat/img002.jpg     test/cat/img901.png
+train/dog/img500.png     test/dog/img950.png
+train/dog/img501.png     test/dog/img951.png
+```
+
+- The **folder name is the label**. Two or more classes.
+- `train/` and `test/` must contain the **same class names**.
+- Any mix of `png`, `jpg`, `bmp`, `gif`, `webp`, `tif`. Any sizes — everything is
+  resized to 64×64 RGB.
+- Zipping the *folder* rather than its contents is fine; the extra top level is
+  unwrapped for you.
+
+**You choose the test split yourself.** It is never carved out of `train/`
+automatically, because the held-out accuracy this project reports has to be
+measured on data *you* decided to hold out — otherwise every number depends on a
+split the reader can't see.
+
+```bash
+curl -sX POST http://localhost:8090/datasets \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -F name=flowers -F file=@flowers.zip
+```
+
+Then submit against it with `dataset_id` instead of `dataset`:
+
+```bash
+curl -sX POST http://localhost:8090/jobs \
+  -H "Authorization: Bearer $ACCESS_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"spec":{"dataset_id":"<id from the upload>","model":"cnn","epochs":5,
+       "batch_size":32,"learning_rate":0.01,"world_size":1,
+       "min_gpu_mem_bytes":null},"scheduler_name":"adaptive"}'
+```
+
+Uploading requires the **ADMIN** role: a dataset gets unpacked and trained
+against on other people's machines. The archive is checked before it is stored —
+path traversal, symlinks, non-image files, and zip bombs are refused — and each
+peer re-verifies its SHA-256 before extracting. Only image classification is
+supported, because `small_cnn` is the only architecture that exists. Details and
+the limitations this accepts are in
+[`docs/adr/ADR-014-custom-datasets.md`](docs/adr/ADR-014-custom-datasets.md).
+
+</details>
+
+The built-in path, unchanged:
 
 ```bash
 curl -sX POST http://localhost:8090/jobs \
@@ -320,6 +375,7 @@ Each row links to the ADR explaining *why* — worth reading if a choice looks o
 | Machine identity | One-time token → Ed25519 challenge-response → short-lived JWT | ADR-008 |
 | Human identity | Password → scrypt → short-lived JWT with a separate audience and role | ADR-012 |
 | Google sign-in | Optional. Google ID token verified against Google's keys → the *same* user JWT. Never creates an account | ADR-012 addendum |
+| Custom datasets | Upload an ImageFolder zip; validated without decompressing, stored in MinIO, fetched per-claim via a presigned URL and SHA-256 verified by the peer | ADR-014 |
 
 ## Repository layout
 
@@ -333,7 +389,7 @@ bench/          Evaluation harness + machine-written reports (schema.json docume
 scripts/        Operational commands (create_user.py, data repair, CI guardrail)
 tests/          pytest suite — the only place Fake*/Stub* doubles may live
 deploy/         compose.yaml + .env.example for the dev stack
-docs/adr/       Architecture Decision Records (ADR-001..013, plus addenda)
+docs/adr/       Architecture Decision Records (ADR-001..014, plus addenda)
 docs/STATUS.md  Honest current state and handover notes
 ```
 

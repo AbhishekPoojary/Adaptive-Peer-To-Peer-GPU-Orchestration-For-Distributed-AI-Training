@@ -13,7 +13,9 @@ for renew/complete/fail (a node may only act on its own lease → 403).
 
 from __future__ import annotations
 
+import logging
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +33,7 @@ from orchestrator.schemas.lease import (
     LeaseEpochRequest,
     LeaseFailRequest,
 )
+from orchestrator.services.datasets import get_dataset
 from orchestrator.services.jobs import IllegalTransitionError
 from orchestrator.services.leases import (
     LeaseNotActiveError,
@@ -43,6 +46,9 @@ from orchestrator.services.leases import (
     rendezvous_assignment,
     renew_lease,
 )
+from orchestrator.services.object_store import DatasetObjectStore, ObjectStoreError
+
+logger = logging.getLogger("orchestrator.leases")
 
 router = APIRouter(tags=["leases"])
 
@@ -77,6 +83,61 @@ _NOT_OWNER = HTTPException(
 )
 
 
+async def _attach_dataset_fetch(
+    job_spec: dict[str, Any],
+    *,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    """Add fetch instructions for an uploaded dataset to a granted spec (ADR-014).
+
+    Mutates ``job_spec`` in place, adding ``dataset_url`` (a presigned GET) and
+    ``dataset_sha256``. Built-in datasets are untouched — the trainer downloads
+    those from torchvision itself.
+
+    The URL is minted per claim and expires with the lease's useful life, so a
+    peer that has finished a job cannot keep reading the data indefinitely, and
+    no node ever holds the bucket's credentials. That is the whole reason this
+    happens at claim time rather than being baked into the spec at submit time:
+    a spec is stored forever, and a signed URL in it would be a long-lived
+    credential sitting in the jobs table.
+
+    A dataset that has since been deleted leaves the spec without a URL. The
+    agent fails the lease with a clear reason rather than the orchestrator
+    refusing the claim, because the job is genuinely unrunnable and should end
+    up FAILED with an explanation instead of silently never being granted.
+    """
+    raw_id = job_spec.get("dataset_id")
+    if not raw_id:
+        return
+    try:
+        dataset_id = uuid.UUID(str(raw_id))
+    except ValueError:
+        logger.warning("job spec carries an unparseable dataset_id %r", raw_id)
+        return
+
+    dataset = await get_dataset(session, dataset_id=dataset_id)
+    if dataset is None:
+        logger.warning(
+            "job references dataset %s, which no longer exists; the peer will "
+            "fail this lease",
+            dataset_id,
+        )
+        return
+
+    try:
+        job_spec["dataset_url"] = DatasetObjectStore(settings).presigned_get_url(
+            key=dataset.object_key,
+            expires_seconds=settings.dataset_url_ttl_seconds,
+        )
+    except ObjectStoreError as exc:
+        logger.error("could not sign a dataset URL for %s: %s", dataset_id, exc)
+        return
+    job_spec["dataset_sha256"] = dataset.sha256
+    job_spec["dataset_name"] = dataset.name
+    job_spec["dataset_num_classes"] = len(dataset.classes)
+
+
 @router.post("/nodes/{node_id}/leases/claim", response_model=ClaimResponse)
 async def claim_lease(
     node_id: uuid.UUID,
@@ -100,6 +161,7 @@ async def claim_lease(
     assert job is not None  # the lease was just activated against it
     rendezvous = rendezvous_assignment(job, lease, settings=settings)
     job_spec = dict(job.spec)
+    await _attach_dataset_fetch(job_spec, session=session, settings=settings)
     await session.commit()
     return ClaimResponse(
         lease=_lease_out(lease), rendezvous=rendezvous, job_spec=job_spec

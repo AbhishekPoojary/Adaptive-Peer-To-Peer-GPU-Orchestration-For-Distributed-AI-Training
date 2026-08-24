@@ -63,6 +63,11 @@ ALL_TABLES = (
     "nodes",
     "enrollment_tokens",
     "users",
+    # ADR-014. A table missing from this tuple is not truncated between tests,
+    # so its rows leak forward and the next test sees state it never created —
+    # which shows up as a unique-constraint conflict on what should be a first
+    # insert. Every new table belongs here.
+    "datasets",
 )
 
 

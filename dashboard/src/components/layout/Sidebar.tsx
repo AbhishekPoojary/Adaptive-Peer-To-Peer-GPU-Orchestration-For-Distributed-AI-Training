@@ -1,5 +1,12 @@
 import { NavLink } from "react-router-dom";
-import { FlaskConical, Gauge, ListTodo, Server, UploadCloud } from "lucide-react";
+import {
+  Database,
+  FlaskConical,
+  Gauge,
+  ListTodo,
+  Server,
+  UploadCloud,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS: {
@@ -11,6 +18,7 @@ const NAV_ITEMS: {
   { to: "/", label: "Overview", icon: Gauge, end: true },
   { to: "/nodes", label: "Nodes", icon: Server },
   { to: "/jobs", label: "Jobs", icon: ListTodo },
+  { to: "/datasets", label: "Datasets", icon: Database },
   { to: "/submit", label: "Submit", icon: UploadCloud },
   { to: "/benchmarks", label: "Benchmarks", icon: FlaskConical },
 ];

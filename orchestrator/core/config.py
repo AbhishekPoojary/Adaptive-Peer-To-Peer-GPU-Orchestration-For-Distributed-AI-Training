@@ -40,6 +40,36 @@ class Settings(BaseSettings):
     s3_secret_key: str = "minioadmin"
     s3_bucket_checkpoints: str = "checkpoints"
     s3_region: str = "us-east-1"
+    # Bucket holding uploaded training datasets (ADR-014). Separate from
+    # checkpoints because the two have opposite access patterns and lifetimes: a
+    # checkpoint is written by a trainer and read once on resume, a dataset is
+    # written once by an operator and read by every peer that runs the job.
+    s3_bucket_datasets: str = "datasets"
+
+    # --- Custom datasets (ADR-014) ---
+    # Hard ceiling on an uploaded archive, in bytes. Enforced while streaming to
+    # disk, so an oversized upload is cut off rather than buffered first.
+    # 2 GiB default: large enough for a real image set, small enough that one
+    # upload cannot fill the orchestrator's disk.
+    dataset_max_upload_bytes: int = 2 * 1024 * 1024 * 1024
+    # Ceiling on the *decompressed* size. A zip bomb is small on the wire and
+    # enormous on disk, so the compressed cap above cannot catch it; this is
+    # checked against the archive's declared sizes before extracting anything.
+    dataset_max_uncompressed_bytes: int = 8 * 1024 * 1024 * 1024
+    # Ceiling on how many files an archive may contain. Bounds the validation
+    # walk itself, which would otherwise be a cheap way to occupy the server.
+    dataset_max_files: int = 200_000
+    # Bounds on how many classes a dataset may declare. One class cannot be
+    # classified; the upper bound stops a mislaid directory tree from being read
+    # as tens of thousands of labels.
+    dataset_min_classes: int = 2
+    dataset_max_classes: int = 1000
+    # Lifetime of the presigned URL a peer is handed when it claims a job. Long
+    # enough to download a large archive on a slow home connection, short enough
+    # that a peer which has finished cannot keep reading the data indefinitely.
+    # It is minted per claim, so a retry on another node gets a fresh one rather
+    # than reusing this window.
+    dataset_url_ttl_seconds: int = 3600
 
     # --- Auth (ADR-008) ---
     jwt_signing_key: str = "dev-only-change-me"

@@ -176,8 +176,16 @@ def build_run_kwargs(
     resolves. ``world_size == 1`` (or ``None``) keeps the M4 single-process path
     exactly: image default entrypoint, plain bridge networking.
     """
+    # A custom dataset (ADR-014) carries no built-in name: the orchestrator put a
+    # presigned URL and a digest in the spec at claim time instead. Sending
+    # DATASET="None" here — which str(job_spec["dataset"]) would produce — would
+    # reach the trainer as an unknown dataset name and fail with a message about
+    # torchvision that has nothing to do with the real situation.
+    dataset_url = job_spec.get("dataset_url")
+    builtin_dataset = job_spec.get("dataset")
+
     environment = {
-        "DATASET": str(job_spec["dataset"]),
+        "DATASET": "custom" if dataset_url else str(builtin_dataset),
         "MODEL": str(job_spec["model"]),
         "EPOCHS": str(job_spec["epochs"]),
         "BATCH_SIZE": str(job_spec["batch_size"]),
@@ -186,6 +194,16 @@ def build_run_kwargs(
         "LEASE_ID": lease_id,
         "LEASE_EPOCH": str(lease_epoch),
     }
+    # Custom dataset (ADR-014). The digest is not optional decoration: it is what
+    # lets the trainer refuse an archive that is not the one the orchestrator
+    # validated, so it is passed whenever the URL is.
+    if dataset_url:
+        environment["DATASET_URL"] = str(dataset_url)
+        environment["DATASET_SHA256"] = str(job_spec.get("dataset_sha256", ""))
+        environment["DATASET_NUM_CLASSES"] = str(
+            job_spec.get("dataset_num_classes", "")
+        )
+        environment["DATASET_NAME"] = str(job_spec.get("dataset_name", ""))
     # M6 (ADR-006): pass S3/MinIO checkpoint config through to the trainer only
     # when it is fully configured, so a non-checkpointing node's container env is
     # exactly the pre-M6 env. In the dev co-located topology the endpoint is the

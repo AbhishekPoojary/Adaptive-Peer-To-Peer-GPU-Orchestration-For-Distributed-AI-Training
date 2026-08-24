@@ -31,6 +31,15 @@ server = [
     # the agent and bench extras already carry, so this adds no new version to
     # the install matrix.
     "httpx==0.28.1",
+    # Dataset upload (ADR-014). Starlette parses multipart bodies through this;
+    # without it the upload endpoint raises at request time rather than at
+    # import, so its absence would look like a runtime bug rather than a missing
+    # dependency.
+    "python-multipart==0.0.20",
+    # Stores dataset archives in MinIO and signs the per-claim download URLs.
+    # Same pin the trainer image and the Windows installer already use, so a
+    # peer and the orchestrator agree on client behaviour.
+    "boto3==1.35.99",
 ]
 agent = [
     "psutil==6.1.1",
@@ -100,6 +109,11 @@ extend-immutable-calls = [
     "fastapi.Path",
     "fastapi.Query",
     "fastapi.Body",
+    # Multipart markers, added for the dataset upload endpoint (ADR-014). Same
+    # exception as the rest: calling them in argument defaults is the framework's
+    # intended usage, not the mutable-default bug B008 exists to catch.
+    "fastapi.File",
+    "fastapi.Form",
 ]
 
 [tool.mypy]

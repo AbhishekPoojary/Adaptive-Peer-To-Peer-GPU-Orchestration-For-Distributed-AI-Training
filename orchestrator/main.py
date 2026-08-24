@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from orchestrator.api.auth import router as auth_router
+from orchestrator.api.datasets import router as datasets_router
 from orchestrator.api.health import router as health_router
 from orchestrator.api.installer import router as installer_router
 from orchestrator.api.jobs import router as jobs_router
@@ -71,6 +72,7 @@ def create_app() -> FastAPI:
     app.include_router(installer_router)
     app.include_router(auth_router)
     app.include_router(nodes_router)
+    app.include_router(datasets_router)
     app.include_router(jobs_router)
     app.include_router(leases_router)
     app.include_router(streaming_router)

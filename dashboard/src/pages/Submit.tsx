@@ -2,6 +2,7 @@ import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronRight, Settings2 } from "lucide-react";
 import { useNodesQuery } from "@/api/nodes";
+import { useDatasetsQuery } from "@/api/datasets";
 import { useJobsQuery, useSubmitJobMutation } from "@/api/jobs";
 import { ApiError } from "@/api/client";
 import type { JobSubmitRequest } from "@/api/types";
@@ -42,7 +43,12 @@ export function Submit() {
   const jobsQuery = useJobsQuery();
   const submitMutation = useSubmitJobMutation();
 
-  const [dataset, setDataset] = useState<(typeof DATASETS)[number]>("cifar10");
+  const datasetsQuery = useDatasetsQuery();
+  // One value for both sources: a built-in name, or "upload:<uuid>" for an
+  // uploaded dataset (ADR-014). Encoding the choice in one string keeps a
+  // single <Select> rather than a source toggle plus two pickers, which is
+  // one fewer decision for someone who just wants to start a job.
+  const [dataset, setDataset] = useState<string>("cifar10");
   // "cnn" (the trainer's real SmallCNN — see trainer/train.py) is the only
   // architecture actually implemented; defaulting to a name it doesn't
   // recognize (e.g. "resnet18") would train fine but silently substitute
@@ -111,9 +117,15 @@ export function Submit() {
     }
     setFormError(null);
 
+    const uploadedId = dataset.startsWith("upload:")
+      ? dataset.slice("upload:".length)
+      : null;
+
     const body: JobSubmitRequest = {
       spec: {
-        dataset,
+        // Exactly one of these is set; the server rejects both or neither.
+        dataset: uploadedId ? null : (dataset as "cifar10" | "mnist"),
+        ...(uploadedId ? { dataset_id: uploadedId } : {}),
         model: model.trim(),
         epochs: Number(epochs),
         batch_size: Number(batchSize),
@@ -154,7 +166,13 @@ export function Submit() {
               <SelectContent>
                 {DATASETS.map((d) => (
                   <SelectItem key={d} value={d}>
-                    {d}
+                    {d} (built-in)
+                  </SelectItem>
+                ))}
+                {(datasetsQuery.data ?? []).map((d) => (
+                  <SelectItem key={d.id} value={`upload:${d.id}`}>
+                    {d.name} — {d.num_classes} classes,{" "}
+                    {d.train_images.toLocaleString()} images
                   </SelectItem>
                 ))}
               </SelectContent>

@@ -76,7 +76,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import torch
 import torch.distributed as dist
@@ -294,6 +294,190 @@ def _build_datasets(
     raise RuntimeError(f"unsupported DATASET '{dataset_name}'")
 
 
+# --- Custom uploaded datasets (ADR-014) --------------------------------------
+
+#: Every custom image is resized to this square and converted to RGB. SmallCNN's
+#: global average pooling tolerates varying input sizes, but a DataLoader batch
+#: cannot: stacking tensors requires identical shapes, and an uploaded folder has
+#: no reason to contain uniformly sized images. 64px is a compromise — larger
+#: than CIFAR's 32 so real photographs keep some detail, small enough to train on
+#: a 4GB laptop card.
+_CUSTOM_IMAGE_SIZE = 64
+#: Mean/std 0.5 maps [0,1] to [-1,1]. Unlike the CIFAR-10 and MNIST constants
+#: above, these are *not* that dataset's measured statistics — nobody has
+#: measured an arbitrary upload. Computing the real ones would need a full pass
+#: over the data before training could start. This is a declared convention, and
+#: it is labelled as such rather than presented as fitted values.
+_CUSTOM_MEAN = (0.5, 0.5, 0.5)
+_CUSTOM_STD = (0.5, 0.5, 0.5)
+
+#: Read size when streaming the archive down and hashing it.
+_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+def _download_and_verify(url: str, *, expected_sha256: str, destination: str) -> None:
+    """Fetch the dataset archive and prove it is the one that was validated.
+
+    The orchestrator checked this archive's contents at upload time; the digest
+    is what carries that guarantee across the network to this machine. A
+    mismatch aborts before anything is extracted, because at that point the
+    bytes on disk are of unknown provenance and extracting them is exactly the
+    thing the upload-time validation existed to prevent.
+    """
+    import hashlib
+    import urllib.request
+
+    digest = hashlib.sha256()
+    downloaded = 0
+    with urllib.request.urlopen(url) as response, open(destination, "wb") as sink:
+        while chunk := response.read(_DOWNLOAD_CHUNK_BYTES):
+            digest.update(chunk)
+            sink.write(chunk)
+            downloaded += len(chunk)
+
+    actual = digest.hexdigest()
+    if actual != expected_sha256:
+        os.unlink(destination)
+        raise RuntimeError(
+            "dataset archive failed its integrity check "
+            f"(expected sha256 {expected_sha256}, got {actual}); refusing to extract"
+        )
+    _log(f"dataset archive verified: {downloaded} bytes, sha256 {actual[:12]}...")
+
+
+def _safe_extract(archive_path: str, destination: str) -> None:
+    """Extract a zip, refusing any member that would escape ``destination``.
+
+    The orchestrator already rejected traversal and symlink entries at upload,
+    and the digest above proves this is that same archive — so this is belt and
+    braces. It stays because ``ZipFile.extractall`` has historically been the
+    single most common source of zip-slip bugs, and the cost of checking is a
+    string comparison per entry.
+    """
+    import zipfile
+
+    destination_root = os.path.realpath(destination)
+    with zipfile.ZipFile(archive_path) as zf:
+        for info in zf.infolist():
+            target = os.path.realpath(os.path.join(destination, info.filename))
+            if target != destination_root and not target.startswith(
+                destination_root + os.sep
+            ):
+                raise RuntimeError(
+                    f"refusing to extract {info.filename!r}: it escapes the "
+                    "extraction directory"
+                )
+            mode = (info.external_attr >> 16) & 0o170000
+            if mode and mode not in (0o100000, 0o040000):
+                raise RuntimeError(
+                    f"refusing to extract {info.filename!r}: not a regular file"
+                )
+        zf.extractall(destination)
+
+
+def _prepare_custom_dataset(cache_dir: str, *, url: str, sha256: str) -> str:
+    """Download and unpack the dataset, returning its extracted root.
+
+    Keyed by digest under the shared data cache, so a second job using the same
+    dataset on this node reuses the extraction instead of re-downloading
+    gigabytes. Extraction goes to a temporary directory and is then renamed into
+    place: rename is atomic on a single filesystem, so a rank that finds the
+    final directory always finds a *complete* one, and a crash mid-extract
+    leaves no half-unpacked tree that a later run would trust.
+    """
+    import shutil
+    import tempfile
+
+    root = os.path.join(cache_dir, "custom-datasets", sha256)
+    if os.path.isdir(root):
+        _log(f"reusing cached dataset at {root}")
+        return root
+
+    os.makedirs(os.path.dirname(root), exist_ok=True)
+    staging = tempfile.mkdtemp(prefix=".staging-", dir=os.path.dirname(root))
+    archive_path = os.path.join(staging, "archive.zip")
+    try:
+        _log("downloading dataset archive...")
+        t0 = time.monotonic()
+        _download_and_verify(url, expected_sha256=sha256, destination=archive_path)
+        _log(f"download finished in {time.monotonic() - t0:.1f}s; extracting...")
+
+        extract_dir = os.path.join(staging, "unpacked")
+        os.makedirs(extract_dir, exist_ok=True)
+        _safe_extract(archive_path, extract_dir)
+        os.unlink(archive_path)
+
+        # Tolerate the single wrapping directory produced by zipping a folder
+        # rather than its contents — the orchestrator accepts that layout, so
+        # the trainer has to resolve it the same way.
+        entries = os.listdir(extract_dir)
+        if "train" not in entries and len(entries) == 1:
+            candidate = os.path.join(extract_dir, entries[0])
+            if os.path.isdir(candidate) and "train" in os.listdir(candidate):
+                extract_dir = candidate
+
+        try:
+            os.rename(extract_dir, root)
+        except OSError:
+            # Another rank on this node won the race and put an identical tree
+            # there first. Its content is byte-identical (same digest), so use it.
+            if not os.path.isdir(root):
+                raise
+            _log("another rank extracted this dataset first; using it")
+        return root
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def _build_custom_datasets(
+    root: str, *, expected_num_classes: int | None
+) -> tuple[Any, Any, int, int]:
+    """Load an extracted ImageFolder tree as (train, test, in_channels, classes).
+
+    Everything is converted to 3-channel RGB and resized to a fixed square, so a
+    folder of mixed-size JPEGs and greyscale PNGs still forms stackable batches.
+
+    No augmentation is applied. The built-in CIFAR-10 path flips images
+    horizontally because that is known-safe for those classes; an arbitrary
+    upload might be digits, text, or medical scans, where a flip changes the
+    label. Silently applying it would corrupt the training signal in a way that
+    only shows up as a mysteriously poor accuracy number.
+    """
+    transform = transforms.Compose(
+        [
+            transforms.Resize((_CUSTOM_IMAGE_SIZE, _CUSTOM_IMAGE_SIZE)),
+            transforms.Lambda(lambda image: image.convert("RGB")),
+            transforms.ToTensor(),
+            transforms.Normalize(_CUSTOM_MEAN, _CUSTOM_STD),
+        ]
+    )
+    train_dir = os.path.join(root, "train")
+    test_dir = os.path.join(root, "test")
+    for path, label in ((train_dir, "train"), (test_dir, "test")):
+        if not os.path.isdir(path):
+            raise RuntimeError(f"extracted dataset has no {label}/ directory")
+
+    train_set = datasets.ImageFolder(train_dir, transform=transform)
+    test_set = datasets.ImageFolder(test_dir, transform=transform)
+
+    if train_set.classes != test_set.classes:
+        raise RuntimeError(
+            f"train/ and test/ disagree on classes: "
+            f"{train_set.classes} vs {test_set.classes}"
+        )
+    num_classes = len(train_set.classes)
+    if expected_num_classes is not None and num_classes != expected_num_classes:
+        # The orchestrator counted classes at upload; a disagreement means the
+        # extracted tree is not what was validated, and training on it would
+        # silently produce a model with the wrong number of outputs.
+        raise RuntimeError(
+            f"dataset declares {expected_num_classes} classes but the extracted "
+            f"archive has {num_classes}"
+        )
+    _log(f"custom dataset classes: {', '.join(train_set.classes)}")
+    return train_set, test_set, 3, num_classes
+
+
 def _epoch_mean_loss(
     running_loss: float, n_batches: int, dist_config: DistConfig, device: torch.device
 ) -> float:
@@ -362,8 +546,30 @@ def _serialize_checkpoint(
 
 def main() -> None:
     dataset_name = _require_env("DATASET").lower()
-    if dataset_name not in ("cifar10", "mnist"):
-        raise RuntimeError(f"unsupported DATASET '{dataset_name}'; expected cifar10 or mnist")
+    if dataset_name not in ("cifar10", "mnist", "custom"):
+        raise RuntimeError(
+            f"unsupported DATASET '{dataset_name}'; expected cifar10, mnist, or "
+            "custom (an uploaded dataset, ADR-014)"
+        )
+    # DATASET=custom means the archive is fetched from the URL the orchestrator
+    # signed at claim time. Both of these are required in that mode: without the
+    # digest there is no way to prove the download is the archive that was
+    # validated, and running on unverified data is the failure this design
+    # exists to prevent.
+    dataset_url = os.environ.get("DATASET_URL", "").strip()
+    dataset_sha256 = os.environ.get("DATASET_SHA256", "").strip()
+    if dataset_name == "custom":
+        if not dataset_url:
+            raise RuntimeError(
+                "DATASET=custom requires DATASET_URL. The orchestrator sets it "
+                "when granting the lease; an empty value usually means the "
+                "dataset was deleted after the job was submitted."
+            )
+        if not dataset_sha256:
+            raise RuntimeError(
+                "DATASET=custom requires DATASET_SHA256 — refusing to train on "
+                "an archive whose integrity cannot be checked"
+            )
 
     model_name = os.environ.get("MODEL", "small_cnn")
     epochs = int(_require_env("EPOCHS"))
@@ -430,12 +636,31 @@ def main() -> None:
         )
         log(f"training on CPU ({reason}; no GPU is being used) — honest")
 
-    log(f"loading real dataset '{dataset_name}' into cache dir '{cache_dir}' (torchvision)...")
     t0 = time.monotonic()
-    train_set, test_set, in_channels, num_classes = _build_datasets(dataset_name, cache_dir)
+    if dataset_name == "custom":
+        friendly = os.environ.get("DATASET_NAME", "").strip() or "uploaded dataset"
+        log(f"preparing custom dataset '{friendly}' in cache dir '{cache_dir}'...")
+        declared_classes_raw = os.environ.get("DATASET_NUM_CLASSES", "").strip()
+        declared_classes = int(declared_classes_raw) if declared_classes_raw else None
+        root = _prepare_custom_dataset(
+            cache_dir, url=dataset_url, sha256=dataset_sha256
+        )
+        train_set, test_set, in_channels, num_classes = _build_custom_datasets(
+            root, expected_num_classes=declared_classes
+        )
+        split_note = "uploaded train/test split"
+    else:
+        log(
+            f"loading real dataset '{dataset_name}' into cache dir "
+            f"'{cache_dir}' (torchvision)..."
+        )
+        train_set, test_set, in_channels, num_classes = _build_datasets(
+            dataset_name, cache_dir
+        )
+        split_note = "canonical split"
     log(
         f"dataset ready in {time.monotonic() - t0:.1f}s: "
-        f"{len(train_set)} train / {len(test_set)} test examples (canonical split)"
+        f"{len(train_set)} train / {len(test_set)} test examples ({split_note})"
     )
 
     pin_memory = device.type == "cuda"

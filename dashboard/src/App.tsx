@@ -8,6 +8,7 @@ import { NodeDetail } from "@/pages/NodeDetail";
 import { JobsList } from "@/pages/JobsList";
 import { JobDetail } from "@/pages/JobDetail";
 import { Submit } from "@/pages/Submit";
+import { Datasets } from "@/pages/Datasets";
 import { Benchmarks } from "@/pages/Benchmarks";
 import { NotFound } from "@/pages/NotFound";
 
@@ -43,6 +44,7 @@ const router = createBrowserRouter([
       { path: "nodes/:nodeId", element: <NodeDetail /> },
       { path: "jobs", element: <JobsList /> },
       { path: "jobs/:jobId", element: <JobDetailRoute /> },
+      { path: "datasets", element: <Datasets /> },
       { path: "submit", element: <Submit /> },
       { path: "benchmarks", element: <Benchmarks /> },
       { path: "*", element: <NotFound /> },

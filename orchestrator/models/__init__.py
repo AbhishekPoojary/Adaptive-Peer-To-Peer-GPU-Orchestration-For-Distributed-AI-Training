@@ -8,6 +8,7 @@ here). Add new model modules to the imports below when they land.
 
 from __future__ import annotations
 
+from orchestrator.models.dataset import Dataset
 from orchestrator.models.enrollment import EnrollmentToken
 from orchestrator.models.job import (
     Job,
@@ -28,6 +29,7 @@ from orchestrator.models.user import User, UserRole
 
 __all__ = [
     "AuthChallenge",
+    "Dataset",
     "EnrollmentToken",
     "Job",
     "JobEvent",

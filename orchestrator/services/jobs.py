@@ -117,7 +117,12 @@ async def create_job(
     cannot silently fall back to a client-asserted identity.
     """
     job = Job(
-        spec=req.spec.model_dump(),
+        # mode="json" so every value is a JSON primitive before it reaches the
+        # JSONB column. Plain model_dump() leaves dataset_id as a uuid.UUID
+        # (ADR-014), which asyncpg's JSON encoder rejects outright. Every other
+        # spec field is already a primitive, so this changes nothing about how
+        # existing specs are stored.
+        spec=req.spec.model_dump(mode="json"),
         scheduler_name=scheduler_name,
         state=JobState.QUEUED,
         submitted_by=submitted_by,

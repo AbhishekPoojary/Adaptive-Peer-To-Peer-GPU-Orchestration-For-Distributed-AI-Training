@@ -34,6 +34,7 @@ from orchestrator.schemas.training import (
     TrainingMetricListResponse,
     TrainingMetricOut,
 )
+from orchestrator.services.datasets import get_dataset
 from orchestrator.services.jobs import (
     IllegalTransitionError,
     JobNotFoundError,
@@ -82,6 +83,20 @@ async def submit_job(
                 f"registered: {sorted(registered_names())}"
             ),
         )
+
+    # Resolve an uploaded dataset now (ADR-014). Checking at submit time means a
+    # bad reference is a 422 the submitter sees immediately, rather than a job
+    # that queues, waits for a peer, and dies twenty minutes later on a machine
+    # nobody is watching.
+    if body.spec.dataset_id is not None:
+        dataset = await get_dataset(session, dataset_id=body.spec.dataset_id)
+        if dataset is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "unknown or deleted dataset; pick one from GET /datasets"
+                ),
+            )
 
     job = await create_job(
         session,

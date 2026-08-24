@@ -13,17 +13,34 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _FORBID = ConfigDict(extra="forbid")
 
 
+#: The datasets the trainer can fetch for itself, by name. Anything else must be
+#: uploaded first and referenced by id (ADR-014).
+BuiltinDataset = Literal["cifar10", "mnist"]
+
+
 class JobSpec(BaseModel):
-    """A training job's specification."""
+    """A training job's specification.
+
+    Exactly one dataset source must be given: ``dataset`` for a built-in that the
+    trainer downloads from torchvision, or ``dataset_id`` for an uploaded one
+    (ADR-014). Keeping the built-in field exactly as it was means every existing
+    caller — the bench harness, the dashboard, 89 historical jobs — still
+    validates unchanged, which matters because this model forbids extra fields
+    and would otherwise 422 all of them.
+    """
 
     model_config = _FORBID
 
-    dataset: Literal["cifar10", "mnist"]
+    dataset: BuiltinDataset | None = None
+    #: An uploaded dataset's id. Resolved at submit time (so a bad reference
+    #: fails immediately, not on some peer twenty minutes later) and again at
+    #: claim time, when the peer is told where to fetch it.
+    dataset_id: uuid.UUID | None = None
     model: str = Field(min_length=1, max_length=128)
     epochs: int = Field(ge=1)
     batch_size: int = Field(ge=1)
@@ -32,6 +49,25 @@ class JobSpec(BaseModel):
     # NULL means the job is CPU-eligible (no GPU-memory requirement). A value is
     # a hard minimum a candidate node's largest GPU must meet.
     min_gpu_mem_bytes: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _exactly_one_dataset_source(self) -> JobSpec:
+        """Require exactly one of ``dataset`` / ``dataset_id``.
+
+        Neither is not a sensible default — there is nothing to train on — and
+        both is ambiguous in a way that would be resolved silently and wrongly
+        by whichever branch the trainer happened to check first.
+        """
+        if self.dataset is None and self.dataset_id is None:
+            raise ValueError(
+                "a job needs a dataset: pass 'dataset' for a built-in "
+                "(cifar10, mnist) or 'dataset_id' for an uploaded one"
+            )
+        if self.dataset is not None and self.dataset_id is not None:
+            raise ValueError(
+                "pass either 'dataset' or 'dataset_id', not both"
+            )
+        return self
 
 
 class JobSubmitRequest(BaseModel):
