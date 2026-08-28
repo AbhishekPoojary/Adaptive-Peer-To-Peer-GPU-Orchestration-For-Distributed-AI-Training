@@ -358,7 +358,7 @@ in `bench/report/` and each carries the git commit and the hardware it ran on.
 | Adaptive scheduler vs. a node with 3 recorded failures | placed **6/6** jobs on the reliable node (`round_robin` 3/6, `least_loaded` 2/6) |
 | Machine `SIGKILL`ed mid-training | detected in **5.8 s**; job finished elsewhere **55.9 s** after it vanished |
 | A machine with **no Docker at all** | trained to **96.67%** on CUDA via the opt-in unsandboxed path |
-| Test suite | ~300 tests against a real Postgres — no mocked database, no simulated failures |
+| Test suite | 416 tests against a real Postgres — no mocked database, no simulated failures |
 
 **Not claimed: any speedup from distribution.** All development happened on one
 laptop with one GPU, where extra workers fight over the same device — measured,
