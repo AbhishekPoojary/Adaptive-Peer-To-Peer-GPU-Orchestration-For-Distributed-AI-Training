@@ -16,6 +16,7 @@ from orchestrator.api.leases import router as leases_router
 from orchestrator.api.metrics import router as metrics_router
 from orchestrator.api.nodes import router as nodes_router
 from orchestrator.api.streaming import router as streaming_router
+from orchestrator.api.users import router as users_router
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.db import dispose_engine, get_engine
 from orchestrator.core.logging import configure_logging
@@ -72,6 +73,7 @@ def create_app() -> FastAPI:
     app.include_router(installer_router)
     app.include_router(auth_router)
     app.include_router(nodes_router)
+    app.include_router(users_router)
     app.include_router(datasets_router)
     app.include_router(jobs_router)
     app.include_router(leases_router)

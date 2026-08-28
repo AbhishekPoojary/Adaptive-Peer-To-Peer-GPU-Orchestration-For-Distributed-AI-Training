@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import enum
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -243,3 +244,141 @@ async def record_login(session: AsyncSession, *, user_id: uuid.UUID) -> None:
     await session.execute(
         update(User).where(User.id == user_id).values(last_login_at=func.now())
     )
+
+
+# --- Admin user management (ADR-012 addendum 2) ------------------------------
+
+
+class LastAdminError(Exception):
+    """The change would leave the fleet with no enabled ADMIN.
+
+    Not a courtesy guard. Every administrative action — enrolling machines,
+    uploading datasets, managing accounts — requires ADMIN, so a deployment with
+    zero enabled admins can only be repaired by someone with shell access to the
+    orchestrator host. That is precisely the situation this addendum exists to
+    stop people from ending up in, and it would be reachable in two clicks
+    without this check.
+    """
+
+
+async def list_users(session: AsyncSession) -> list[User]:
+    """Every account, newest first. Includes disabled ones.
+
+    Disabled accounts are deliberately visible: "why can this person not sign
+    in?" is the question an admin opens this list to answer, and hiding the
+    answer would defeat the purpose.
+    """
+    result = await session.execute(select(User).order_by(User.created_at.desc()))
+    return list(result.scalars().all())
+
+
+async def get_user_by_id(session: AsyncSession, *, user_id: uuid.UUID) -> User | None:
+    """Look up one account by id."""
+    return await session.get(User, user_id)
+
+
+async def count_enabled_admins(
+    session: AsyncSession, *, excluding: uuid.UUID | None = None
+) -> int:
+    """How many enabled ADMIN accounts exist, optionally ignoring one.
+
+    ``excluding`` answers "if this account stopped being a usable admin, how many
+    would be left?" — which is the question every guard here actually asks.
+    """
+    statement = select(func.count()).select_from(User).where(
+        User.role == UserRole.ADMIN, User.disabled_at.is_(None)
+    )
+    if excluding is not None:
+        statement = statement.where(User.id != excluding)
+    result = await session.execute(statement)
+    return int(result.scalar_one())
+
+
+async def update_user(
+    session: AsyncSession,
+    *,
+    user: User,
+    role: UserRole | None = None,
+    password: str | None = None,
+    email: str | None = None,
+    email_provided: bool = False,
+    disabled: bool | None = None,
+) -> User:
+    """Apply an admin's changes to an account. Caller commits.
+
+    ``email_provided`` distinguishes "leave the email alone" from "clear it".
+    Both arrive as ``email=None``, and conflating them would silently revoke
+    someone's Google sign-in every time an admin changed only their role.
+
+    Raises :class:`LastAdminError` if the change would remove the last enabled
+    admin, and :class:`WeakPasswordError` / :class:`UserExistsError` for the same
+    reasons :func:`create_user` does.
+    """
+    # Evaluate the lockout guard against what the account would *become*, not
+    # what it is now, so demote-and-disable in one request is still caught.
+    would_be_admin = (role if role is not None else user.role) is UserRole.ADMIN
+    would_be_enabled = (
+        not disabled if disabled is not None else user.disabled_at is None
+    )
+    is_usable_admin = user.role is UserRole.ADMIN and user.disabled_at is None
+    stops_being_one = not (would_be_admin and would_be_enabled)
+    # Short-circuit order matters: the count is a query, so it only runs for a
+    # change that could actually remove an admin.
+    if (
+        is_usable_admin
+        and stops_being_one
+        and await count_enabled_admins(session, excluding=user.id) == 0
+    ):
+        raise LastAdminError(
+            "this is the last enabled ADMIN account; promote or enable "
+            "another admin first, or the fleet becomes unmanageable "
+            "without shell access to the orchestrator host"
+        )
+
+    if password is not None:
+        if len(password) < MIN_PASSWORD_LENGTH:
+            raise WeakPasswordError(
+                f"password must be at least {MIN_PASSWORD_LENGTH} characters"
+            )
+        user.password_hash = hash_password(password)
+
+    if email_provided:
+        new_email = normalize_email(email) if email else None
+        if new_email != user.email:
+            # Moving the address moves Google sign-in with it, so the binding to
+            # the previous Google account must not survive — otherwise whoever
+            # held the old address keeps access under the old `sub` (ADR-012
+            # addendum §4).
+            user.email = new_email
+            user.google_sub = None
+
+    if role is not None:
+        user.role = role
+
+    if disabled is not None:
+        if disabled and user.disabled_at is None:
+            user.disabled_at = datetime.now(UTC)
+        elif not disabled:
+            user.disabled_at = None
+
+    # An account with neither a password nor an email cannot sign in by any
+    # route. Refusing here keeps the same invariant create_user enforces, rather
+    # than letting an edit reach a state creation would have rejected.
+    if user.password_hash is None and user.email is None:
+        raise NoCredentialError(
+            "that would leave the account with no way to sign in: give it a "
+            "password or an email for Google sign-in"
+        )
+
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        detail = str(exc.orig) if exc.orig is not None else str(exc)
+        if "ix_users_email" in detail:
+            raise UserExistsError(
+                "that email is already on another account"
+            ) from exc
+        raise UserExistsError("that username is already taken") from exc
+    await session.refresh(user)
+    return user

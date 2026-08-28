@@ -6,7 +6,9 @@ import {
   ListTodo,
   Server,
   UploadCloud,
+  UsersRound,
 } from "lucide-react";
+import { isAdmin } from "@/api/session";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS: {
@@ -14,6 +16,10 @@ const NAV_ITEMS: {
   label: string;
   icon: typeof Gauge;
   end?: boolean;
+  /** Hidden from non-admins. Cosmetic only — every route behind this is
+   *  enforced server-side, so hiding it saves a pointless click rather than
+   *  providing any access control. */
+  adminOnly?: boolean;
 }[] = [
   { to: "/", label: "Overview", icon: Gauge, end: true },
   { to: "/nodes", label: "Nodes", icon: Server },
@@ -21,12 +27,14 @@ const NAV_ITEMS: {
   { to: "/datasets", label: "Datasets", icon: Database },
   { to: "/submit", label: "Submit", icon: UploadCloud },
   { to: "/benchmarks", label: "Benchmarks", icon: FlaskConical },
+  { to: "/users", label: "People", icon: UsersRound, adminOnly: true },
 ];
 
 export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <nav className="flex flex-1 flex-col gap-0.5 p-2">
-      {NAV_ITEMS.map(({ to, label, icon: Icon, end }) => (
+      {NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin()).map(
+        ({ to, label, icon: Icon, end }) => (
         <NavLink
           key={to}
           to={to}
@@ -44,7 +52,8 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
           <Icon className="size-4 shrink-0" aria-hidden="true" />
           {label}
         </NavLink>
-      ))}
+        ),
+      )}
     </nav>
   );
 }

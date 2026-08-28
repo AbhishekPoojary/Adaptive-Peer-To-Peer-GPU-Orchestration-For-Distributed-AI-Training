@@ -9,6 +9,7 @@ import { JobsList } from "@/pages/JobsList";
 import { JobDetail } from "@/pages/JobDetail";
 import { Submit } from "@/pages/Submit";
 import { Datasets } from "@/pages/Datasets";
+import { Users } from "@/pages/Users";
 import { Benchmarks } from "@/pages/Benchmarks";
 import { NotFound } from "@/pages/NotFound";
 
@@ -45,6 +46,7 @@ const router = createBrowserRouter([
       { path: "jobs", element: <JobsList /> },
       { path: "jobs/:jobId", element: <JobDetailRoute /> },
       { path: "datasets", element: <Datasets /> },
+      { path: "users", element: <Users /> },
       { path: "submit", element: <Submit /> },
       { path: "benchmarks", element: <Benchmarks /> },
       { path: "*", element: <NotFound /> },

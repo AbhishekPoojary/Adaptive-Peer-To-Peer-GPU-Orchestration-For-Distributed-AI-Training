@@ -168,6 +168,11 @@ your shell history and the process table.
 - `--role ADMIN` — can also enroll new machines into the fleet.
 - `--role OPERATOR` — can submit and watch jobs, but not enroll machines.
 
+> **This is the bootstrap only.** Once one admin exists, everyone else is added
+> from the dashboard's **People** page — no SSH, no `DATABASE_URL`. The script
+> stays for the first account (there is nobody to authenticate as yet) and for
+> when the dashboard is unreachable.
+
 > If you changed `POSTGRES_PORT` in `deploy/.env`, use that port in
 > `DATABASE_URL` instead of `5432`.
 
@@ -195,6 +200,13 @@ Restart the orchestrator and a **Sign in with Google** button appears.
 > of one that already exists. On this system an account is permission to run
 > containers on other people's machines — Google can vouch for who you are, but
 > it cannot grant that.
+
+The easy way is the dashboard's **People** page: *Add person*, type a username
+and their Gmail address, done — they sign in with Google and you never share a
+password. A refused sign-in names the exact address it refused, so you can paste
+it straight in.
+
+From a shell, if you prefer or the dashboard is unreachable:
 
 ```bash
 # Add Google as an option on an existing password account
@@ -376,6 +388,7 @@ Each row links to the ADR explaining *why* — worth reading if a choice looks o
 | Human identity | Password → scrypt → short-lived JWT with a separate audience and role | ADR-012 |
 | Google sign-in | Optional. Google ID token verified against Google's keys → the *same* user JWT. Never creates an account | ADR-012 addendum |
 | Custom datasets | Upload an ImageFolder zip; validated without decompressing, stored in MinIO, fetched per-claim via a presigned URL and SHA-256 verified by the peer | ADR-014 |
+| Managing people | Admin-only `/users` CRUD and a **People** page; still no self-registration, and the last enabled admin cannot demote or disable themselves | ADR-012 addendum 2 |
 
 ## Repository layout
 
