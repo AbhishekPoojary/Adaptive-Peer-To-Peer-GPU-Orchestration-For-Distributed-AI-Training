@@ -12,9 +12,11 @@ token is rejected here (wrong JWT audience) and vice versa.
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.api.deps import get_settings_dep, require_user
@@ -23,6 +25,7 @@ from orchestrator.core.db import get_session
 from orchestrator.models.user import User
 from orchestrator.schedulers.registry import is_registered, registered_names
 from orchestrator.schemas.job import (
+    CheckpointOut,
     JobDetailResponse,
     JobListResponse,
     JobSubmitRequest,
@@ -34,6 +37,11 @@ from orchestrator.schemas.training import (
     TrainingMetricListResponse,
     TrainingMetricOut,
 )
+from orchestrator.services.checkpoints import (
+    latest_checkpoint_for,
+    stream_checkpoint,
+    suggested_filename,
+)
 from orchestrator.services.datasets import get_dataset
 from orchestrator.services.jobs import (
     IllegalTransitionError,
@@ -44,6 +52,7 @@ from orchestrator.services.jobs import (
     list_jobs,
 )
 from orchestrator.services.loops import trigger_scheduler_pass
+from orchestrator.services.object_store import ObjectStoreError
 from orchestrator.services.scheduling import list_scheduling_decisions
 from orchestrator.services.training import (
     LOG_LINES_DEFAULT_LIMIT,
@@ -51,6 +60,8 @@ from orchestrator.services.training import (
     list_log_lines,
     list_metrics,
 )
+
+logger = logging.getLogger("orchestrator.jobs")
 
 router = APIRouter(
     prefix="/jobs", tags=["jobs"], dependencies=[Depends(require_user)]
@@ -155,6 +166,115 @@ async def get_job_scheduling_decisions(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown job")
     decisions = await list_scheduling_decisions(session, job_id=job_id)
     return SchedulingDecisionListResponse(decisions=decisions)
+
+
+@router.get("/{job_id}/checkpoint", response_model=CheckpointOut)
+async def get_job_checkpoint(
+    job_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings_dep),
+) -> CheckpointOut:
+    """The trained model this job produced, and a short-lived link to download it.
+
+    Until this existed the system produced a model with no front door: the blob
+    sat in MinIO and the only way to it was the storage console with separate
+    credentials. A job page that shows 99% accuracy and cannot hand you the
+    thing that achieved it is a demo of training, not a tool.
+
+    Any authenticated user may fetch it, matching the rest of this router — a
+    person who can read a job's loss curve is not meaningfully restrained by
+    being denied its weights.
+
+    404 means the job never checkpointed. That is ordinary: checkpointing needs
+    S3 configured on the peer (ADR-006), so a fleet running without it trains
+    perfectly well and saves nothing.
+    """
+    if await get_job_detail(session, job_id=job_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown job")
+
+    try:
+        found = latest_checkpoint_for(str(job_id), settings=settings)
+    except ObjectStoreError as exc:
+        # Storage being unreachable is not "no checkpoint". Reporting it as 404
+        # would send someone hunting for a training bug that does not exist.
+        logger.warning("could not read the checkpoint manifest for %s: %s", job_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "checkpoint storage is unreachable, so whether this job saved a "
+                "model cannot be determined right now"
+            ),
+        ) from exc
+
+    if found is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "this job has no saved model. Checkpointing requires object "
+                "storage configured on the peer that ran it (ADR-006)"
+            ),
+        )
+
+    return CheckpointOut(
+        key=found.entry.key,
+        step=found.entry.step,
+        epoch=found.entry.epoch,
+        loss=found.entry.loss,
+        world_size=found.entry.world_size,
+        timestamp_utc=found.entry.timestamp_utc,
+        size_bytes=found.size_bytes,
+        download_path=f"/jobs/{job_id}/checkpoint/download",
+        filename=suggested_filename(str(job_id), found.entry),
+    )
+
+
+@router.get("/{job_id}/checkpoint/download")
+async def download_job_checkpoint(
+    job_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings_dep),
+) -> StreamingResponse:
+    """Stream the trained model's bytes.
+
+    The key is resolved from the manifest here rather than taken from the
+    caller, so this cannot be turned into a read of any object in the
+    checkpoints bucket by passing a crafted key — the only thing a caller
+    chooses is which job.
+
+    The body is streamed in chunks, so a large model is not held in the
+    orchestrator's memory. boto3 is blocking, but Starlette iterates a sync
+    generator in a threadpool, so the event loop keeps serving.
+    """
+    if await get_job_detail(session, job_id=job_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown job")
+
+    try:
+        found = latest_checkpoint_for(str(job_id), settings=settings)
+    except ObjectStoreError as exc:
+        logger.warning("could not read the checkpoint manifest for %s: %s", job_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="checkpoint storage is unreachable",
+        ) from exc
+
+    if found is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="this job has no saved model",
+        )
+
+    filename = suggested_filename(str(job_id), found.entry)
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    if found.size_bytes is not None:
+        # Only when actually known — a wrong Content-Length truncates the
+        # download, and a guessed one would be worse than none.
+        headers["Content-Length"] = str(found.size_bytes)
+
+    return StreamingResponse(
+        stream_checkpoint(found.entry.key, settings=settings),
+        media_type="application/octet-stream",
+        headers=headers,
+    )
 
 
 @router.get("/{job_id}/metrics", response_model=TrainingMetricListResponse)

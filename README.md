@@ -338,7 +338,9 @@ curl -sX POST http://localhost:8090/jobs \
        "scheduler_name":"adaptive"}'
 ```
 
-Watch it run on the job detail page: live logs, live loss and accuracy.
+Watch it run on the job detail page: live logs, live loss and accuracy — and
+when it finishes, a **Trained model** card with a Download button. The
+orchestrator streams the checkpoint to you; there is no need to open MinIO.
 
 Who submitted a job comes from your **token**, never from the request body —
 `submitted_by` is evidence, not a self-declared string.
@@ -389,6 +391,7 @@ Each row links to the ADR explaining *why* — worth reading if a choice looks o
 | Google sign-in | Optional. Google ID token verified against Google's keys → the *same* user JWT. Never creates an account | ADR-012 addendum |
 | Custom datasets | Upload an ImageFolder zip; validated without decompressing, stored in MinIO, fetched per-claim via a presigned URL and SHA-256 verified by the peer | ADR-014 |
 | Managing people | Admin-only `/users` CRUD and a **People** page; still no self-registration, and the last enabled admin cannot demote or disable themselves | ADR-012 addendum 2 |
+| Getting the model | `GET /jobs/{id}/checkpoint` reads the manifest and the orchestrator **streams** the bytes — no presigned URL, because it signs against an endpoint a browser cannot resolve | ADR-006 addendum 2 |
 
 ## Repository layout
 

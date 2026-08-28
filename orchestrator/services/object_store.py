@@ -36,11 +36,23 @@ class ObjectStoreError(Exception):
     """
 
 
-class DatasetObjectStore:
-    """S3/MinIO operations for the datasets bucket."""
+class ObjectNotFoundError(ObjectStoreError):
+    """The key does not exist. Distinct because it is an ordinary answer.
 
-    def __init__(self, settings: Settings) -> None:
-        self._bucket = settings.s3_bucket_datasets
+    "This job has no checkpoint yet" is a normal state, not a failure, and the
+    caller turns it into a 404 rather than a 503.
+    """
+
+
+class _BucketStore:
+    """S3/MinIO operations against one bucket.
+
+    Shared by the dataset and checkpoint stores below, which differ only in
+    which bucket they address and which operations they actually use.
+    """
+
+    def __init__(self, settings: Settings, bucket: str) -> None:
+        self._bucket = bucket
         self._endpoint = settings.s3_endpoint_url
         self._access_key = settings.s3_access_key
         self._secret_key = settings.s3_secret_key
@@ -122,6 +134,65 @@ class DatasetObjectStore:
         except (botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError) as exc:
             logger.warning("could not delete dataset object %s: %s", key, exc)
 
+    def get_bytes(self, *, key: str) -> bytes:
+        """Read an object, raising :class:`ObjectNotFoundError` when absent."""
+        import botocore.exceptions
+
+        client = self._get_client()
+        try:
+            response = client.get_object(Bucket=self._bucket, Key=key)
+            data: bytes = response["Body"].read()
+        except botocore.exceptions.ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code in ("NoSuchKey", "404", "NoSuchBucket"):
+                raise ObjectNotFoundError(f"{key} is not in {self._bucket}") from exc
+            raise ObjectStoreError(f"could not read {key}: {exc}") from exc
+        except botocore.exceptions.BotoCoreError as exc:
+            raise ObjectStoreError(f"could not read {key}: {exc}") from exc
+        return data
+
+    def head_size_bytes(self, *, key: str) -> int | None:
+        """Object size, or None if it cannot be determined.
+
+        None rather than 0 or a guess: an unknown size is shown as unknown,
+        never as a plausible number (CONTRIBUTING.md rule 2).
+        """
+        import botocore.exceptions
+
+        client = self._get_client()
+        try:
+            head = client.head_object(Bucket=self._bucket, Key=key)
+        except (botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError):
+            return None
+        size = head.get("ContentLength")
+        return int(size) if size is not None else None
+
+    def iter_object(self, *, key: str, chunk_bytes: int = 1024 * 1024):  # type: ignore[no-untyped-def]
+        """Yield an object's bytes in chunks, for streaming to a client.
+
+        A synchronous generator: Starlette runs it in a threadpool, so a large
+        download does not block the event loop even though boto3 is blocking.
+        """
+        import botocore.exceptions
+
+        client = self._get_client()
+        try:
+            response = client.get_object(Bucket=self._bucket, Key=key)
+        except botocore.exceptions.ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code in ("NoSuchKey", "404", "NoSuchBucket"):
+                raise ObjectNotFoundError(f"{key} is not in {self._bucket}") from exc
+            raise ObjectStoreError(f"could not read {key}: {exc}") from exc
+        except botocore.exceptions.BotoCoreError as exc:
+            raise ObjectStoreError(f"could not read {key}: {exc}") from exc
+
+        body = response["Body"]
+        try:
+            while chunk := body.read(chunk_bytes):
+                yield chunk
+        finally:
+            body.close()
+
     def presigned_get_url(self, *, key: str, expires_seconds: int) -> str:
         """Return a time-limited URL a peer can GET without credentials.
 
@@ -141,3 +212,22 @@ class DatasetObjectStore:
         except (botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError) as exc:
             raise ObjectStoreError(f"could not sign a dataset URL: {exc}") from exc
         return url
+
+
+class DatasetObjectStore(_BucketStore):
+    """The datasets bucket (ADR-014)."""
+
+    def __init__(self, settings: Settings) -> None:
+        super().__init__(settings, settings.s3_bucket_datasets)
+
+
+class CheckpointObjectStore(_BucketStore):
+    """The checkpoints bucket (ADR-006 addendum 2).
+
+    Read-only from the orchestrator's side: checkpoints are *written* by the
+    trainer on a peer, and the control plane only ever reads the manifest to
+    answer "where is this job's model?".
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        super().__init__(settings, settings.s3_bucket_checkpoints)

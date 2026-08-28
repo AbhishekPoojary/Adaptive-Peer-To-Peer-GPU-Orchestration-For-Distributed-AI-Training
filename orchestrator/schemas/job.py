@@ -150,3 +150,44 @@ class JobDetailResponse(JobSummary):
 
     events: list[JobEventOut]
     leases: list[LeaseOut]
+
+
+class CheckpointOut(BaseModel):
+    """This job's latest saved model, and where to get it (ADR-006 addendum 2).
+
+    The values come from the manifest the trainer wrote in object storage, which
+    ADR-006 makes the authority on which checkpoint is good — the blob-then-
+    manifest write order means a manifest entry only exists once its blob is
+    fully stored. Nothing here is inferred from the database, which knows a
+    checkpoint key only in the narrower case where a job resumed from one.
+    """
+
+    #: Object key of the checkpoint blob. Shown so someone with MinIO access can
+    #: find it directly, and so a downloaded file can be traced back.
+    key: str
+    #: Training step and the epoch the run would resume into.
+    step: int
+    epoch: int
+    #: Loss recorded when this checkpoint was written, or null if the manifest
+    #: entry carries none. Never substituted with a plausible number.
+    loss: float | None
+    world_size: int
+    timestamp_utc: str
+    #: Size in bytes, or null when object storage would not report it.
+    size_bytes: int | None
+    #: Where to GET the bytes, relative to the API root. The orchestrator
+    #: streams them rather than handing out a presigned storage URL: it signs
+    #: against its own S3 endpoint, which in the compose topology is
+    #: ``http://minio:9000`` — correct for a peer on that network and
+    #: unresolvable from a browser on the host. A presigned URL is signed for one
+    #: specific host, so it cannot be rewritten client-side without breaking the
+    #: signature. Streaming works from anywhere the API is reachable, including
+    #: through the dashboard's dev proxy and over the ADR-010 overlay.
+    download_path: str
+    #: Suggested filename, so a downloaded file is identifiable a week later
+    #: rather than being another "archive.pt" in the downloads folder.
+    filename: str
+    #: What the file is, in one line, so nobody has to guess what to do with it.
+    format: str = (
+        "PyTorch checkpoint (torch.save) containing model and optimizer state"
+    )

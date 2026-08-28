@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, unwrap } from "./client";
+import { ApiError, api, unwrap } from "./client";
 import { POLL_INTERVAL_MS } from "./nodes";
+import { getToken } from "./session";
 import type { JobSubmitRequest, TrainingLogLine } from "./types";
 
 export function useJobsQuery() {
@@ -181,6 +182,55 @@ export function useCancelJobMutation(jobId: string) {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["jobs"] });
       void queryClient.invalidateQueries({ queryKey: ["jobs", jobId] });
+    },
+  });
+}
+
+/**
+ * This job's trained model, if it saved one (ADR-006 addendum 2).
+ *
+ * Written against `fetch` because `schema.gen.ts` predates the route. A 404 is
+ * an ordinary answer — plenty of jobs never checkpoint, because checkpointing
+ * needs object storage configured on the peer that ran them — so it resolves to
+ * `null` rather than throwing. A 503 (storage unreachable) *does* throw, because
+ * "we cannot tell" is genuinely different from "there is none".
+ */
+export interface JobCheckpoint {
+  key: string;
+  step: number;
+  epoch: number;
+  loss: number | null;
+  world_size: number;
+  timestamp_utc: string;
+  size_bytes: number | null;
+  download_path: string;
+  filename: string;
+  format: string;
+}
+
+export function useJobCheckpointQuery(jobId: string | undefined) {
+  return useQuery({
+    queryKey: ["jobs", jobId, "checkpoint"],
+    enabled: Boolean(jobId),
+    retry: false,
+    queryFn: async (): Promise<JobCheckpoint | null> => {
+      const token = getToken();
+      const response = await fetch(`/api/jobs/${jobId}/checkpoint`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (response.status === 404) return null;
+      if (!response.ok) {
+        const payload: unknown = await response.json().catch(() => null);
+        const detail =
+          typeof payload === "object" &&
+          payload !== null &&
+          "detail" in payload &&
+          typeof (payload as { detail?: unknown }).detail === "string"
+            ? (payload as { detail: string }).detail
+            : "Couldn't check for a saved model.";
+        throw new ApiError(detail, response.status);
+      }
+      return (await response.json()) as JobCheckpoint;
     },
   });
 }

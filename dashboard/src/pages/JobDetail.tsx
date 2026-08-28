@@ -18,6 +18,7 @@ import { RankStrip } from "@/components/RankStrip";
 import { StatTile } from "@/components/StatTile";
 import { StatusPill } from "@/components/StatusPill";
 import { TechnicalDetails } from "@/components/TechnicalDetails";
+import { TrainedModelCard } from "@/components/TrainedModelCard";
 import { UpdatedAgo } from "@/components/UpdatedAgo";
 import { Button } from "@/components/ui/button";
 import {
@@ -172,6 +173,8 @@ export function JobDetail() {
           </div>
         </section>
       )}
+
+      <TrainedModelCard jobId={job.id} />
 
       {/* Rank strip: which peer holds which rank right now, plain-language. */}
       <section className="rounded-md border border-hairline bg-panel p-4">

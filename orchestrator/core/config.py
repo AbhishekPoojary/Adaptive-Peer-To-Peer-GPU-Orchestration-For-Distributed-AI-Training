@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     # than reusing this window.
     dataset_url_ttl_seconds: int = 3600
 
+
     # --- Auth (ADR-008) ---
     jwt_signing_key: str = "dev-only-change-me"
     jwt_access_token_ttl_seconds: int = 900
