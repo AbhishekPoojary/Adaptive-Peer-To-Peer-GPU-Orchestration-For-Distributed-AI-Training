@@ -255,6 +255,19 @@ async def register(
     )
 
 
+def _describe(exc: BaseException) -> str:
+    """Render an exception for a log line, never as an empty string.
+
+    Several httpx errors stringify to nothing -- a bare ``ConnectTimeout`` is
+    the common one -- so a plain ``%s`` printed "enrollment failed:" with the
+    reason missing, which is exactly the moment a peer most needs one. Name the
+    type always; append the message only when there is one.
+    """
+    message = str(exc).strip()
+    name = type(exc).__name__
+    return f"{name}: {message}" if message else name
+
+
 class TokenRefreshError(Exception):
     """Challenge-response JWT refresh failed."""
 
@@ -857,7 +870,11 @@ async def run(args: argparse.Namespace) -> None:
                     hardware=hardware,
                 )
             except (EnrollmentError, httpx.HTTPError) as exc:
-                logger.error("enrollment failed: %s", exc)
+                logger.error(
+                    "enrollment failed (orchestrator=%s): %s",
+                    orchestrator,
+                    _describe(exc),
+                )
                 raise SystemExit(1) from exc
             state = AgentState(
                 node_id=new_state.node_id,
@@ -877,7 +894,11 @@ async def run(args: argparse.Namespace) -> None:
                     private_key=private_key,
                 )
             except (TokenRefreshError, httpx.HTTPError) as exc:
-                logger.error("initial token refresh failed: %s", exc)
+                logger.error(
+                    "initial token refresh failed (orchestrator=%s): %s",
+                    orchestrator,
+                    _describe(exc),
+                )
                 raise SystemExit(1) from exc
             expires_at = time.time() + expires_in
             logger.info(
