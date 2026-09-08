@@ -17,8 +17,111 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatBytes, formatTimestamp, isPast } from "@/lib/format";
 
-const ORCHESTRATOR_URL =
-  (import.meta.env.VITE_ORCHESTRATOR_URL as string | undefined) || "http://localhost:8090";
+/**
+ * Where a *peer* should reach this orchestrator.
+ *
+ * `VITE_ORCHESTRATOR_URL` is the dev proxy target — it is almost always
+ * `http://localhost:8090`, which is correct for this machine and wrong for every
+ * other one. A peer that runs a command containing "localhost" dials itself and
+ * fails with connection refused, which is exactly the failure this guess exists
+ * to avoid.
+ *
+ * So: keep the configured *port*, but take the *host* the admin actually used to
+ * reach this dashboard. Browsing from 192.168.1.5:5173 therefore suggests
+ * http://192.168.1.5:8090 rather than localhost. It is a guess, which is why the
+ * field it fills is editable and warns when it is still localhost.
+ */
+function guessPeerFacingUrl(): string {
+  const configured =
+    (import.meta.env.VITE_ORCHESTRATOR_URL as string | undefined) ||
+    "http://localhost:8090";
+  try {
+    const api = new URL(configured);
+    const here = window.location.hostname;
+    if (here && here !== api.hostname) {
+      api.hostname = here;
+      return api.origin;
+    }
+    return api.origin;
+  } catch {
+    return configured;
+  }
+}
+
+/** True for an address no other machine can reach. */
+function isLoopback(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return host === "localhost" || host === "127.0.0.1" || host === "::1";
+  } catch {
+    return false;
+  }
+}
+
+type PeerOs = "windows" | "macos" | "linux";
+
+/** Best guess at the *admin's* OS, used only to pick the default tab. */
+function detectOs(): PeerOs {
+  const ua = navigator.userAgent;
+  if (/Win/i.test(ua)) return "windows";
+  if (/Mac/i.test(ua)) return "macos";
+  return "linux";
+}
+
+const OS_LABEL: Record<PeerOs, string> = {
+  windows: "Windows",
+  macos: "macOS",
+  linux: "Linux",
+};
+
+/**
+ * The command a peer runs.
+ *
+ * Deliberately no `--orchestrator` flag. The orchestrator substitutes the address
+ * the script was fetched from into the script it serves
+ * (`orchestrator/api/installer.py:_public_base_url`), so the address is already
+ * correct — and passing the flag explicitly is what used to *override* that
+ * correct value with a broken one.
+ */
+function installCommand(os: PeerOs, baseUrl: string, token: string): string {
+  const url = baseUrl.replace(/\/+$/, "");
+  if (os === "windows") {
+    return `$env:ORCH_TOKEN='${token}'; irm ${url}/install.ps1 | iex`;
+  }
+  return `curl -sSL ${url}/install.sh | bash -s -- --token ${token}`;
+}
+
+/** Plain-language steps an admin can paste to a non-technical volunteer. */
+function friendInstructions(os: PeerOs, baseUrl: string, token: string): string {
+  const cmd = installCommand(os, baseUrl, token);
+  const openTerminal =
+    os === "windows"
+      ? 'Press the Windows key, type "PowerShell", and press Enter.\n   A blue window opens. That is normal.'
+      : os === "macos"
+        ? 'Press Command + Space, type "Terminal", and press Enter.'
+        : "Press Ctrl + Alt + T to open a terminal.";
+  const paste =
+    os === "windows"
+      ? "right-click inside the window to paste"
+      : "press Ctrl + Shift + V to paste";
+
+  return [
+    "You are helping run AI training on your computer. It takes about 2 minutes.",
+    "",
+    `1. ${openTerminal}`,
+    "",
+    `2. Copy the line below, ${paste}, then press Enter:`,
+    "",
+    `   ${cmd}`,
+    "",
+    "3. If it asks a yes/no question, type y and press Enter.",
+    "",
+    '4. When it says "enrolled", you are done. Leave the window open.',
+    "",
+    "Your computer only reports its own status (how busy it is). Nothing is read",
+    "from your files. This invitation stops working after 1 hour.",
+  ].join("\n");
+}
 
 function hardwareSummary(node: NodeSummary): string {
   const gpus = node.hardware.gpus;
@@ -54,8 +157,13 @@ export function AddNodeModal({ open, onOpenChange, existingNodes }: AddNodeModal
     () => new Set(existingNodes.map((n) => n.id)),
   );
   const [copied, setCopied] = useState(false);
+  const [copiedSteps, setCopiedSteps] = useState(false);
   const [, setTick] = useState(0);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Editable, because only a human knows which address a peer can actually
+  // reach — LAN, Tailscale, or a tunnel. The guess is a starting point.
+  const [baseUrl, setBaseUrl] = useState<string>(() => guessPeerFacingUrl());
+  const [os, setOs] = useState<PeerOs>(() => detectOs());
 
   const token = mintMutation.data;
 
@@ -93,20 +201,28 @@ export function AddNodeModal({ open, onOpenChange, existingNodes }: AddNodeModal
   }, [watchQuery.data, baselineIds]);
 
   const expired = token ? isPast(token.expires_at) : false;
-  const command = token
-    ? `curl -sSL ${ORCHESTRATOR_URL}/install.sh | bash -s -- --token ${token.token} --orchestrator ${ORCHESTRATOR_URL}`
-    : "";
+  const command = token ? installCommand(os, baseUrl, token.token) : "";
+  const unreachable = isLoopback(baseUrl);
 
-  async function handleCopy() {
+  async function copyText(text: string, mark: (v: boolean) => void) {
     try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
+      await navigator.clipboard.writeText(text);
+      mark(true);
       if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
+      copyTimerRef.current = setTimeout(() => mark(false), 2000);
     } catch {
       // Clipboard API unavailable in this context — the command is still
       // selectable by hand from the code block; nothing else to do.
     }
+  }
+
+  async function handleCopy() {
+    await copyText(command, setCopied);
+  }
+
+  async function handleCopySteps() {
+    if (!token) return;
+    await copyText(friendInstructions(os, baseUrl, token.token), setCopiedSteps);
   }
 
   function handleRegenerate() {
@@ -156,6 +272,55 @@ export function AddNodeModal({ open, onOpenChange, existingNodes }: AddNodeModal
 
           {token && !connectedNode && (
             <>
+              <div className="flex flex-col gap-1.5">
+                <label
+                  htmlFor="peer-address"
+                  className="text-xs font-medium text-secondary"
+                >
+                  Address this machine is reachable at
+                </label>
+                <input
+                  id="peer-address"
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                  spellCheck={false}
+                  className="w-full rounded-md border border-hairline bg-elevated px-2.5 py-1.5 font-data text-xs text-primary outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                />
+                {unreachable ? (
+                  <p className="rounded-md border border-bad/40 bg-bad/10 px-2.5 py-1.5 text-xs text-primary">
+                    <strong>Another computer cannot reach this address.</strong>{" "}
+                    On their machine <code className="font-data">localhost</code>{" "}
+                    means <em>their</em> machine. Replace it with your LAN address
+                    (e.g. <code className="font-data">http://192.168.1.5:8090</code>)
+                    or your Tailscale address.
+                  </p>
+                ) : (
+                  <p className="text-xs text-tertiary">
+                    The peer must be able to open this address. Same Wi-Fi is
+                    enough for a LAN address; otherwise use Tailscale.
+                  </p>
+                )}
+              </div>
+
+              <div className="flex gap-1" role="tablist" aria-label="Peer operating system">
+                {(["windows", "macos", "linux"] as PeerOs[]).map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="tab"
+                    aria-selected={os === value}
+                    onClick={() => setOs(value)}
+                    className={
+                      os === value
+                        ? "rounded-md bg-elevated px-2.5 py-1 text-xs font-medium text-accent border border-hairline"
+                        : "rounded-md px-2.5 py-1 text-xs text-secondary hover:bg-elevated"
+                    }
+                  >
+                    {OS_LABEL[value]}
+                  </button>
+                ))}
+              </div>
+
               <div className="flex items-center gap-2">
                 <code className="flex-1 overflow-x-auto whitespace-pre rounded bg-elevated px-2.5 py-2 font-data text-xs text-primary">
                   {command}
@@ -175,17 +340,26 @@ export function AddNodeModal({ open, onOpenChange, existingNodes }: AddNodeModal
                 </Button>
               </div>
 
-              <p className="text-xs text-tertiary">
-                Targets Linux/macOS. On Windows, install{" "}
-                <a
-                  href="https://learn.microsoft.com/windows/wsl/install"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-accent hover:underline"
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void handleCopySteps()}
                 >
-                  WSL2
-                </a>{" "}
-                first and run this exact command inside it.
+                  {copiedSteps ? "Copied — paste it to them" : "Copy instructions for a friend"}
+                </Button>
+                <span className="text-xs text-tertiary">
+                  Numbered, plain-language steps. No terminal experience needed.
+                </span>
+              </div>
+
+              <p className="text-xs text-tertiary">
+                {os === "windows"
+                  ? "Runs in PowerShell. WSL2 is not required."
+                  : "Runs in Terminal."}{" "}
+                The peer needs Python 3.11–3.13. Docker is optional — without it
+                the installer offers a simpler path and says what that gives up.
               </p>
 
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-hairline bg-panel px-3 py-2 text-xs">
