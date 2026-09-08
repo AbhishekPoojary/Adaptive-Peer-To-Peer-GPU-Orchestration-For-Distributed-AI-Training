@@ -311,6 +311,20 @@ _CUSTOM_IMAGE_SIZE = 64
 _CUSTOM_MEAN = (0.5, 0.5, 0.5)
 _CUSTOM_STD = (0.5, 0.5, 0.5)
 
+
+def _to_rgb(image: Any) -> Any:
+    """Force a PIL image to 3-channel RGB.
+
+    Defined at module level rather than as a lambda inside the transform
+    pipeline because a DataLoader with ``num_workers > 0`` starts its workers
+    with *spawn* on Windows and macOS, which pickles the dataset -- transforms
+    included. A lambda (or any closure) is unpicklable, so the workers died
+    with "Can't get local object '_build_custom_datasets.<locals>.<lambda>'"
+    before a single batch was read. A module-level function pickles by name.
+    """
+    return image.convert("RGB")
+
+
 #: Read size when streaming the archive down and hashing it.
 _DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 
@@ -446,7 +460,7 @@ def _build_custom_datasets(
     transform = transforms.Compose(
         [
             transforms.Resize((_CUSTOM_IMAGE_SIZE, _CUSTOM_IMAGE_SIZE)),
-            transforms.Lambda(lambda image: image.convert("RGB")),
+            transforms.Lambda(_to_rgb),
             transforms.ToTensor(),
             transforms.Normalize(_CUSTOM_MEAN, _CUSTOM_STD),
         ]
