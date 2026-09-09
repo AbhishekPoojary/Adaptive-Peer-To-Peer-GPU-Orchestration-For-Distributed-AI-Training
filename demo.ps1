@@ -149,6 +149,37 @@ do {
 } while (-not $ok)
 Say "  Orchestrator   healthy on port $orchPort" "Green"
 
+# --- 5b. Keep the trainer image in step with the source ----------------------
+# When Docker is available the agent runs training in a container, so the image
+# -- not the checkout -- is what actually executes. A stale image therefore
+# fails in a way that looks nothing like "your image is old": a custom-dataset
+# job dies with "unsupported DATASET 'custom'; expected cifar10 or mnist",
+# because that image predates uploaded datasets entirely. Rebuild whenever the
+# trainer source is newer than the image.
+#
+# Both tags are written on purpose. The agent's default is the bare
+# `gpu-orchestrator-trainer:latest`, while deploy/.env names the namespaced one;
+# tagging only one leaves the other pointing at the old build, which is exactly
+# how this was missed the first time.
+$trainerSrc = Join-Path $repo "trainer\train.py"
+$imageBuilt = docker image inspect gpu-orchestrator-trainer:latest --format "{{.Created}}" 2>$null
+$needsBuild = $true
+if ($LASTEXITCODE -eq 0 -and $imageBuilt) {
+    $needsBuild = ([datetime]$imageBuilt) -lt (Get-Item $trainerSrc).LastWriteTimeUtc
+}
+if ($needsBuild) {
+    Say "  Trainer image  out of date - rebuilding (usually under a minute)" "Yellow"
+    $code = Invoke-Native { docker build -f (Join-Path $repo "trainer\Dockerfile") -t gpu-orchestrator-trainer:latest $repo }
+    if ($code -ne 0) {
+        Say "  ! Trainer image build failed. Custom datasets will not run." "Red"
+        exit 1
+    }
+    Invoke-Native { docker tag gpu-orchestrator-trainer:latest abhisheks1290/gpu-orchestrator-trainer:latest } | Out-Null
+    Say "  Trainer image  rebuilt from current source" "Green"
+} else {
+    Say "  Trainer image  up to date" "Green"
+}
+
 # --- 6. Share this machine's GPU --------------------------------------------
 # The agent runs here rather than being installed by hand. The S3_* variables
 # are what make the trained model retrievable afterwards: without them the
