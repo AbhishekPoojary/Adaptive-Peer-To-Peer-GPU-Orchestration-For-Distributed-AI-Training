@@ -11,6 +11,13 @@
 #
 # Stop everything with Ctrl+C, then:  docker compose -f deploy/compose.yaml down
 
+param(
+    # Publish a public https:// link via a Cloudflare quick tunnel, so the other
+    # person can be on any network anywhere. Without this the link is a LAN
+    # address that only works if you are both on the same Wi-Fi.
+    [switch]$Public
+)
+
 $ErrorActionPreference = "Stop"
 $repo = $PSScriptRoot
 Set-Location $repo
@@ -198,19 +205,69 @@ if (Test-Path $agentPy) {
         "$envAssignments; irm http://${lanIp}:${orchPort}/install.ps1 | iex"
 }
 
-# --- 7. The dashboard --------------------------------------------------------
-# Vite refuses a Host header it does not recognise, so the LAN address has to be
-# allow-listed explicitly or a remote browser gets a bare "Blocked request".
+# --- 7. A public link, if asked ----------------------------------------------
+# The tunnel has to come up BEFORE the dashboard, because Vite needs the
+# hostname allow-listed at start-up. Getting that order wrong produces a bare
+# "Blocked request", which reads as a broken tunnel and is not one.
+$tunnelHost = $null
+if ($Public) {
+    $cf = @(
+        "C:\Program Files (x86)\cloudflared\cloudflared.exe",
+        "C:\Program Files\cloudflared\cloudflared.exe"
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $cf) {
+        Say "  ! cloudflared not found. Install it with:" "Red"
+        Say "      winget install --id Cloudflare.cloudflared" "Yellow"
+        exit 1
+    }
+    Say "  Opening a public tunnel..." "Gray"
+    $cfLog = Join-Path $env:TEMP "gpu-orch-tunnel.log"
+    Remove-Item $cfLog -ErrorAction SilentlyContinue
+    Start-Process $cf -ArgumentList "tunnel", "--url", "http://localhost:5173" `
+        -RedirectStandardError $cfLog -RedirectStandardOutput "$cfLog.out" -WindowStyle Hidden
+
+    $deadline = (Get-Date).AddMinutes(2)
+    do {
+        Start-Sleep -Seconds 2
+        $found = Select-String -Path $cfLog, "$cfLog.out" -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' `
+            -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($found) { $publicUrl = $found.Matches[0].Value }
+    } while (-not $publicUrl -and (Get-Date) -lt $deadline)
+
+    if (-not $publicUrl) {
+        Say "  ! The tunnel did not come up. Continuing with the LAN link only." "Yellow"
+    } else {
+        $tunnelHost = ([Uri]$publicUrl).Host
+        Say "  Public link    $publicUrl" "Green"
+    }
+}
+
+# --- 8. The dashboard --------------------------------------------------------
+# Vite refuses a Host header it does not recognise, so every hostname it will be
+# reached by has to be allow-listed explicitly -- otherwise a remote browser
+# gets a bare "Blocked request" that looks like the app being down.
 Say "  Starting the dashboard..." "Gray"
 $dash = Join-Path $repo "dashboard"
-Start-Process powershell -WorkingDirectory $dash -ArgumentList "-NoExit", "-Command", `
-    "`$env:VITE_ALLOWED_HOSTS='$lanIp,localhost'; npm run dev -- --host 0.0.0.0"
 
-$dashUrl = "http://${lanIp}:5173"
+# A dashboard left over from a previous run keeps port 5173, and Vite quietly
+# moves to 5174 rather than failing. The tunnel still points at 5173, so the
+# link then serves the STALE server -- which does not have the new hostname
+# allow-listed and answers "Blocked request". Clear the port first, and pass
+# --strictPort so a port clash is a loud failure rather than a silent move.
+Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 3
+
+$allowed = @($lanIp, "localhost")
+if ($tunnelHost) { $allowed = @($tunnelHost) + $allowed }
+$allowedList = $allowed -join ","
+Start-Process powershell -WorkingDirectory $dash -ArgumentList "-NoExit", "-Command", `
+    "`$env:VITE_ALLOWED_HOSTS='$allowedList'; npm run dev -- --host 0.0.0.0 --strictPort"
+
+$dashUrl = if ($publicUrl) { $publicUrl } else { "http://${lanIp}:5173" }
 $deadline = (Get-Date).AddMinutes(2)
 do {
     Start-Sleep -Seconds 2
-    try { $up = (Invoke-WebRequest -Uri $dashUrl -TimeoutSec 3 -UseBasicParsing).StatusCode -eq 200 }
+    try { $up = (Invoke-WebRequest -Uri $dashUrl -TimeoutSec 8 -UseBasicParsing).StatusCode -eq 200 }
     catch { $up = $false }
 } while (-not $up -and (Get-Date) -lt $deadline)
 
@@ -238,4 +295,14 @@ Say "  =====================================================" "Cyan"
 Say ""
 Say "  Two windows opened: the GPU agent and the dashboard." "Gray"
 Say "  Keep both open. Closing the agent window stops sharing." "Gray"
+if ($publicUrl) {
+    Say ""
+    Say "  The public link is live until you stop it. A quick tunnel gets a" "Gray"
+    Say "  new address every restart, so it is a demo link, not a permanent" "Gray"
+    Say "  one. Stop it with:  Get-Process cloudflared | Stop-Process" "Gray"
+} elseif (-not $Public) {
+    Say ""
+    Say "  That link only works on this Wi-Fi. For someone on a different" "Gray"
+    Say "  network, re-run with:  powershell -ExecutionPolicy Bypass -File demo.ps1 -Public" "Gray"
+}
 Say ""
