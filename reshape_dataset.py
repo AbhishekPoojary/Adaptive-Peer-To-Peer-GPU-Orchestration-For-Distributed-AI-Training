@@ -1,5 +1,15 @@
 """Normalise an image dataset zip into the layout the orchestrator requires.
 
+.. note::
+
+   **You probably do not need this.** The orchestrator now does the same
+   rearrangement server-side at upload
+   (``orchestrator/services/dataset_layout.py``), which is the point: the
+   person holding the dataset is usually the one who cannot run a script over
+   it. This remains useful for looking at what *would* happen to an archive
+   without uploading it, and for reshaping a file offline when the server has
+   ``DATASET_NORMALIZE_LAYOUT=false``.
+
 The orchestrator accepts exactly one shape::
 
     train/<class>/<anything>.jpg

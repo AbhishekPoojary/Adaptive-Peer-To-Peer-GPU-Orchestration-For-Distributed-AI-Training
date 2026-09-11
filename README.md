@@ -296,10 +296,31 @@ train/dog/img501.png     test/dog/img951.png
 - Zipping the *folder* rather than its contents is fine; the extra top level is
   unwrapped for you.
 
-**You choose the test split yourself.** It is never carved out of `train/`
-automatically, because the held-out accuracy this project reports has to be
-measured on data *you* decided to hold out — otherwise every number depends on a
-split the reader can't see.
+**Your archive doesn't have to look like that.** That is the layout it is
+*stored* in, not the layout you have to produce. Public datasets ship half a
+dozen conventions and the person with the data is usually the one who can't
+rewrite a zip, so the server rearranges it on upload:
+
+| What you upload | What is stored |
+|---|---|
+| `seg_train/seg_train/forest/1.jpg` (Intel) | `train/forest/1.jpg` |
+| `training/cat/1.jpg` + `valid/cat/1.jpg` | `train/` + `test/` |
+| `train/cat.0.jpg` (flat Kaggle) | `train/cat/cat.0.jpg` |
+| `seg_pred/*.jpg` — no labels | dropped |
+
+The upload response lists every change, and the same list is written onto the
+dataset's description. Nothing is relaxed by this: the rearranged archive goes
+back through the *same* validator before anything is stored, and an archive
+refused for being dangerous — a zip-slip path, a symlink entry — is refused
+here too rather than tidied up into an accepted one. Set
+`DATASET_NORMALIZE_LAYOUT=false` to require the exact layout instead.
+
+**Supply the test split yourself if you can.** It is what the reported accuracy
+is measured on, so it is worth choosing deliberately. If your archive has none,
+a fraction of `train/` is held out (every 5th image by default,
+`DATASET_AUTOSPLIT_FRACTION`) — and that fact is recorded on the dataset, so a
+reader who sees the accuracy can also see that the split behind it was picked
+by the server rather than by you.
 
 ```bash
 curl -sX POST http://localhost:8090/datasets \

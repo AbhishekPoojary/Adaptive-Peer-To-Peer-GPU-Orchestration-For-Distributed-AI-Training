@@ -64,6 +64,17 @@ class Settings(BaseSettings):
     # as tens of thousands of labels.
     dataset_min_classes: int = 2
     dataset_max_classes: int = 1000
+    # Rearrange a non-conformant archive into train/<class>/ and test/<class>/
+    # instead of rejecting it. Public datasets ship half a dozen conventions and
+    # the person uploading one usually cannot rewrite a zip, so the server does
+    # it for them. Off makes the upload strictly conformant-or-nothing; it never
+    # relaxes a limit either way, because the rewritten archive is handed back
+    # to the same validator before anything is stored.
+    dataset_normalize_layout: bool = True
+    # Fraction of train/ held out when a normalised archive supplies no test
+    # split of its own. Every stride-th image, so both splits sample the whole
+    # class. The choice is recorded on the dataset, never made silently.
+    dataset_autosplit_fraction: float = 0.2
     # Lifetime of the presigned URL a peer is handed when it claims a job. Long
     # enough to download a large archive on a slow home connection, short enough
     # that a peer which has finished cannot keep reading the data indefinitely.

@@ -55,6 +55,13 @@ class DatasetUploadAccepted(BaseModel):
     #: Plain-language confirmation of what was stored, e.g.
     #: "3 classes, 900 training and 300 test images".
     summary: str
+    #: What the server had to change to make the archive usable -- folders
+    #: renamed onto train/ and test/, unlabelled images skipped, a held-out
+    #: split carved. Empty when the archive already matched the required
+    #: layout, which is the only case where nothing was decided on the
+    #: uploader's behalf. Shown rather than buried: a rearrangement the
+    #: uploader never sees is indistinguishable from the server guessing.
+    layout_notes: list[str] = []
 
 
 class DatasetNameCheck(BaseModel):

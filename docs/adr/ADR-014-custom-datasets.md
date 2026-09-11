@@ -64,6 +64,14 @@ legitimate design — it keeps the provenance visible — and it is **deferred, 
 rejected**. It costs a schema field and an honest label. It is not in this change
 because requiring the split is simpler and because nobody has yet asked for it.
 
+> **Amended 2026-09-11 — this is now the behaviour.** Somebody asked: a
+> collaborator with no GPU, uploading through the browser from another machine,
+> could not produce a conformant archive and could not run a script to make one.
+> See *Amendment: layout normalisation* below. The reasoning above is unchanged
+> and is what the amendment is built to satisfy — the carve is recorded on the
+> dataset rather than left invisible. The "honest label" turned out to cost a
+> line on the record rather than a schema field.
+
 ### 4. The archive travels through MinIO, not the control plane
 
 Uploads go to a `datasets` bucket; peers fetch directly from it with a presigned
@@ -165,3 +173,66 @@ fabricating telemetry.
   any dataset. The system has two roles and no notion of "my" resources
   (ADR-012 §2); inventing one here would be modelling a hierarchy that does not
   exist elsewhere in the system.
+
+## Amendment: layout normalisation (2026-09-11)
+
+### What changed
+
+`POST /datasets` no longer refuses an archive solely for the shape of its
+directories. A rejected archive is rearranged into `train/<class>/` and
+`test/<class>/` and re-validated; only if that fails does the uploader get the
+original complaint. `orchestrator/services/dataset_layout.py` holds the
+inference, `DATASET_NORMALIZE_LAYOUT=false` turns it off.
+
+### Why the original decision did not survive contact
+
+Decision 3 above reasoned entirely about *honesty*, and that reasoning is
+sound. It assumed, silently, that the person who uploads a dataset is the
+person who can reshape one. That assumption broke the first time the system did
+what it exists to do: a collaborator with no GPU, uploading through a browser
+from another machine, had an archive in the Intel scene-classification layout
+(`seg_train/seg_train/<class>/`) and no way to rewrite a zip. The only remedy
+on offer was "run this Python script", handed to the one participant chosen
+precisely because they could not run things locally.
+
+The rejection was also uninformative in the way that matters least: it named
+the required layout, which the uploader could already read, and not the
+distance between that and what they had.
+
+### How the honesty requirement is kept
+
+Three properties, in priority order:
+
+1. **Nothing is bypassed.** The rewritten archive is passed back to
+   `summarize_dataset_archive` unchanged, so every limit — entry count, class
+   bounds, decompressed size, allowed extensions — is enforced on the bytes
+   that reach the bucket rather than the bytes that arrived. Normalisation can
+   only ever produce an archive the validator would have accepted anyway.
+2. **A dangerous archive is refused, not repaired.** Planning re-runs
+   `_reject_unsafe_path` and `_reject_non_regular` before reading anything, so
+   a zip-slip path or a symlink entry raises rather than being quietly dropped
+   on the way to a rewrite. This matters more here than anywhere else in the
+   dataset path: normalisation runs *only* on archives that were just
+   rejected, so a version that skipped hostile entries instead of refusing
+   them would have converted every rejection into an acceptance.
+3. **The carve is on the record.** When an archive supplies no test split, one
+   is taken from `train/` — every stride-th image, so both splits sample the
+   whole class — and the fact is written into the dataset's description, shown
+   in the upload response, and logged. A reader who finds an accuracy figure
+   can find out that the split behind it was chosen by the server. That is the
+   "honest label" decision 3 asked for; it cost a line on an existing column
+   rather than a new one.
+
+### Consequences
+
+- `reshape_dataset.py` stops being a prerequisite and becomes a diagnostic.
+- The stored archive is no longer always byte-identical to the uploaded one, so
+  `size_bytes` and `sha256` describe what was stored. They always had to — the
+  peer verifies that digest against what it downloads — but it was previously
+  impossible to tell the two apart.
+- Normalisation is the one place in the dataset path that decompresses
+  anything, so the copy meters the bytes it actually reads rather than the
+  sizes the archive declares. A bomb lies about the latter.
+- A train-only class with fewer images than the carve stride is dropped rather
+  than split, since a held-out set of zero is not one. An archive small enough
+  for this to remove every class still gets the original rejection.

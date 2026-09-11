@@ -33,6 +33,11 @@ export function Datasets() {
   const [description, setDescription] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  // Kept on the page rather than left in a toast: these say what the server did
+  // to someone's data, and a message that disappears after four seconds is not
+  // a disclosure. The same text is written onto the dataset's description, so
+  // dismissing this loses nothing permanent.
+  const [layoutNotes, setLayoutNotes] = useState<string[]>([]);
   // A file input is uncontrolled: React state cannot clear the chosen
   // filename after a successful upload, so it is reset through the node.
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -40,6 +45,7 @@ export function Datasets() {
   async function handleUpload(e: FormEvent) {
     e.preventDefault();
     setFormError(null);
+    setLayoutNotes([]);
     if (!file) {
       setFormError("Choose a .zip file to upload.");
       return;
@@ -54,6 +60,7 @@ export function Datasets() {
         title: `Uploaded “${result.dataset.name}”`,
         description: result.summary,
       });
+      setLayoutNotes(result.layout_notes ?? []);
       setName("");
       setDescription("");
       setFile(null);
@@ -104,8 +111,8 @@ export function Datasets() {
           <div>
             <h2 className="text-sm font-semibold text-primary">Upload a dataset</h2>
             <p className="mt-1 text-xs text-secondary">
-              A <code className="font-data">.zip</code> of class folders, with
-              both splits:
+              A <code className="font-data">.zip</code> of class folders. This
+              is the layout it is stored in:
             </p>
             <pre className="mt-2 overflow-x-auto rounded border border-hairline bg-base p-3 text-xs text-secondary font-data">
 {`train/cat/anything.png
@@ -114,9 +121,19 @@ test/cat/held-out.png
 test/dog/held-out.png`}
             </pre>
             <p className="mt-2 text-xs text-tertiary">
-              You choose the test split yourself — it is what the reported
-              accuracy is measured on, so it is never carved out of{" "}
-              <code className="font-data">train/</code> behind your back.
+              Your archive does not have to look like that. Common layouts —{" "}
+              <code className="font-data">seg_train/</code>,{" "}
+              <code className="font-data">training/</code> and{" "}
+              <code className="font-data">valid/</code>, a wrapping folder, or
+              labels in the filenames — are rearranged into it for you, and you
+              are told exactly what changed.
+            </p>
+            <p className="mt-2 text-xs text-tertiary">
+              Supply a test split if you can: it is what the reported accuracy
+              is measured on, so it is worth choosing deliberately. If there
+              isn&rsquo;t one, a portion of <code className="font-data">train/</code>{" "}
+              is held out — and that is written onto the dataset, so anyone
+              reading a result later can see the split was picked for you.
             </p>
           </div>
 
@@ -162,6 +179,26 @@ test/dog/held-out.png`}
               className="rounded-md border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-primary"
             >
               {formError}
+            </div>
+          )}
+
+          {layoutNotes.length > 0 && (
+            <div
+              role="status"
+              className="rounded-md border border-hairline bg-base px-3 py-2 text-sm text-primary"
+            >
+              <p className="font-semibold">
+                Your archive was rearranged to fit the required layout
+              </p>
+              <ul className="mt-1.5 list-disc space-y-1 pl-5 text-xs text-secondary">
+                {layoutNotes.map((note) => (
+                  <li key={note}>{note}</li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs text-tertiary">
+                This is recorded on the dataset&rsquo;s description as well, so it
+                stays visible next to any accuracy measured against it.
+              </p>
             </div>
           )}
 

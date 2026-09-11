@@ -404,3 +404,118 @@ async def test_signed_url_is_minted_per_claim(api_client: AsyncClient) -> None:
         f"/nodes/{node_id}/leases/claim", headers=auth_headers(node_token)
     )
     assert StubObjectStore.signed, "claim should have signed a URL"
+
+
+# --- Layout normalisation at upload ------------------------------------------
+
+
+async def test_intel_layout_uploads_without_a_reshaping_script(
+    anon_client: AsyncClient,
+) -> None:
+    """The archive that used to require a local Python script now just uploads.
+
+    This is the whole point of normalising server-side: the person holding the
+    dataset is usually the one who cannot run a script over it, so an archive
+    they downloaded verbatim from Kaggle has to be acceptable as-is.
+    """
+    names = [
+        f"seg_{split}/seg_{split}/{klass}/{index}.jpg"
+        for split in ("train", "test")
+        for klass in ("forest", "street")
+        for index in range(3)
+    ] + [f"seg_pred/seg_pred/{index}.jpg" for index in range(4)]
+
+    response = await upload(
+        anon_client,
+        token=anon_client.admin_token,  # type: ignore[attr-defined]
+        content=make_archive(names),
+    )
+    assert response.status_code == 201, response.text
+
+    body = response.json()
+    assert body["dataset"]["classes"] == ["forest", "street"]
+    assert body["dataset"]["train_images"] == 6
+    assert body["dataset"]["test_images"] == 6
+    # The uploader is told what was rearranged rather than left to infer it.
+    assert any("seg_train/" in note for note in body["layout_notes"])
+    assert any("seg_pred/" in note for note in body["layout_notes"])
+
+
+async def test_a_carved_split_is_recorded_on_the_dataset(
+    anon_client: AsyncClient,
+) -> None:
+    """Choosing the held-out set for someone must leave a trace they can read.
+
+    ``dataset_archive`` refuses to carve a split *silently*; an accuracy figure
+    measured against a machine-chosen test set is only meaningful if a reader
+    can find out that is what happened. So the note lands on the record, not
+    just in the upload response that scrolls away.
+    """
+    names = [f"train/{klass}/{index}.png" for klass in ("cat", "dog") for index in range(10)]
+
+    response = await upload(
+        anon_client,
+        token=anon_client.admin_token,  # type: ignore[attr-defined]
+        content=make_archive(names),
+        description="holiday photos",
+    )
+    assert response.status_code == 201, response.text
+
+    dataset = response.json()["dataset"]
+    assert dataset["test_images"] > 0
+    assert "holiday photos" in dataset["description"]
+    assert "held out" in dataset["description"]
+
+
+async def test_normalisation_never_launders_a_dangerous_archive(
+    anon_client: AsyncClient,
+) -> None:
+    """A zip-slip entry is refused, not quietly dropped on the way to a rewrite.
+
+    Normalisation only ever runs on an archive that was *just rejected*, so
+    without this it would be a way to turn every rejection into an acceptance.
+    """
+    names = [
+        "seg_train/seg_train/cat/a.png",
+        "seg_test/seg_test/cat/b.png",
+        "../../etc/cron.d/payload.png",
+    ]
+    response = await upload(
+        anon_client,
+        token=anon_client.admin_token,  # type: ignore[attr-defined]
+        content=make_archive(names),
+    )
+    assert response.status_code == 422
+    assert "escapes the extraction directory" in response.json()["detail"]
+    assert StubObjectStore.uploaded == []
+
+
+async def test_an_unreadable_layout_still_reports_the_original_complaint(
+    anon_client: AsyncClient,
+) -> None:
+    """When nothing can be inferred, the uploader hears the specific reason."""
+    response = await upload(
+        anon_client,
+        token=anon_client.admin_token,  # type: ignore[attr-defined]
+        content=make_archive(["photos/1.jpg", "photos/2.jpg", "notes.txt"]),
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "no train/<class>/image files" in detail
+    assert "photos" in detail
+
+
+async def test_a_conformant_archive_is_stored_byte_for_byte(
+    anon_client: AsyncClient,
+) -> None:
+    """Normalisation must not touch uploads that were already correct."""
+    content = make_archive()
+    response = await upload(
+        anon_client,
+        token=anon_client.admin_token,  # type: ignore[attr-defined]
+        content=content,
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["layout_notes"] == []
+    assert body["dataset"]["size_bytes"] == len(content)

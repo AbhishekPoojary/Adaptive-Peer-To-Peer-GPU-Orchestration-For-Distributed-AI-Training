@@ -16,6 +16,7 @@ list to submit a job at all.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import tempfile
@@ -46,8 +47,10 @@ from orchestrator.schemas.dataset import (
 )
 from orchestrator.services.dataset_archive import (
     DatasetArchiveError,
+    DatasetArchiveSummary,
     summarize_dataset_archive,
 )
+from orchestrator.services.dataset_layout import plan_normalization, rewrite_archive
 from orchestrator.services.datasets import (
     DatasetNameTakenError,
     create_dataset,
@@ -113,6 +116,91 @@ async def _stream_to_temp(upload: UploadFile, *, max_bytes: int) -> tuple[str, i
     return path, written
 
 
+#: Longest description the column holds, mirroring ``Dataset.description``.
+_DESCRIPTION_LIMIT = 1024
+
+
+def _prepare_archive(
+    archive_path: str, settings: Settings, scratch: list[str]
+) -> tuple[str, DatasetArchiveSummary, list[str]]:
+    """Return the archive to store, its summary, and what had to change.
+
+    A conformant archive is stored exactly as uploaded and the notes are empty
+    -- this path is byte-for-byte what it was before layout normalisation
+    existed. Only a *rejected* archive is rearranged, and the rearranged result
+    is then put through the same validator, so nothing is stored that the
+    validator would not have accepted on its own.
+
+    Any temp file created here is appended to ``scratch`` for the caller to
+    remove; returning the path alone would leave the original leaking whenever
+    normalisation produced a second one.
+    """
+    limits = {
+        "max_files": settings.dataset_max_files,
+        "max_uncompressed_bytes": settings.dataset_max_uncompressed_bytes,
+        "min_classes": settings.dataset_min_classes,
+        "max_classes": settings.dataset_max_classes,
+    }
+    try:
+        return archive_path, summarize_dataset_archive(archive_path, **limits), []
+    except DatasetArchiveError as exc:
+        if not settings.dataset_normalize_layout:
+            raise
+        # Rebound deliberately: Python unbinds an `except ... as` name when the
+        # block ends, and this complaint has to outlive it to be re-raised.
+        original = exc
+
+    # Planning raises on the unsafe entries the validator refuses, and those
+    # must surface as themselves rather than as "could not be normalised" --
+    # the uploader of a zip-slip archive deserves to be told which entry.
+    plan = plan_normalization(
+        archive_path,
+        max_files=settings.dataset_max_files,
+        max_uncompressed_bytes=settings.dataset_max_uncompressed_bytes,
+        test_fraction=settings.dataset_autosplit_fraction,
+    )
+    if plan is None:
+        raise original
+
+    handle, rewritten = tempfile.mkstemp(suffix=".zip", prefix="dataset-normalized-")
+    os.close(handle)
+    scratch.append(rewritten)
+    rewrite_archive(
+        archive_path,
+        rewritten,
+        plan,
+        max_uncompressed_bytes=settings.dataset_max_uncompressed_bytes,
+    )
+    # The rewrite is not trusted on its own account: if the rearranged archive
+    # still fails, the uploader hears the original complaint about the archive
+    # they actually sent, not a second one about a file they never saw.
+    try:
+        summary = summarize_dataset_archive(rewritten, **limits)
+    except DatasetArchiveError:
+        raise original from None
+    return rewritten, summary, plan.notes
+
+
+def _describe_layout_changes(description: str | None, notes: list[str]) -> str | None:
+    """Fold ``notes`` into the stored description.
+
+    ``dataset_archive`` refuses to carve a held-out split *silently*, and it is
+    right: an accuracy figure whose test set was chosen by a machine, invisibly,
+    is a number the reader cannot weigh. Recording the change on the dataset
+    itself is what makes the rearrangement honest -- anyone reading a result a
+    month later sees how the split it was measured against came to exist.
+    """
+    if not notes:
+        return description
+    appendix = "[layout] " + "; ".join(notes)
+    if description:
+        room = _DESCRIPTION_LIMIT - len(appendix) - 2
+        if room <= 0:
+            return appendix[:_DESCRIPTION_LIMIT]
+        return f"{description[:room]}\n\n{appendix}"
+    return appendix[:_DESCRIPTION_LIMIT]
+
+
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
@@ -133,17 +221,14 @@ async def upload_dataset(
     only then uploaded to object storage — so nothing reaches the bucket that has
     not already been proved to be a plain tree of images.
     """
-    archive_path, size_bytes = await _stream_to_temp(
+    upload_path, _upload_bytes = await _stream_to_temp(
         file, max_bytes=settings.dataset_max_upload_bytes
     )
+    scratch = [upload_path]
     try:
         try:
-            summary = summarize_dataset_archive(
-                archive_path,
-                max_files=settings.dataset_max_files,
-                max_uncompressed_bytes=settings.dataset_max_uncompressed_bytes,
-                min_classes=settings.dataset_min_classes,
-                max_classes=settings.dataset_max_classes,
+            archive_path, summary, notes = _prepare_archive(
+                upload_path, settings, scratch
             )
         except DatasetArchiveError as exc:
             # Specific on purpose: the person holding the file is the only one
@@ -153,6 +238,10 @@ async def upload_dataset(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
             ) from exc
 
+        # Of the archive that is actually stored, which is not the uploaded one
+        # when the layout had to be rearranged. The peer verifies this digest
+        # against the bytes it downloads, so it has to describe those bytes.
+        size_bytes = os.path.getsize(archive_path)
         digest = sha256_file(archive_path)
         dataset_id = uuid.uuid4()
         key = object_key_for(dataset_id)
@@ -165,7 +254,7 @@ async def upload_dataset(
                 session,
                 dataset_id=dataset_id,
                 name=name,
-                description=description,
+                description=_describe_layout_changes(description, notes),
                 object_key=key,
                 sha256=digest,
                 size_bytes=size_bytes,
@@ -198,8 +287,14 @@ async def upload_dataset(
         await session.commit()
         await session.refresh(dataset)
     finally:
-        os.unlink(archive_path)
+        for path in scratch:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(path)
 
+    if notes:
+        logger.info(
+            "dataset %s: archive layout normalised (%s)", dataset.name, "; ".join(notes)
+        )
     logger.info(
         "dataset %s (%s) uploaded by %s: %d classes, %d train / %d test images",
         dataset.name,
@@ -215,6 +310,7 @@ async def upload_dataset(
             f"{len(summary.classes)} classes, "
             f"{summary.train.images} training and {summary.test.images} test images"
         ),
+        layout_notes=notes,
     )
 
 

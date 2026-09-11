@@ -74,6 +74,15 @@ export interface UploadDatasetInput {
 export interface UploadDatasetResult {
   dataset: Dataset;
   summary: string;
+  /**
+   * What the server had to change to make the archive usable — folders renamed
+   * onto `train/` and `test/`, unlabelled images skipped, a held-out split
+   * carved. Empty when the archive already matched the required layout.
+   *
+   * Shown rather than swallowed: a rearrangement the uploader never sees is
+   * indistinguishable from the server guessing at their data.
+   */
+  layout_notes: string[];
 }
 
 export function useUploadDatasetMutation() {
