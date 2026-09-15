@@ -17,10 +17,17 @@ WORKDIR /app
 # the S3 client used to write/read checkpoints to MinIO.
 RUN pip install --no-cache-dir torchvision==0.20.1 boto3==1.35.99
 
-# checkpoint.py must sit next to train.py so its bare `import checkpoint` resolves
-# (the container runs `python train.py`, not a package import).
+# Everything train.py imports flatly must sit next to it: the container runs
+# `python train.py`, not a package import, so `import checkpoint` and
+# `from dataset_spec import ...` resolve by filename in /app and nothing else.
+#
+# A module missing here does not fail the build. It fails at the first line of
+# every training run, on someone else's machine, as ModuleNotFoundError — which
+# is why tests/test_trainer_image.py checks this list against train.py's own
+# imports rather than trusting whoever edits one to remember the other.
 COPY trainer/train.py ./train.py
 COPY trainer/checkpoint.py ./checkpoint.py
+COPY trainer/dataset_spec.py ./dataset_spec.py
 
 # /data-cache is a mounted named volume at run time (see ADR-007 launch flags
 # in agent/runtime/docker_launcher.py) — not baked into the image — so dataset
