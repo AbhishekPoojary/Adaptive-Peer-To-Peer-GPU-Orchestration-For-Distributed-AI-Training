@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, fallbackMessage } from "./client";
 import { getToken } from "./session";
+import { formatBytes } from "@/lib/format";
 
 /**
  * Dataset surface for the dashboard (ADR-014).
@@ -75,6 +76,38 @@ function errorFromBody(status: number, body: string): ApiError {
     // enough for the shared fallback to say which situation this is.
   }
   return new ApiError(detail || fallbackMessage(status), status);
+}
+
+/**
+ * True when this page is being served through a Cloudflare quick tunnel.
+ *
+ * `demo.ps1 -Public` puts the dashboard behind one so a collaborator on
+ * another network can reach it, and that tunnel is the one part of the path
+ * with a limit nothing here controls.
+ */
+export function servedThroughQuickTunnel(): boolean {
+  return window.location.hostname.endsWith(".trycloudflare.com");
+}
+
+/**
+ * A request that ended without any response at all.
+ *
+ * `fallbackMessage(0)` says the orchestrator could not be reached. That is
+ * right when nothing was sent and wrong when most of a file was: a far end
+ * that accepted 34 MB and then stopped was reachable. Quick tunnels cut off an
+ * upload that runs longer than a minute or two, and telling someone their
+ * server is down when it is their *link* that cannot carry the file sends them
+ * to fix the wrong thing entirely.
+ */
+function uploadInterrupted(sent: number, total: number): ApiError {
+  if (sent <= 0 || sent >= total) return new ApiError(fallbackMessage(0), 0);
+  const howFar = `The upload stopped after ${formatBytes(sent)} of ${formatBytes(total)}.`;
+  return new ApiError(
+    servedThroughQuickTunnel()
+      ? `${howFar} The public link cuts off uploads that take more than a minute or two. Upload a file this large from the machine running the orchestrator, or use a smaller archive.`
+      : `${howFar} The connection dropped part-way through.`,
+    0,
+  );
 }
 
 /** Turn a failed `fetch` response into an ApiError. */
@@ -157,7 +190,11 @@ export function useUploadDatasetMutation() {
           request.setRequestHeader(header, value);
         }
 
+        // Remembered so a failure can say how far it got. Without it every
+        // interruption looks identical to never having started.
+        let sentBytes = 0;
         request.upload.onprogress = (event) => {
+          sentBytes = event.loaded;
           input.onProgress?.({
             phase: "uploading",
             loaded: event.loaded,
@@ -189,9 +226,8 @@ export function useUploadDatasetMutation() {
           reject(errorFromBody(request.status, request.responseText));
         };
         // Status 0: the request never completed, so there is no status to
-        // reason about. The shared fallback words that as unreachable rather
-        // than as a refusal.
-        request.onerror = () => reject(new ApiError(fallbackMessage(0), 0));
+        // reason about — only how much of the body got out before it stopped.
+        request.onerror = () => reject(uploadInterrupted(sentBytes, input.file.size));
         request.ontimeout = () =>
           reject(new ApiError("The upload timed out before it finished.", 0));
         request.onabort = () =>

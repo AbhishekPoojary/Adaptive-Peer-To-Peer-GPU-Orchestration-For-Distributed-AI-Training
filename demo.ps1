@@ -331,6 +331,15 @@ if ($publicUrl) {
     Say "  The public link is live until you stop it. A quick tunnel gets a" "Gray"
     Say "  new address every restart, so it is a demo link, not a permanent" "Gray"
     Say "  one. Stop it with:  Get-Process cloudflared | Stop-Process" "Gray"
+    Say ""
+    # Learned the hard way: a 346 MB upload over the tunnel died after 34 MB
+    # and two minutes, while the same file took 2.5s over the LAN. The tunnel
+    # cuts off on elapsed time, so the ceiling is whatever the connection
+    # covers in a minute or two -- around 15 MB on a typical home upstream.
+    Say "  The tunnel cuts off uploads that run longer than a minute or two," "Yellow"
+    Say "  so keep archives shared over it small (~15 MB on a home upstream)." "Yellow"
+    Say "  Upload big datasets yourself at $(if ($lanIp) { "http://${lanIp}:5173" } else { 'http://localhost:5173' })," "Yellow"
+    Say "  which does not leave the machine and takes seconds instead." "Yellow"
 } elseif (-not $Public) {
     Say ""
     Say "  That link only works on this Wi-Fi. For someone on a different" "Gray"

@@ -366,6 +366,30 @@ orchestrator streams the checkpoint to you; there is no need to open MinIO.
 Who submitted a job comes from your **token**, never from the request body —
 `submitted_by` is evidence, not a self-declared string.
 
+### Sharing the dashboard, and the one limit worth knowing
+
+`demo.ps1 -Public` puts the dashboard behind a Cloudflare quick tunnel so
+someone on another network can sign in, upload a dataset, and collect the
+trained model without installing anything.
+
+**That tunnel cuts off uploads that run longer than a minute or two.** It is a
+time limit, not a size one, so the practical ceiling is however much the
+uploader's connection covers in that window — on a typical home upstream,
+around 15 MB. Measured on the link this was built for:
+
+| Archive | Over the tunnel | Over the LAN |
+|---|---|---|
+| 10 MB | arrived, 64s | under a second |
+| 346 MB | cut off after 34 MB, 130s | 2.5s |
+
+So upload anything large **from the machine running the orchestrator**
+(`http://localhost:5173`) — those bytes never leave it. Keep archives shared
+over the public link small. The upload form warns before starting when a file
+looks too big for the link it is on, and says how far it got if one is cut off.
+
+Lifting this properly means uploading in chunks rather than one request, which
+is a real feature rather than a setting; nothing here does that yet.
+
 ---
 
 ## Results — and what is *not* claimed

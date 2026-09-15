@@ -3,6 +3,7 @@ import {
   useDatasetsQuery,
   useDeleteDatasetMutation,
   useUploadDatasetMutation,
+  servedThroughQuickTunnel,
   type Dataset,
   type UploadProgress,
 } from "@/api/datasets";
@@ -24,6 +25,18 @@ import { formatBytes } from "@/lib/format";
  * form. The button being hidden is a convenience, not the control — the server
  * re-checks the role, so a tampered client can reveal the form but not use it.
  */
+/**
+ * Above this, warn before uploading through the public link.
+ *
+ * Not a hard limit — the tunnel cuts off on elapsed time, not size, so the
+ * real threshold is whatever the uploader's connection covers in a couple of
+ * minutes. Measured on the link this was built for: 10 MB arrived in 64s at
+ * ~150 KB/s, while 346 MB died after 34 MB. 25 MB sits far enough above the
+ * first to avoid nagging about files that will sail through, and far enough
+ * below the second to catch the ones that will not.
+ */
+const TUNNEL_SAFE_BYTES = 25 * 1024 * 1024;
+
 export function Datasets() {
   const { data, isPending, error, refetch } = useDatasetsQuery();
   const upload = useUploadDatasetMutation();
@@ -179,6 +192,20 @@ test/dog/held-out.png`}
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               required
             />
+            {/*
+              Said before the wait, not after it. A file this size over the
+              public link spends a couple of minutes climbing towards a cut-off
+              it will not clear, and finding that out at the end of the climb
+              is the worst moment to learn it.
+            */}
+            {file && servedThroughQuickTunnel() && file.size > TUNNEL_SAFE_BYTES && (
+              <p className="text-xs text-warn">
+                {formatBytes(file.size)} is likely too large for the public
+                link, which cuts off uploads that take more than a minute or
+                two. Upload this one from the machine running the orchestrator,
+                or split it down.
+              </p>
+            )}
           </div>
 
           {formError && (
