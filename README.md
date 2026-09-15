@@ -398,11 +398,48 @@ Everything after assembly is the single-shot path exactly: same validation,
 same layout normalisation, same record. `POST /datasets` still accepts a whole
 archive in one request and is the right tool from a script on the LAN.
 
-What chunking does **not** change is speed. A tunnel is still a home upstream —
-at the ~150 KB/s measured here, 346 MB is around forty minutes. Uploading from
-the machine running the orchestrator (`http://localhost:5173`) takes 2.5s for
-the same file, because those bytes never leave it. The form says so before you
-start.
+### Sending less, rather than sending it faster
+
+Chunking made a large upload finish. It did nothing about how long it takes,
+and on a home uplink that is the part people actually feel.
+
+Parallel chunks were the obvious next move and the measurement killed it — six
+concurrent uploads ran at **half** the speed of one (24 MiB in 219s against
+107s), because the uplink was already full and extra connections only added
+contention. There was no throughput to win.
+
+There were bytes to lose, though. The trainer resizes every custom-dataset image
+to `CUSTOM_IMAGE_SIZE` (64px) before the model sees it, so anything larger is
+detail discarded on arrival. The dashboard now does that resize *before*
+uploading, in a worker:
+
+| | Intel scene classification |
+|---|---|
+| As downloaded | 346 MB |
+| Resized to training size | 55 MB |
+| Classes, train/test split | identical — 6 classes, 14,034 / 3,000 |
+
+Roughly six times less to send, for pixels the model would never have seen.
+
+The archive is rebuilt as a stream, not unzipped into memory: measured on that
+346 MB file, peak heap was **69 MB**, which is the difference between working
+and crashing the tab on the modest laptop this project is aimed at.
+
+Three things keep it honest:
+
+- **It is recorded.** The resize is written onto the dataset next to the
+  server's own layout notes, so a reader who finds an accuracy figure can see
+  which transformations stand between the stored archive and the file someone
+  chose.
+- **It cannot lose you an upload.** An unsupported browser, a decode failure, a
+  worker that will not load — any of them falls back to uploading the original,
+  unchanged.
+- **It can be turned off.** A checkbox on the form, on by default because the
+  saving is large and costs the model nothing.
+
+Uploading from the machine running the orchestrator (`http://localhost:5173`)
+is still much faster than any of this — 2.5s for the same file, because those
+bytes never leave it.
 
 ---
 

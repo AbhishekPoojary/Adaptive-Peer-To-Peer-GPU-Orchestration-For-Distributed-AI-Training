@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, fallbackMessage } from "./client";
 import { getToken } from "./session";
 import { formatBytes } from "@/lib/format";
+import { shrinkArchive } from "./shrinkArchive";
 
 /**
  * Dataset surface for the dashboard (ADR-014).
@@ -140,7 +141,7 @@ export function useDatasetsQuery() {
  * indistinguishable from a hang, which is the thing the bar exists to rule out.
  */
 export interface UploadProgress {
-  phase: "uploading" | "processing";
+  phase: "preparing" | "uploading" | "processing";
   loaded: number;
   /** Total bytes, or 0 when the browser cannot say. */
   total: number;
@@ -150,6 +151,14 @@ export interface UploadDatasetInput {
   name: string;
   description?: string;
   file: File;
+  /**
+   * Resize images to the trainer's working size before sending.
+   *
+   * Removes most of the bytes at no cost to the model, because the trainer
+   * resizes to that size anyway. Off means the archive is uploaded exactly as
+   * chosen.
+   */
+  shrinkImages?: boolean;
   onProgress?: (progress: UploadProgress) => void;
 }
 
@@ -167,6 +176,28 @@ export interface UploadDatasetResult {
   layout_notes: string[];
 }
 
+/** Limits and sizes the server wants a client to plan around. */
+export interface UploadLimits {
+  chunk_bytes: number;
+  max_upload_bytes: number;
+  /** Resolution the trainer reduces every image to. */
+  image_size: number;
+}
+
+export function useUploadLimitsQuery() {
+  return useQuery({
+    queryKey: ["dataset-upload-limits"],
+    queryFn: async (): Promise<UploadLimits> => {
+      const response = await fetch(`${API_BASE}/datasets/upload-limits`, {
+        headers: authHeaders(),
+      });
+      if (!response.ok) throw await toApiError(response);
+      return (await response.json()) as UploadLimits;
+    },
+    staleTime: Infinity,
+  });
+}
+
 /** One upload session, as the orchestrator describes it. */
 interface UploadSessionStatus {
   upload_id: string;
@@ -181,6 +212,19 @@ const CHUNK_ATTEMPTS = 4;
 
 function pause(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** The upload limits, or null. Never throws — see the call site. */
+async function postJsonSafe(): Promise<UploadLimits | null> {
+  try {
+    const response = await fetch(`${API_BASE}/datasets/upload-limits`, {
+      headers: authHeaders(),
+    });
+    if (!response.ok) return null;
+    return (await response.json()) as UploadLimits;
+  } catch {
+    return null;
+  }
 }
 
 async function postJson<T>(path: string, body?: unknown): Promise<T> {
@@ -255,36 +299,57 @@ export function useUploadDatasetMutation() {
      * the one that has to handle trouble.
      */
     mutationFn: async (input: UploadDatasetInput): Promise<UploadDatasetResult> => {
+      let payload: File | Blob = input.file;
+      let clientNotes: string[] = [];
+
+      if (input.shrinkImages) {
+        // The size comes from the server so there is one copy of it. Fetched
+        // here rather than held in a hook, because this runs outside React.
+        const limits = await postJsonSafe();
+        if (limits) {
+          input.onProgress?.({ phase: "preparing", loaded: 0, total: input.file.size });
+          const outcome = await shrinkArchive(
+            input.file,
+            limits.image_size,
+            (progress) =>
+              input.onProgress?.({
+                phase: "preparing",
+                loaded: progress.bytesRead,
+                total: progress.totalBytes,
+              }),
+          );
+          payload = outcome.file;
+          clientNotes = outcome.notes;
+        }
+      }
+
       const session = await postJson<UploadSessionStatus>("/datasets/uploads", {
         name: input.name,
         description: input.description ?? null,
-        total_bytes: input.file.size,
+        total_bytes: payload.size,
+        client_notes: clientNotes,
       });
 
       const already = new Set(session.received);
       let sent = already.size * session.chunk_bytes;
-      input.onProgress?.({
-        phase: "uploading",
-        loaded: sent,
-        total: input.file.size,
-      });
+      input.onProgress?.({ phase: "uploading", loaded: sent, total: payload.size });
 
       try {
         for (let index = 0; index < session.total_chunks; index += 1) {
           if (already.has(index)) continue;
           const from = index * session.chunk_bytes;
-          const piece = input.file.slice(from, from + session.chunk_bytes);
+          const piece = payload.slice(from, from + session.chunk_bytes);
           await sendChunk(session.upload_id, index, piece);
-          sent = Math.min(input.file.size, from + piece.size);
+          sent = Math.min(payload.size, from + piece.size);
           input.onProgress?.({
             phase: "uploading",
             loaded: sent,
-            total: input.file.size,
+            total: payload.size,
           });
         }
       } catch (err) {
         throw err instanceof ApiError && err.status === 0
-          ? uploadInterrupted(sent, input.file.size)
+          ? uploadInterrupted(sent, payload.size)
           : err;
       }
 
@@ -292,8 +357,8 @@ export function useUploadDatasetMutation() {
       // rewrite, and the push to storage — none of which reports progress.
       input.onProgress?.({
         phase: "processing",
-        loaded: input.file.size,
-        total: input.file.size,
+        loaded: payload.size,
+        total: payload.size,
       });
       return await postJson<UploadDatasetResult>(
         `/datasets/uploads/${session.upload_id}/complete`,

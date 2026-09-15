@@ -64,6 +64,21 @@ class DatasetUploadAccepted(BaseModel):
     layout_notes: list[str] = []
 
 
+class UploadLimits(BaseModel):
+    """What a client needs before it can prepare an upload.
+
+    Served rather than duplicated in the dashboard, so the numbers a client
+    plans around are the ones the server will actually enforce.
+    """
+
+    chunk_bytes: int
+    max_upload_bytes: int
+    #: Resolution the trainer reduces every custom-dataset image to. A client
+    #: that shrinks images to this before uploading loses nothing, because
+    #: anything larger is discarded on arrival.
+    image_size: int
+
+
 class UploadSessionCreate(BaseModel):
     """Body of POST /datasets/uploads — opening a chunked upload.
 
@@ -76,6 +91,15 @@ class UploadSessionCreate(BaseModel):
     #: Size of the archive about to be sent. Checked against the upload ceiling
     #: immediately, and against what actually arrives before anything is stored.
     total_bytes: int = Field(gt=0)
+    #: Changes the client made to the archive before sending it — currently
+    #: only "images were resized". Recorded on the dataset beside the server's
+    #: own layout notes, for the same reason: the stored archive is then not
+    #: byte-identical to the file someone chose, and a reader deserves to know
+    #: which transformations stand between the two.
+    #:
+    #: Descriptive, not load-bearing. The server re-validates everything it
+    #: stores regardless of what is claimed here.
+    client_notes: list[str] = Field(default_factory=list, max_length=8)
 
 
 class UploadSessionStatus(BaseModel):

@@ -46,6 +46,7 @@ from orchestrator.schemas.dataset import (
     DatasetListResponse,
     DatasetOut,
     DatasetUploadAccepted,
+    UploadLimits,
     UploadSessionCreate,
     UploadSessionStatus,
 )
@@ -77,6 +78,7 @@ from orchestrator.services.upload_sessions import (
     store_chunk,
     sweep_expired,
 )
+from trainer.dataset_spec import CUSTOM_IMAGE_SIZE
 
 logger = logging.getLogger("orchestrator.datasets")
 
@@ -225,6 +227,7 @@ async def _validate_and_store(
     user: User,
     session: AsyncSession,
     settings: Settings,
+    client_notes: list[str] | None = None,
 ) -> DatasetUploadAccepted:
     """Validate the archive at ``upload_path``, store it, and record the dataset.
 
@@ -249,6 +252,11 @@ async def _validate_and_store(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
             ) from exc
+
+        # The client's account of what it changed goes first: it happened first,
+        # and it describes the file the server was given rather than what the
+        # server then did to it.
+        notes = [*(client_notes or []), *notes]
 
         # Of the archive that is actually stored, which is not the uploaded one
         # when the layout had to be rearranged. The peer verifies this digest
@@ -406,6 +414,30 @@ def _status_of(upload: UploadSession) -> UploadSessionStatus:
     )
 
 
+@router.get("/upload-limits", response_model=UploadLimits)
+async def upload_limits(
+    _user: User = Depends(require_user),
+    settings: Settings = Depends(get_settings_dep),
+) -> UploadLimits:
+    """What a client needs to know before it starts preparing an upload.
+
+    ``image_size`` is the resolution the trainer reduces every custom-dataset
+    image to. The dashboard shrinks archives to it before sending, which turns
+    a 363 MB upload into 55 MB with no effect on training — the detail beyond
+    it is discarded on arrival either way.
+
+    Served rather than hardcoded in the dashboard so there is one copy of the
+    number. Two that drifted apart would not fail loudly: images would be
+    shrunk to one size and resized up to another, and the only symptom would be
+    a slightly disappointing accuracy with no visible cause.
+    """
+    return UploadLimits(
+        chunk_bytes=settings.dataset_upload_chunk_bytes,
+        max_upload_bytes=settings.dataset_max_upload_bytes,
+        image_size=CUSTOM_IMAGE_SIZE,
+    )
+
+
 @router.post(
     "/uploads",
     status_code=status.HTTP_201_CREATED,
@@ -445,6 +477,7 @@ async def open_upload_session(
             root,
             name=body.name,
             description=body.description,
+            client_notes=body.client_notes,
             total_bytes=body.total_bytes,
             chunk_bytes=settings.dataset_upload_chunk_bytes,
             owner=user.username,
@@ -555,6 +588,7 @@ async def complete_upload_session(
             user=user,
             session=session,
             settings=settings,
+            client_notes=upload.client_notes,
         )
     except HTTPException as exc:
         # A 4xx is a verdict on the archive itself, and re-sending the same

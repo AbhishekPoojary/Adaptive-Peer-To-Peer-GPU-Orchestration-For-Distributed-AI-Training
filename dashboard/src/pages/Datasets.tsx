@@ -7,6 +7,7 @@ import {
   type Dataset,
   type UploadProgress,
 } from "@/api/datasets";
+import { canShrinkArchives } from "@/api/shrinkArchive";
 import { ApiError } from "@/api/client";
 import { isAdmin } from "@/api/session";
 import { EmptyState } from "@/components/EmptyState";
@@ -19,13 +20,6 @@ import { toast } from "@/hooks/use-toast";
 import { formatBytes } from "@/lib/format";
 
 /**
- * Datasets page (ADR-014).
- *
- * Uploading is ADMIN-only server-side; a non-admin sees the list without the
- * form. The button being hidden is a convenience, not the control — the server
- * re-checks the role, so a tampered client can reveal the form but not use it.
- */
-/**
  * Above this, mention that the public link will be slow.
  *
  * Nothing to do with whether the upload succeeds — chunking settled that. This
@@ -35,6 +29,13 @@ import { formatBytes } from "@/lib/format";
  */
 const TUNNEL_SLOW_BYTES = 25 * 1024 * 1024;
 
+/**
+ * Datasets page (ADR-014).
+ *
+ * Uploading is ADMIN-only server-side; a non-admin sees the list without the
+ * form. The button being hidden is a convenience, not the control — the server
+ * re-checks the role, so a tampered client can reveal the form but not use it.
+ */
 export function Datasets() {
   const { data, isPending, error, refetch } = useDatasetsQuery();
   const upload = useUploadDatasetMutation();
@@ -51,6 +52,10 @@ export function Datasets() {
   // dismissing this loses nothing permanent.
   const [layoutNotes, setLayoutNotes] = useState<string[]>([]);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
+  // Default on: for the connection this feature exists for it is a ~6x saving
+  // at no cost to the model, and someone who has never thought about image
+  // resolution should get the fast path without having to ask for it.
+  const [shrinkImages, setShrinkImages] = useState(true);
   // A file input is uncontrolled: React state cannot clear the chosen
   // filename after a successful upload, so it is reset through the node.
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -69,6 +74,7 @@ export function Datasets() {
         name,
         description: description || undefined,
         file,
+        shrinkImages: shrinkImages && canShrinkArchives(),
         onProgress: setProgress,
       });
       toast({
@@ -190,21 +196,43 @@ test/dog/held-out.png`}
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               required
             />
+            {canShrinkArchives() && (
+              <label className="flex items-start gap-2 text-xs text-secondary">
+                <input
+                  type="checkbox"
+                  checked={shrinkImages}
+                  onChange={(e) => setShrinkImages(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span>
+                  Shrink images before uploading.{" "}
+                  <span className="text-tertiary">
+                    Training resizes every image to a small fixed size anyway, so
+                    doing it here sends far less over the network and changes
+                    nothing the model sees. It is recorded on the dataset. Turn
+                    this off to upload the archive exactly as it is.
+                  </span>
+                </span>
+              </label>
+            )}
+
             {/*
               Not a warning that it will fail — it will not, since the upload is
               sent in pieces small enough that the tunnel's cut-off never
-              applies. A warning about the clock: the tunnel is still a home
-              upstream, and someone about to spend half an hour on this should
-              hear it now rather than discover it at minute five.
+              applies. A warning about the clock, and only when shrinking is not
+              going to deal with it anyway.
             */}
-            {file && servedThroughQuickTunnel() && file.size > TUNNEL_SLOW_BYTES && (
-              <p className="text-xs text-warn">
-                {formatBytes(file.size)} over the public link will take a while
-                — it is sent in pieces so it will not be cut off, but the link
-                is only as fast as the host&rsquo;s upload speed. Uploading from
-                the machine running the orchestrator is far quicker.
-              </p>
-            )}
+            {file &&
+              !shrinkImages &&
+              servedThroughQuickTunnel() &&
+              file.size > TUNNEL_SLOW_BYTES && (
+                <p className="text-xs text-warn">
+                  {formatBytes(file.size)} over the public link will take a
+                  while — it is sent in pieces so it will not be cut off, but
+                  the link is only as fast as the host&rsquo;s upload speed.
+                  Leaving the box above ticked is usually the better answer.
+                </p>
+              )}
           </div>
 
           {formError && (
@@ -337,7 +365,9 @@ test/dog/held-out.png`}
  * says what it is waiting for instead.
  */
 function UploadProgressBar({ progress }: { progress: UploadProgress | null }) {
-  const measurable = progress?.phase === "uploading" && progress.total > 0;
+  const measurable =
+    (progress?.phase === "uploading" || progress?.phase === "preparing") &&
+    progress.total > 0;
   const percent = measurable
     ? Math.min(100, Math.round((progress.loaded / progress.total) * 100))
     : null;
@@ -347,12 +377,16 @@ function UploadProgressBar({ progress }: { progress: UploadProgress | null }) {
   // not started.
   const label =
     progress === null
-      ? "Preparing the upload…"
-      : progress.phase === "processing"
-        ? "Checking the archive and storing it…"
-        : measurable
-          ? `Uploading — ${formatBytes(progress.loaded)} of ${formatBytes(progress.total)}`
-          : "Uploading…";
+      ? "Starting…"
+      : progress.phase === "preparing"
+        ? measurable
+          ? `Shrinking images — ${formatBytes(progress.loaded)} of ${formatBytes(progress.total)} read`
+          : "Shrinking images…"
+        : progress.phase === "processing"
+          ? "Checking the archive and storing it…"
+          : measurable
+            ? `Uploading — ${formatBytes(progress.loaded)} of ${formatBytes(progress.total)}`
+            : "Uploading…";
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -384,7 +418,8 @@ function UploadProgressBar({ progress }: { progress: UploadProgress | null }) {
         />
       </div>
       <p className="text-xs text-tertiary">
-        A large archive takes a while. Leave this page open until it finishes.
+        A large archive takes a while. Leave this page open until it finishes —
+        it resumes where it left off if a piece fails, but not if the tab closes.
       </p>
     </div>
   );

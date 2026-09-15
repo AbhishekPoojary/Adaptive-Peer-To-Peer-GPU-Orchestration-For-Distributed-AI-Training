@@ -84,12 +84,18 @@ def make_archive(names: list[str] | None = None, *, pad: int = 0) -> bytes:
 
 
 async def open_session(
-    client: AsyncClient, *, token: str, name: str = "chunked", total: int
+    client: AsyncClient,
+    *,
+    token: str,
+    name: str = "chunked",
+    total: int,
+    client_notes: list[str] | None = None,
 ) -> Any:
+    body: dict[str, Any] = {"name": name, "total_bytes": total}
+    if client_notes is not None:
+        body["client_notes"] = client_notes
     return await client.post(
-        "/datasets/uploads",
-        json={"name": name, "total_bytes": total},
-        headers=auth_headers(token),
+        "/datasets/uploads", json=body, headers=auth_headers(token)
     )
 
 
@@ -393,3 +399,57 @@ async def test_abandoning_an_upload_releases_it(anon_client: AsyncClient) -> Non
         f"/datasets/uploads/{opened['upload_id']}", headers=auth_headers(token)
     )
     assert after.status_code == 404
+
+
+async def test_what_the_client_changed_is_recorded_on_the_dataset(
+    anon_client: AsyncClient,
+) -> None:
+    """A client that shrinks images before sending must say so on the record.
+
+    The dashboard resizes images to the trainer's working size before uploading,
+    which makes the stored archive no longer the file someone picked. That is
+    the same disclosure the server owes for an auto-carved split: sound, but
+    only if a reader can find out it happened.
+    """
+    token = anon_client.admin_token  # type: ignore[attr-defined]
+    content = make_archive()
+    note = "images resized to 64x64 before upload"
+    opened = (
+        await open_session(
+            anon_client, token=token, total=len(content), client_notes=[note]
+        )
+    ).json()
+    await send_chunk(
+        anon_client,
+        token=token,
+        upload_id=opened["upload_id"],
+        index=0,
+        payload=content,
+    )
+    completed = await anon_client.post(
+        f"/datasets/uploads/{opened['upload_id']}/complete",
+        headers=auth_headers(token),
+    )
+    assert completed.status_code == 201, completed.text
+    body = completed.json()
+    assert note in body["layout_notes"]
+    assert note in body["dataset"]["description"]
+
+
+async def test_upload_limits_advertises_the_trainer_image_size(
+    api_client: AsyncClient,
+) -> None:
+    """The client plans around these, so they come from the server.
+
+    ``image_size`` in particular: the dashboard shrinks images to it, and a
+    second copy of that number in the dashboard could drift from the trainer's
+    without anything failing loudly.
+    """
+    from trainer.dataset_spec import CUSTOM_IMAGE_SIZE
+
+    response = await api_client.get("/datasets/upload-limits")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["image_size"] == CUSTOM_IMAGE_SIZE
+    assert body["chunk_bytes"] > 0
+    assert body["max_upload_bytes"] > body["chunk_bytes"]

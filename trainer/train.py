@@ -86,7 +86,11 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import datasets, transforms
 
+# Flat imports: inside the trainer image this directory is on sys.path
+# directly. The orchestrator reaches the same modules as trainer.checkpoint and
+# trainer.dataset_spec, which works because neither imports anything itself.
 import checkpoint as ckpt
+from dataset_spec import CUSTOM_IMAGE_SIZE
 
 # --- Dataset-specific real normalization stats (standard, published values,
 # not invented) and channel/class shapes. -------------------------------------
@@ -299,10 +303,11 @@ def _build_datasets(
 #: Every custom image is resized to this square and converted to RGB. SmallCNN's
 #: global average pooling tolerates varying input sizes, but a DataLoader batch
 #: cannot: stacking tensors requires identical shapes, and an uploaded folder has
-#: no reason to contain uniformly sized images. 64px is a compromise — larger
-#: than CIFAR's 32 so real photographs keep some detail, small enough to train on
-#: a 4GB laptop card.
-_CUSTOM_IMAGE_SIZE = 64
+#: no reason to contain uniformly sized images. The value itself lives in
+#: trainer/dataset_spec.py, which is torch-free so the orchestrator can read it
+#: too: the dashboard shrinks archives to this size before uploading, and a
+#: second copy of the number here could drift from that one in silence.
+_CUSTOM_IMAGE_SIZE = CUSTOM_IMAGE_SIZE
 #: Mean/std 0.5 maps [0,1] to [-1,1]. Unlike the CIFAR-10 and MNIST constants
 #: above, these are *not* that dataset's measured statistics — nobody has
 #: measured an arbitrary upload. Computing the real ones would need a full pass

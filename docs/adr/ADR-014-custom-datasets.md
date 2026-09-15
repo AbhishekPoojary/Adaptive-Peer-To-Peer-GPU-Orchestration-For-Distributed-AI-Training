@@ -298,3 +298,63 @@ more than one.
 - Chunking removes the cut-off, not the bandwidth. A large archive over a home
   upstream still takes as long as it takes, and the dashboard says so before
   starting rather than leaving it to be discovered.
+
+
+## Amendment: shrink images before uploading (2026-09-16)
+
+### What changed
+
+The dashboard resizes a dataset's images to `CUSTOM_IMAGE_SIZE` in a worker
+before sending them, and records that it did so on the dataset. A checkbox
+turns it off. `GET /datasets/upload-limits` serves the size so the client is
+not holding a second copy of it.
+
+### Why, and what was rejected first
+
+Chunking (previous amendment) made a large upload over the public tunnel
+finish. It did not make it quick, and on a home uplink that is what people
+feel: roughly forty minutes for 346 MB at the rate measured here.
+
+The obvious fix was parallel chunks, and it was **measured and rejected**. Six
+concurrent uploads moved the same 24 MiB in 219s against 107s sequential — half
+the speed. The uplink was already saturated; more connections bought only
+contention. There was no throughput to find, which meant the only remaining
+lever was sending fewer bytes.
+
+`trainer/train.py` resizes every custom-dataset image to 64x64 before the model
+sees it. So for an archive of 150x150 photographs, roughly five sixths of what
+is uploaded is discarded on arrival. Doing that resize before the upload rather
+than after changes nothing the model is given: measured on the Intel scene set,
+346 MB became 55 MB with the same six classes and the same 14,034 / 3,000 split.
+
+### Why this needed care
+
+It makes the stored archive no longer byte-identical to the file someone chose,
+which is the same class of problem as the auto-carved split in decision 3 — a
+transformation applied on the uploader's behalf. The resolution is the same:
+
+- The change is recorded on the dataset, alongside the server's layout notes, so
+  it is visible to anyone reading a result later.
+- The client reports what it did via `client_notes` on the upload session. This
+  is descriptive only — the server re-validates everything it stores regardless
+  of what a client claims about it.
+- It is a checkbox, defaulted on because the saving is large and the cost to the
+  model is nil, but a single click from being off.
+
+### Consequences
+
+- `CUSTOM_IMAGE_SIZE` moved to `trainer/dataset_spec.py`, which imports nothing,
+  so the orchestrator can read it without pulling torch into its image. Two
+  copies of that number would not fail loudly: images would be shrunk to one
+  size and resized up to another, and the only symptom would be a quietly
+  disappointing accuracy.
+- Raising `CUSTOM_IMAGE_SIZE` later leaves previously-uploaded datasets at the
+  smaller size. They are not wrong, but they cannot supply detail they no longer
+  hold.
+- The archive is rebuilt as a stream (`lib/transformArchive`), because the
+  straightforward version holds the whole decompressed archive in memory and the
+  machines this project exists for are the ones that cannot spare it. Peak heap
+  over the 346 MB archive was 69 MB.
+- Shrinking can fail in any number of browser-specific ways, so every failure
+  path falls back to uploading the original. An optimisation that can break the
+  thing it optimises is not one.

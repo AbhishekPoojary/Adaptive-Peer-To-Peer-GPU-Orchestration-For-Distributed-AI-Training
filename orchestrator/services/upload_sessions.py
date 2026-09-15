@@ -76,6 +76,8 @@ class UploadSession:
     upload_id: uuid.UUID
     name: str
     description: str | None
+    #: What the client changed before sending, carried through to the record.
+    client_notes: list[str]
     total_bytes: int
     chunk_bytes: int
     total_chunks: int
@@ -106,6 +108,7 @@ def create_session(
     *,
     name: str,
     description: str | None,
+    client_notes: list[str],
     total_bytes: int,
     chunk_bytes: int,
     owner: str,
@@ -131,6 +134,7 @@ def create_session(
         upload_id=upload_id,
         name=name,
         description=description,
+        client_notes=list(client_notes),
         total_bytes=total_bytes,
         chunk_bytes=chunk_bytes,
         total_chunks=expected_chunk_count(total_bytes, chunk_bytes),
@@ -144,6 +148,7 @@ def create_session(
                 "upload_id": str(session.upload_id),
                 "name": session.name,
                 "description": session.description,
+                "client_notes": session.client_notes,
                 "total_bytes": session.total_bytes,
                 "chunk_bytes": session.chunk_bytes,
                 "total_chunks": session.total_chunks,
@@ -169,6 +174,7 @@ def load_session(root: Path, upload_id: uuid.UUID) -> UploadSession | None:
     return UploadSession(
         upload_id=uuid.UUID(raw["upload_id"]),
         name=raw["name"],
+        client_notes=list(raw.get("client_notes") or []),
         description=raw["description"],
         total_bytes=int(raw["total_bytes"]),
         chunk_bytes=int(raw["chunk_bytes"]),
