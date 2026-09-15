@@ -4,6 +4,7 @@ import {
   useDeleteDatasetMutation,
   useUploadDatasetMutation,
   type Dataset,
+  type UploadProgress,
 } from "@/api/datasets";
 import { ApiError } from "@/api/client";
 import { isAdmin } from "@/api/session";
@@ -38,6 +39,7 @@ export function Datasets() {
   // a disclosure. The same text is written onto the dataset's description, so
   // dismissing this loses nothing permanent.
   const [layoutNotes, setLayoutNotes] = useState<string[]>([]);
+  const [progress, setProgress] = useState<UploadProgress | null>(null);
   // A file input is uncontrolled: React state cannot clear the chosen
   // filename after a successful upload, so it is reset through the node.
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -46,6 +48,7 @@ export function Datasets() {
     e.preventDefault();
     setFormError(null);
     setLayoutNotes([]);
+    setProgress(null);
     if (!file) {
       setFormError("Choose a .zip file to upload.");
       return;
@@ -55,6 +58,7 @@ export function Datasets() {
         name,
         description: description || undefined,
         file,
+        onProgress: setProgress,
       });
       toast({
         title: `Uploaded “${result.dataset.name}”`,
@@ -69,6 +73,10 @@ export function Datasets() {
       setFormError(
         err instanceof ApiError ? err.message : "Couldn't upload that dataset.",
       );
+    } finally {
+      // Cleared whichever way it ended, so a failed attempt never leaves a bar
+      // sitting at 90% next to the error explaining it stopped.
+      setProgress(null);
     }
   }
 
@@ -202,15 +210,12 @@ test/dog/held-out.png`}
             </div>
           )}
 
+          {upload.isPending && <UploadProgressBar progress={progress} />}
+
           <div className="flex items-center gap-3">
             <Button type="submit" disabled={upload.isPending}>
               {upload.isPending ? "Uploading…" : "Upload dataset"}
             </Button>
-            {upload.isPending && (
-              <span className="text-xs text-secondary">
-                Large archives take a while — the file is checked before it is stored.
-              </span>
-            )}
           </div>
         </form>
       )}
@@ -290,6 +295,71 @@ test/dog/held-out.png`}
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * How far an upload has got.
+ *
+ * Two states, because an archive of any size spends real time in each and only
+ * one of them has a percentage. While bytes are going out there is a genuine
+ * fraction to show; once they have all gone, the server is validating the zip,
+ * possibly rearranging its layout, and pushing it to storage, and none of that
+ * reports progress. Holding the bar at 100% through that second stretch would
+ * answer "has it frozen?" with the exact picture of something frozen, so it
+ * says what it is waiting for instead.
+ */
+function UploadProgressBar({ progress }: { progress: UploadProgress | null }) {
+  const measurable = progress?.phase === "uploading" && progress.total > 0;
+  const percent = measurable
+    ? Math.min(100, Math.round((progress.loaded / progress.total) * 100))
+    : null;
+  // Three distinct waits, told apart so none of them claims to be another.
+  // Before the first progress event nothing has been sent yet, and saying the
+  // archive is being checked at that point would be describing a step that has
+  // not started.
+  const label =
+    progress === null
+      ? "Preparing the upload…"
+      : progress.phase === "processing"
+        ? "Checking the archive and storing it…"
+        : measurable
+          ? `Uploading — ${formatBytes(progress.loaded)} of ${formatBytes(progress.total)}`
+          : "Uploading…";
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-baseline justify-between gap-3 text-xs">
+        <span className="text-secondary">{label}</span>
+        {percent !== null && (
+          <span className="font-data text-secondary tabular-nums">{percent}%</span>
+        )}
+      </div>
+      <div
+        role="progressbar"
+        aria-label="Dataset upload"
+        // Omitted entirely while indeterminate: a progressbar with no
+        // aria-valuenow is how the platform expresses "working, extent
+        // unknown", whereas leaving a stale number there would announce a
+        // figure that has stopped being true.
+        aria-valuemin={percent === null ? undefined : 0}
+        aria-valuemax={percent === null ? undefined : 100}
+        aria-valuenow={percent ?? undefined}
+        className="h-1.5 w-full overflow-hidden rounded-full bg-base"
+      >
+        <div
+          className={
+            percent === null
+              ? "h-full w-1/3 animate-pulse rounded-full bg-accent/70"
+              : "h-full rounded-full bg-accent transition-[width] duration-200"
+          }
+          style={percent === null ? undefined : { width: `${percent}%` }}
+        />
+      </div>
+      <p className="text-xs text-tertiary">
+        A large archive takes a while. Leave this page open until it finishes.
+      </p>
     </div>
   );
 }

@@ -70,7 +70,7 @@ export class ApiError extends Error {
  * user-facing copy — no raw HTTP status codes shown to the user, per the
  * quality floor.
  */
-function fallbackMessage(status: number): string {
+export function fallbackMessage(status: number): string {
   if (status === 404) return "That wasn't found. It may have been removed.";
   if (status >= 500 || status === 0) {
     return "Couldn't reach the orchestrator. It may be restarting or temporarily unreachable.";

@@ -264,3 +264,25 @@ def test_an_unrecognisable_archive_plans_nothing(tmp_path: Path) -> None:
         test_fraction=0.2,
     )
     assert plan is None
+
+
+def test_unlabelled_folder_images_are_counted_once(tmp_path: Path) -> None:
+    """Images dropped for being in seg_pred/ are not also counted as unlabelled.
+
+    They have no label *because* of the folder they are in. Reporting them under
+    both headings makes one loss read as two, which on the real Intel archive
+    turned 7301 skipped files into "ignored seg_pred/" plus an apparently
+    separate 7301 images gone missing.
+    """
+    names = [f"train/{klass}/{index}.png" for klass in ("a", "b") for index in range(3)]
+    names += [f"test/{klass}/{index}.png" for klass in ("a", "b") for index in range(2)]
+    names += [f"seg_pred/{index}.png" for index in range(7)]
+
+    plan, summary = _normalize(tmp_path, names)
+
+    assert summary is not None
+    assert summary.train.images == 6 and summary.test.images == 4
+    ignored = [note for note in plan.notes if "seg_pred/" in note]
+    assert len(ignored) == 1
+    assert "7 image(s)" in ignored[0]
+    assert not any("no discoverable label" in note for note in plan.notes)

@@ -216,6 +216,7 @@ def plan_normalization(
     ignored_dirs: set[str] = set()
     declared_bytes = 0
     dropped_unlabelled = 0
+    dropped_ignored = 0
     dropped_non_image = 0
 
     with zf:
@@ -246,10 +247,20 @@ def plan_normalization(
 
             split, class_name = classify(normalised)
             if split is None or class_name is None:
-                for part in normalised.split("/")[:-1]:
-                    if _norm(part) in IGNORE_DIR_NAMES:
-                        ignored_dirs.add(part)
-                dropped_unlabelled += 1
+                # Counted as one or the other, never both. An image inside
+                # seg_pred/ has no label *because* it is in seg_pred/, so
+                # adding it to a separate "no discoverable label" tally would
+                # report the same files twice and read as two distinct losses.
+                ignored = [
+                    part
+                    for part in normalised.split("/")[:-1]
+                    if _norm(part) in IGNORE_DIR_NAMES
+                ]
+                if ignored:
+                    ignored_dirs.update(ignored)
+                    dropped_ignored += 1
+                else:
+                    dropped_unlabelled += 1
                 continue
 
             declared_bytes += info.file_size
@@ -314,7 +325,8 @@ def plan_normalization(
         notes.append(
             "ignored "
             + ", ".join(f"{directory}/" for directory in sorted(ignored_dirs)[:4])
-            + ": no labels there to train or score against"
+            + f" ({dropped_ignored} image(s)): no labels there to train or "
+            "score against"
         )
     if dropped_unlabelled:
         notes.append(
