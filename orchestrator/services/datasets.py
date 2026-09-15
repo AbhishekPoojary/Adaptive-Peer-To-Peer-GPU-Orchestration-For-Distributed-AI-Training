@@ -51,6 +51,31 @@ def object_key_for(dataset_id: uuid.UUID) -> str:
     return f"datasets/{dataset_id}/archive.zip"
 
 
+async def _name_taken_message(session: AsyncSession, name: str) -> str:
+    """Say *which* dataset holds ``name`` — including one that was deleted.
+
+    A retired dataset keeps its row, and the unique index does not care that the
+    row is hidden. So "a dataset named 'test' already exists" can be strictly
+    true while the uploader is staring at a list containing no such thing, which
+    reads as the server being wrong about its own data. Naming the case turns a
+    dead end into a decision: the uploader learns the name is spent and why, and
+    picks another one instead of retrying the same upload.
+
+    Called after the rollback, so the session is usable again.
+    """
+    existing = (
+        await session.execute(select(Dataset).where(Dataset.name == name))
+    ).scalar_one_or_none()
+    if existing is not None and existing.deleted_at is not None:
+        return (
+            f"a dataset named {name!r} was deleted on "
+            f"{existing.deleted_at:%d %b %Y} and still holds the name. Its record "
+            "is kept so jobs that trained on it still point at something, which "
+            "means the name is not released. Pick a different one."
+        )
+    return f"a dataset named {name!r} already exists"
+
+
 async def create_dataset(
     session: AsyncSession,
     *,
@@ -90,9 +115,7 @@ async def create_dataset(
         await session.flush()
     except IntegrityError as exc:
         await session.rollback()
-        raise DatasetNameTakenError(
-            f"a dataset named {name!r} already exists"
-        ) from exc
+        raise DatasetNameTakenError(await _name_taken_message(session, name)) from exc
     await session.refresh(dataset)
     return dataset
 

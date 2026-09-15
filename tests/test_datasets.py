@@ -519,3 +519,32 @@ async def test_a_conformant_archive_is_stored_byte_for_byte(
     body = response.json()
     assert body["layout_notes"] == []
     assert body["dataset"]["size_bytes"] == len(content)
+
+
+async def test_a_deleted_dataset_still_holding_its_name_says_so(
+    anon_client: AsyncClient,
+) -> None:
+    """"Already exists" about a dataset the uploader cannot see reads as a lie.
+
+    Soft delete keeps the row, and the unique index does not care that it is
+    hidden — so the name stays spent while the list shows nothing by that name.
+    The message has to name that case, or the uploader's only move is to retry
+    the same upload and get the same refusal.
+    """
+    token = anon_client.admin_token  # type: ignore[attr-defined]
+    created = await upload(anon_client, name="retired", token=token)
+    assert created.status_code == 201
+
+    deleted = await anon_client.delete(
+        f"/datasets/{created.json()['dataset']['id']}", headers=auth_headers(token)
+    )
+    assert deleted.status_code == 204
+
+    listing = await anon_client.get("/datasets", headers=auth_headers(token))
+    assert listing.json()["datasets"] == []
+
+    again = await upload(anon_client, name="retired", token=token)
+    assert again.status_code == 409
+    detail = again.json()["detail"]
+    assert "was deleted" in detail
+    assert "Pick a different one" in detail
