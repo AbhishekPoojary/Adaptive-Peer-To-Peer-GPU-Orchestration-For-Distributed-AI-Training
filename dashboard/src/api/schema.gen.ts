@@ -67,6 +67,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/install.ps1": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Install Script Powershell
+         * @description Serve the native-Windows bootstrap script (ADR-007 addendum).
+         *
+         *     The bash installer requires WSL2 on Windows, and GPU passthrough there needs
+         *     the driver plus the container toolkit *inside* WSL — enough friction to lose
+         *     most volunteers. This one runs in the PowerShell a Windows user already has.
+         */
+        get: operations["get_install_script_powershell_install_ps1_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/agent-bundle.tar.gz": {
         parameters: {
             query?: never;
@@ -151,6 +175,62 @@ export interface paths {
          * @description Exchange a username and password for a short-lived user access token.
          */
         post: operations["login_auth_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Providers
+         * @description Report which sign-in mechanisms this deployment offers.
+         *
+         *     Unauthenticated by necessity: the sign-in page must know whether to draw a
+         *     Google button before anyone has signed in. It returns only the public client
+         *     ID, so an operator can turn Google sign-in on or off by configuration alone
+         *     without rebuilding the dashboard bundle — which is also why the client ID is
+         *     served from here rather than inlined at build time as a ``VITE_`` variable.
+         */
+        get: operations["providers_auth_providers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/google": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Google Login
+         * @description Exchange a Google ID token for the same short-lived user access token.
+         *
+         *     The token this returns is byte-for-byte the same kind of credential
+         *     ``POST /auth/login`` issues — same ``aud="user"``, same TTL, same role claim.
+         *     Google is an additional way to *prove* who you are, not a second
+         *     authorization path, so nothing downstream of here knows or cares which
+         *     mechanism was used (ADR-012 addendum §3).
+         *
+         *     This never creates an account. An identity Google vouches for that matches no
+         *     row is refused, because on this system an account is permission to run
+         *     containers on other people's machines.
+         */
+        post: operations["google_login_auth_google_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -310,6 +390,253 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Users Endpoint
+         * @description Every account, newest first, including disabled ones.
+         */
+        get: operations["list_users_endpoint_users_get"];
+        put?: never;
+        /**
+         * Create User Endpoint
+         * @description Create an account.
+         *
+         *     A password, an email for Google sign-in, or both. Passing only an email
+         *     creates a Google-only account, which is the shape that makes inviting
+         *     someone a single step: set their address, and their first Google sign-in
+         *     binds to it.
+         */
+        post: operations["create_user_endpoint_users_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update User Endpoint
+         * @description Change an account's role, email, password, or enabled state.
+         *
+         *     Only fields present in the body are touched. ``email: null`` explicitly
+         *     clears the address (and with it Google sign-in), which is different from
+         *     omitting the field.
+         */
+        patch: operations["update_user_endpoint_users__user_id__patch"];
+        trace?: never;
+    };
+    "/datasets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Datasets Endpoint
+         * @description List datasets available to train on, newest first.
+         */
+        get: operations["list_datasets_endpoint_datasets_get"];
+        put?: never;
+        /**
+         * Upload Dataset
+         * @description Validate and store an image-classification dataset in one request.
+         *
+         *     The archive is streamed to disk, inspected without being decompressed, and
+         *     only then uploaded to object storage — so nothing reaches the bucket that has
+         *     not already been proved to be a plain tree of images.
+         *
+         *     Fine over a LAN, where 350 MB takes a couple of seconds. For an uploader
+         *     reaching this through a tunnel that cuts long transfers off, see the chunked
+         *     routes below.
+         */
+        post: operations["upload_dataset_datasets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/datasets/upload-limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Upload Limits
+         * @description What a client needs to know before it starts preparing an upload.
+         *
+         *     ``image_size`` is the resolution the trainer reduces every custom-dataset
+         *     image to. The dashboard shrinks archives to it before sending, which turns
+         *     a 363 MB upload into 55 MB with no effect on training — the detail beyond
+         *     it is discarded on arrival either way.
+         *
+         *     Served rather than hardcoded in the dashboard so there is one copy of the
+         *     number. Two that drifted apart would not fail loudly: images would be
+         *     shrunk to one size and resized up to another, and the only symptom would be
+         *     a slightly disappointing accuracy with no visible cause.
+         */
+        get: operations["upload_limits_datasets_upload_limits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/datasets/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open Upload Session
+         * @description Open a chunked upload and say how to send it.
+         *
+         *     For an uploader whose route to here cuts long transfers off -- the public
+         *     tunnel does so after a minute or two -- a single request carrying a large
+         *     archive cannot succeed no matter how often it is retried. Splitting it means
+         *     no request runs long enough to be cut, and a chunk that fails anyway costs
+         *     one chunk rather than the whole file.
+         *
+         *     The name is checked now, not at the end. It is the same refusal either way,
+         *     and delivering it after the bytes have gone up is delivering it at the most
+         *     expensive possible moment.
+         */
+        post: operations["open_upload_session_datasets_uploads_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/datasets/uploads/{upload_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Upload Session Status
+         * @description What has arrived so far -- the basis for resuming an interrupted upload.
+         */
+        get: operations["upload_session_status_datasets_uploads__upload_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Abandon Upload Session
+         * @description Give up on an upload and release its chunks straight away.
+         *
+         *     Expiry would get there eventually; a client that knows it has stopped should
+         *     not make the disk wait for it.
+         */
+        delete: operations["abandon_upload_session_datasets_uploads__upload_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/datasets/uploads/{upload_id}/chunks/{index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Upload Chunk
+         * @description Store one chunk. Sending the same index again replaces it.
+         *
+         *     Idempotent on purpose: a chunk whose request died partway is exactly the
+         *     case this endpoint exists to survive, and the client's only sane response is
+         *     to send it again.
+         */
+        put: operations["put_upload_chunk_datasets_uploads__upload_id__chunks__index__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/datasets/uploads/{upload_id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Complete Upload Session
+         * @description Assemble the chunks and store the result.
+         *
+         *     From here on this is the single-shot path exactly: the same validation, the
+         *     same layout normalisation, the same record. How the bytes arrived stops
+         *     mattering once they are one file on disk.
+         */
+        post: operations["complete_upload_session_datasets_uploads__upload_id__complete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/datasets/{dataset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Dataset Endpoint
+         * @description Return one dataset's detail.
+         */
+        get: operations["get_dataset_endpoint_datasets__dataset_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Dataset Endpoint
+         * @description Retire a dataset: hide it from new jobs and remove the stored archive.
+         *
+         *     The row is kept. A finished job records which dataset it trained on, and
+         *     dropping the row would turn that record into an unanswerable question.
+         */
+        delete: operations["delete_dataset_endpoint_datasets__dataset_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/jobs": {
         parameters: {
             query?: never;
@@ -379,6 +706,68 @@ export interface paths {
          *     records decisions) or never scheduled. 404 only if the job itself is unknown.
          */
         get: operations["get_job_scheduling_decisions_jobs__job_id__scheduling_decisions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{job_id}/checkpoint": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Checkpoint
+         * @description The trained model this job produced, and a short-lived link to download it.
+         *
+         *     Until this existed the system produced a model with no front door: the blob
+         *     sat in MinIO and the only way to it was the storage console with separate
+         *     credentials. A job page that shows 99% accuracy and cannot hand you the
+         *     thing that achieved it is a demo of training, not a tool.
+         *
+         *     Any authenticated user may fetch it, matching the rest of this router — a
+         *     person who can read a job's loss curve is not meaningfully restrained by
+         *     being denied its weights.
+         *
+         *     404 means the job never checkpointed. That is ordinary: checkpointing needs
+         *     S3 configured on the peer (ADR-006), so a fleet running without it trains
+         *     perfectly well and saves nothing.
+         */
+        get: operations["get_job_checkpoint_jobs__job_id__checkpoint_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{job_id}/checkpoint/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Job Checkpoint
+         * @description Stream the trained model's bytes.
+         *
+         *     The key is resolved from the manifest here rather than taken from the
+         *     caller, so this cannot be turned into a read of any object in the
+         *     checkpoints bucket by passing a crafted key — the only thing a caller
+         *     chooses is which job.
+         *
+         *     The body is streamed in chunks, so a large model is not held in the
+         *     orchestrator's memory. boto3 is blocking, but Starlette iterates a sync
+         *     generator in a threadpool, so the event loop keeps serving.
+         */
+        get: operations["download_job_checkpoint_jobs__job_id__checkpoint_download_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -558,6 +947,34 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * AuthProvidersResponse
+         * @description Body of GET /auth/providers.
+         *
+         *     Unauthenticated on purpose: a sign-in page has to know what to render before
+         *     anyone has signed in. It exposes only which mechanisms exist and a public
+         *     client ID — no account data, and nothing that is a secret.
+         */
+        AuthProvidersResponse: {
+            /**
+             * Password
+             * @default true
+             */
+            password: boolean;
+            google: components["schemas"]["GoogleProviderOut"];
+        };
+        /** Body_upload_dataset_datasets_post */
+        Body_upload_dataset_datasets_post: {
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /**
+             * File
+             * Format: binary
+             */
+            file: string;
+        };
+        /**
          * ChallengeRequest
          * @description Body of POST /auth/challenge.
          */
@@ -582,6 +999,41 @@ export interface components {
             expires_at: string;
         };
         /**
+         * CheckpointOut
+         * @description This job's latest saved model, and where to get it (ADR-006 addendum 2).
+         *
+         *     The values come from the manifest the trainer wrote in object storage, which
+         *     ADR-006 makes the authority on which checkpoint is good — the blob-then-
+         *     manifest write order means a manifest entry only exists once its blob is
+         *     fully stored. Nothing here is inferred from the database, which knows a
+         *     checkpoint key only in the narrower case where a job resumed from one.
+         */
+        CheckpointOut: {
+            /** Key */
+            key: string;
+            /** Step */
+            step: number;
+            /** Epoch */
+            epoch: number;
+            /** Loss */
+            loss: number | null;
+            /** World Size */
+            world_size: number;
+            /** Timestamp Utc */
+            timestamp_utc: string;
+            /** Size Bytes */
+            size_bytes: number | null;
+            /** Download Path */
+            download_path: string;
+            /** Filename */
+            filename: string;
+            /**
+             * Format
+             * @default PyTorch checkpoint (torch.save) containing model and optimizer state
+             */
+            format: string;
+        };
+        /**
          * ClaimResponse
          * @description Result of POST /nodes/{id}/leases/claim.
          *
@@ -603,6 +1055,76 @@ export interface components {
             rendezvous?: components["schemas"]["RendezvousAssignment"] | null;
             /** Job Spec */
             job_spec?: Record<string, never> | null;
+        };
+        /**
+         * DatasetListResponse
+         * @description Body of GET /datasets.
+         */
+        DatasetListResponse: {
+            /** Datasets */
+            datasets: components["schemas"]["DatasetOut"][];
+        };
+        /**
+         * DatasetOut
+         * @description A dataset as returned to clients.
+         *
+         *     Carries no ``object_key``: where the archive sits in the bucket is the
+         *     server's business, and a client that knew the key would be one signed URL
+         *     away from reading data it was not handed.
+         */
+        DatasetOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string | null;
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Classes */
+            classes: string[];
+            /** Num Classes */
+            num_classes: number;
+            /** Train Images */
+            train_images: number;
+            /** Test Images */
+            test_images: number;
+            /** Per Class Counts */
+            per_class_counts: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /** Created By */
+            created_by: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * DatasetUploadAccepted
+         * @description Body of a successful POST /datasets.
+         *
+         *     Returns the full record rather than just an id: the uploader's next question
+         *     is always "did it read my folders the way I meant?", and the class list and
+         *     counts answer it without a second request.
+         */
+        DatasetUploadAccepted: {
+            dataset: components["schemas"]["DatasetOut"];
+            /** Summary */
+            summary: string;
+            /**
+             * Layout Notes
+             * @default []
+             */
+            layout_notes: string[];
         };
         /**
          * EnrollmentTokenCreateRequest
@@ -677,6 +1199,30 @@ export interface components {
             revoked_at: string | null;
             /** Status */
             status: string;
+        };
+        /**
+         * GoogleLoginRequest
+         * @description Body of POST /auth/google (ADR-012 addendum).
+         *
+         *     ``credential`` is the raw ID token (a JWT) that Google Identity Services
+         *     hands the browser. There is no authorization code and no client secret: the
+         *     browser receives the assertion directly and forwards it, which is what lets
+         *     this flow work without registering a redirect URI on a system whose whole
+         *     premise is machines behind NATs.
+         */
+        GoogleLoginRequest: {
+            /** Credential */
+            credential: string;
+        };
+        /**
+         * GoogleProviderOut
+         * @description Whether Google sign-in is usable, and the public client ID if so.
+         */
+        GoogleProviderOut: {
+            /** Enabled */
+            enabled: boolean;
+            /** Client Id */
+            client_id: string | null;
         };
         /**
          * GpuInfo
@@ -816,6 +1362,13 @@ export interface components {
             events: components["schemas"]["JobEventOut"][];
             /** Leases */
             leases: components["schemas"]["LeaseOut"][];
+            /** Dataset Name */
+            dataset_name?: string | null;
+            /**
+             * Dataset Deleted
+             * @default false
+             */
+            dataset_deleted: boolean;
         };
         /**
          * JobEventOut
@@ -845,13 +1398,19 @@ export interface components {
         /**
          * JobSpec
          * @description A training job's specification.
+         *
+         *     Exactly one dataset source must be given: ``dataset`` for a built-in that the
+         *     trainer downloads from torchvision, or ``dataset_id`` for an uploaded one
+         *     (ADR-014). Keeping the built-in field exactly as it was means every existing
+         *     caller — the bench harness, the dashboard, 89 historical jobs — still
+         *     validates unchanged, which matters because this model forbids extra fields
+         *     and would otherwise 422 all of them.
          */
         JobSpec: {
-            /**
-             * Dataset
-             * @enum {string}
-             */
-            dataset: "cifar10" | "mnist";
+            /** Dataset */
+            dataset?: ("cifar10" | "mnist") | null;
+            /** Dataset Id */
+            dataset_id?: string | null;
             /** Model */
             model: string;
             /** Epochs */
@@ -1382,6 +1941,116 @@ export interface components {
             device?: ("cuda" | "cpu") | null;
         };
         /**
+         * UploadLimits
+         * @description What a client needs before it can prepare an upload.
+         *
+         *     Served rather than duplicated in the dashboard, so the numbers a client
+         *     plans around are the ones the server will actually enforce.
+         */
+        UploadLimits: {
+            /** Chunk Bytes */
+            chunk_bytes: number;
+            /** Max Upload Bytes */
+            max_upload_bytes: number;
+            /** Image Size */
+            image_size: number;
+        };
+        /**
+         * UploadSessionCreate
+         * @description Body of POST /datasets/uploads — opening a chunked upload.
+         *
+         *     The name and description are taken now rather than at completion so a
+         *     clash is discovered before the bytes are sent, not after.
+         */
+        UploadSessionCreate: {
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** Total Bytes */
+            total_bytes: number;
+            /** Client Notes */
+            client_notes?: string[];
+        };
+        /**
+         * UploadSessionStatus
+         * @description An upload in progress.
+         *
+         *     ``received`` is what makes this resumable: a client that was interrupted
+         *     asks where it got to and sends only what is missing, rather than starting a
+         *     350 MB archive again because one chunk failed.
+         */
+        UploadSessionStatus: {
+            /**
+             * Upload Id
+             * Format: uuid
+             */
+            upload_id: string;
+            /** Chunk Bytes */
+            chunk_bytes: number;
+            /** Total Chunks */
+            total_chunks: number;
+            /** Total Bytes */
+            total_bytes: number;
+            /** Received */
+            received: number[];
+        };
+        /**
+         * UserAdminOut
+         * @description One account as an admin sees it.
+         */
+        UserAdminOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Username */
+            username: string;
+            /** Role */
+            role: string;
+            /** Email */
+            email: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Last Login At */
+            last_login_at: string | null;
+            /** Disabled At */
+            disabled_at: string | null;
+            /** Has Password */
+            has_password: boolean;
+            /** Google Linked */
+            google_linked: boolean;
+        };
+        /**
+         * UserCreateRequest
+         * @description Body of POST /users (admin-only).
+         *
+         *     Exactly mirrors what ``scripts/create_user.py`` can do, so the API and the
+         *     bootstrap script cannot drift into disagreeing about what an account is.
+         */
+        UserCreateRequest: {
+            /** Username */
+            username: string;
+            /** Role */
+            role: string;
+            /** Password */
+            password?: string | null;
+            /** Email */
+            email?: string | null;
+        };
+        /**
+         * UserListResponse
+         * @description Body of GET /users.
+         */
+        UserListResponse: {
+            /** Users */
+            users: components["schemas"]["UserAdminOut"][];
+        };
+        /**
          * UserOut
          * @description A user account as returned to clients. Never includes the hash.
          */
@@ -1402,6 +2071,27 @@ export interface components {
             created_at: string;
             /** Last Login At */
             last_login_at: string | null;
+            /** Email */
+            email?: string | null;
+        };
+        /**
+         * UserUpdateRequest
+         * @description Body of PATCH /users/{id} (admin-only).
+         *
+         *     Every field is optional; only what is present is changed. ``None`` is a
+         *     meaningful value for ``email`` — it *unsets* the address and with it Google
+         *     sign-in — so absence and null have to mean different things. That is why this
+         *     is a PATCH with explicit presence checks rather than a PUT.
+         */
+        UserUpdateRequest: {
+            /** Role */
+            role?: string | null;
+            /** Password */
+            password?: string | null;
+            /** Email */
+            email?: string | null;
+            /** Disabled */
+            disabled?: boolean | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -1464,6 +2154,26 @@ export interface operations {
         };
     };
     get_install_script_install_sh_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    get_install_script_powershell_install_ps1_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -1615,6 +2325,59 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    providers_auth_providers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthProvidersResponse"];
+                };
+            };
+        };
+    };
+    google_login_auth_google_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoogleLoginRequest"];
             };
         };
         responses: {
@@ -1872,6 +2635,434 @@ export interface operations {
             };
         };
     };
+    list_users_endpoint_users_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_user_endpoint_users_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserAdminOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_user_endpoint_users__user_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserAdminOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_datasets_endpoint_datasets_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_dataset_datasets_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_dataset_datasets_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetUploadAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_limits_datasets_upload_limits_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadLimits"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    open_upload_session_datasets_uploads_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UploadSessionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadSessionStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_session_status_datasets_uploads__upload_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadSessionStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    abandon_upload_session_datasets_uploads__upload_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_upload_chunk_datasets_uploads__upload_id__chunks__index__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                upload_id: string;
+                index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    complete_upload_session_datasets_uploads__upload_id__complete_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetUploadAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_dataset_endpoint_datasets__dataset_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_dataset_endpoint_datasets__dataset_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_jobs_endpoint_jobs_get: {
         parameters: {
             query?: never;
@@ -1991,6 +3182,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SchedulingDecisionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_checkpoint_jobs__job_id__checkpoint_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_job_checkpoint_jobs__job_id__checkpoint_download_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

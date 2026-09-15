@@ -150,6 +150,20 @@ class JobDetailResponse(JobSummary):
 
     events: list[JobEventOut]
     leases: list[LeaseOut]
+    #: Name of the uploaded dataset this job trained on, resolved from
+    #: ``spec.dataset_id``. Null for a built-in dataset, where ``spec.dataset``
+    #: already names it.
+    #:
+    #: Resolved here rather than by the client because a client can only see
+    #: datasets that still exist. ADR-014 keeps a deleted dataset's row
+    #: precisely so a finished job still points at something, and a job whose
+    #: dataset has since been retired is exactly the one whose name is hardest
+    #: to recover and most worth having.
+    dataset_name: str | None = None
+    #: True when that dataset has since been retired. The run and its accuracy
+    #: stand; the dataset cannot be selected again, and a reader comparing two
+    #: results deserves to know which of them can still be reproduced.
+    dataset_deleted: bool = False
 
 
 class CheckpointOut(BaseModel):

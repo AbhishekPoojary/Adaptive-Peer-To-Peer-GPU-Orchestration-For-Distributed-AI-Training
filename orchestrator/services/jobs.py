@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from orchestrator.models.dataset import Dataset
 from orchestrator.models.job import (
     Job,
     JobEvent,
@@ -286,4 +287,39 @@ async def get_job_detail(
         for e in job.events
     ]
     leases = [_lease_out(lease) for lease in job.leases]
-    return JobDetailResponse(**_summary(job).model_dump(), events=events, leases=leases)
+    name, deleted = await _resolve_dataset(session, job.spec)
+    return JobDetailResponse(
+        **_summary(job).model_dump(),
+        events=events,
+        leases=leases,
+        dataset_name=name,
+        dataset_deleted=deleted,
+    )
+
+
+async def _resolve_dataset(
+    session: AsyncSession, spec: dict[str, Any]
+) -> tuple[str | None, bool]:
+    """Name the uploaded dataset a job trained on, retired or not.
+
+    Deliberately ignores ``Dataset.deleted_at`` when looking up: a job that
+    trained on a dataset someone has since retired is the case this exists for.
+    Hiding the name there would leave the page saying nothing at all about what
+    was trained, which is the "unanswerable question" ADR-014 keeps the row to
+    prevent.
+    """
+    raw = spec.get("dataset_id")
+    if not raw:
+        return None, False
+    try:
+        dataset_id = uuid.UUID(str(raw))
+    except (ValueError, AttributeError):
+        # A spec is free-form JSON; a malformed id is a broken record, not a
+        # reason to fail the whole page.
+        return None, False
+    dataset = (
+        await session.execute(select(Dataset).where(Dataset.id == dataset_id))
+    ).scalar_one_or_none()
+    if dataset is None:
+        return None, False
+    return dataset.name, dataset.deleted_at is not None

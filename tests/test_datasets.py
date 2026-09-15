@@ -548,3 +548,75 @@ async def test_a_deleted_dataset_still_holding_its_name_says_so(
     detail = again.json()["detail"]
     assert "was deleted" in detail
     assert "Pick a different one" in detail
+
+
+# --- What a finished job says it trained on ----------------------------------
+
+
+async def test_job_detail_names_the_dataset_it_trained_on(
+    api_client: AsyncClient,
+) -> None:
+    """A job referencing a dataset by id must still say which one, by name.
+
+    `spec.dataset` is null for an uploaded dataset, so a page rendering only
+    that field shows a dash where the audit trail should be. ADR-014 makes
+    dataset names unique precisely so a job that says it trained on "flowers"
+    cannot be ambiguous later — a job that says nothing is worse than ambiguous.
+    """
+    admin = api_client.admin_token  # type: ignore[attr-defined]
+    dataset_id = (await upload(api_client, name="named", token=admin)).json()[
+        "dataset"
+    ]["id"]
+    job = await api_client.post(
+        "/jobs", json={"spec": {**_SPEC, "dataset": None, "dataset_id": dataset_id}}
+    )
+    assert job.status_code == 201, job.text
+
+    detail = await api_client.get(f"/jobs/{job.json()['id']}")
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["dataset_name"] == "named"
+    assert body["dataset_deleted"] is False
+
+
+async def test_a_retired_dataset_still_names_itself_on_past_jobs(
+    api_client: AsyncClient,
+) -> None:
+    """The case the whole thing exists for.
+
+    A client can only look up datasets that still exist, so resolving this in
+    the browser would show a bare UUID for exactly the job whose name is
+    hardest to recover. ADR-014 keeps the deleted row so a finished job still
+    points at something; this is what makes that row visible.
+    """
+    admin = api_client.admin_token  # type: ignore[attr-defined]
+    dataset_id = (await upload(api_client, name="retired-ds", token=admin)).json()[
+        "dataset"
+    ]["id"]
+    job = await api_client.post(
+        "/jobs", json={"spec": {**_SPEC, "dataset": None, "dataset_id": dataset_id}}
+    )
+    job_id = job.json()["id"]
+
+    gone = await api_client.delete(
+        f"/datasets/{dataset_id}", headers=auth_headers(admin)
+    )
+    assert gone.status_code == 204
+    # Gone from the picker, as ADR-014 intends.
+    assert (await api_client.get(f"/datasets/{dataset_id}")).status_code == 404
+
+    detail = await api_client.get(f"/jobs/{job_id}")
+    body = detail.json()
+    assert body["dataset_name"] == "retired-ds"
+    assert body["dataset_deleted"] is True
+
+
+async def test_a_builtin_dataset_job_carries_no_dataset_name(
+    api_client: AsyncClient,
+) -> None:
+    """`spec.dataset` already names it; a second field would be noise."""
+    job = await api_client.post("/jobs", json={"spec": _SPEC})
+    detail = await api_client.get(f"/jobs/{job.json()['id']}")
+    body = detail.json()
+    assert body["dataset_name"] is None
+    assert body["dataset_deleted"] is False

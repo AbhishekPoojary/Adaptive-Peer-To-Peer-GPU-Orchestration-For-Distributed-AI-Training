@@ -93,6 +93,19 @@ export function JobDetail() {
   const job = query.data;
   const spec = asJobSpec(job.spec);
   const result = asJobResult(job.result);
+  // A job trained on either a built-in dataset, named in the spec, or an
+  // uploaded one, which the spec holds only as an id. Showing `spec.dataset`
+  // alone left every custom-dataset job displaying a dash where the record of
+  // what it trained on should be. "(deleted)" is worth carrying: the run and
+  // its accuracy stand, but the dataset cannot be selected again, and someone
+  // comparing two results should know which of them can still be reproduced.
+  const datasetLabel =
+    spec.dataset ??
+    (job.dataset_name
+      ? job.dataset_deleted
+        ? `${job.dataset_name} (deleted)`
+        : job.dataset_name
+      : "—");
   const canCancel = !isTerminalJobState(job.state);
   const currentLeases = job.leases.filter((l) => l.lease_epoch === job.current_lease_epoch);
 
@@ -221,7 +234,7 @@ export function JobDetail() {
         <section className="rounded-md border border-hairline bg-panel p-4">
           <h2 className="mb-3 text-sm font-semibold text-primary">Training spec</h2>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-            <Field label="Dataset" value={spec.dataset ?? "—"} />
+            <Field label="Dataset" value={datasetLabel} />
             <Field label="Model" value={spec.model ?? "—"} />
             <Field label="Epochs" value={spec.epochs !== undefined ? String(spec.epochs) : "—"} mono />
             <Field label="Batch size" value={spec.batch_size !== undefined ? String(spec.batch_size) : "—"} mono />
