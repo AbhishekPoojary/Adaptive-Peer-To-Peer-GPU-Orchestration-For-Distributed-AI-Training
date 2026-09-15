@@ -51,7 +51,23 @@ def object_key_for(dataset_id: uuid.UUID) -> str:
     return f"datasets/{dataset_id}/archive.zip"
 
 
-async def _name_taken_message(session: AsyncSession, name: str) -> str:
+async def name_conflict(session: AsyncSession, name: str) -> str | None:
+    """Explain why ``name`` is unavailable, or ``None`` if it is free.
+
+    Exposed so a chunked upload can refuse a taken name *before* the archive is
+    sent. Discovering the clash after 350 MB have gone up is the same refusal
+    delivered at the most expensive possible moment.
+
+    Advisory only: this is a check-then-insert, and two uploads opened at once
+    could both pass it. The unique index still decides, which is why
+    :func:`create_dataset` keeps its own handling rather than trusting this.
+    """
+    return await _name_taken_message(session, name, only_if_taken=True)
+
+
+async def _name_taken_message(
+    session: AsyncSession, name: str, *, only_if_taken: bool = False
+) -> str | None:
     """Say *which* dataset holds ``name`` — including one that was deleted.
 
     A retired dataset keeps its row, and the unique index does not care that the
@@ -66,7 +82,11 @@ async def _name_taken_message(session: AsyncSession, name: str) -> str:
     existing = (
         await session.execute(select(Dataset).where(Dataset.name == name))
     ).scalar_one_or_none()
-    if existing is not None and existing.deleted_at is not None:
+    if existing is None:
+        # Only reachable from the advisory check; an IntegrityError means the
+        # row is there by definition.
+        return None if only_if_taken else f"a dataset named {name!r} already exists"
+    if existing.deleted_at is not None:
         return (
             f"a dataset named {name!r} was deleted on "
             f"{existing.deleted_at:%d %b %Y} and still holds the name. Its record "
@@ -115,7 +135,8 @@ async def create_dataset(
         await session.flush()
     except IntegrityError as exc:
         await session.rollback()
-        raise DatasetNameTakenError(await _name_taken_message(session, name)) from exc
+        message = await _name_taken_message(session, name)
+        raise DatasetNameTakenError(message or f"a dataset named {name!r} already exists") from exc
     await session.refresh(dataset)
     return dataset
 

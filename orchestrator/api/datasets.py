@@ -21,6 +21,7 @@ import logging
 import os
 import tempfile
 import uuid
+from pathlib import Path
 
 from fastapi import (
     APIRouter,
@@ -28,6 +29,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Request,
     Response,
     UploadFile,
     status,
@@ -44,6 +46,8 @@ from orchestrator.schemas.dataset import (
     DatasetListResponse,
     DatasetOut,
     DatasetUploadAccepted,
+    UploadSessionCreate,
+    UploadSessionStatus,
 )
 from orchestrator.services.dataset_archive import (
     DatasetArchiveError,
@@ -56,11 +60,23 @@ from orchestrator.services.datasets import (
     create_dataset,
     get_dataset,
     list_datasets,
+    name_conflict,
     object_key_for,
     sha256_file,
     soft_delete_dataset,
 )
 from orchestrator.services.object_store import DatasetObjectStore, ObjectStoreError
+from orchestrator.services.upload_sessions import (
+    UploadSession,
+    UploadSessionError,
+    assemble,
+    create_session,
+    discard_session,
+    load_session,
+    received_chunks,
+    store_chunk,
+    sweep_expired,
+)
 
 logger = logging.getLogger("orchestrator.datasets")
 
@@ -201,29 +217,25 @@ def _describe_layout_changes(description: str | None, notes: list[str]) -> str |
     return appendix[:_DESCRIPTION_LIMIT]
 
 
-@router.post(
-    "",
-    status_code=status.HTTP_201_CREATED,
-    response_model=DatasetUploadAccepted,
-    dependencies=[Depends(require_admin_user)],
-)
-async def upload_dataset(
-    name: str = Form(pattern=DATASET_NAME_PATTERN),
-    description: str | None = Form(default=None, max_length=1024),
-    file: UploadFile = File(...),
-    user: User = Depends(require_admin_user),
-    session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings_dep),
+async def _validate_and_store(
+    upload_path: str,
+    *,
+    name: str,
+    description: str | None,
+    user: User,
+    session: AsyncSession,
+    settings: Settings,
 ) -> DatasetUploadAccepted:
-    """Validate and store an image-classification dataset.
+    """Validate the archive at ``upload_path``, store it, and record the dataset.
 
-    The archive is streamed to disk, inspected without being decompressed, and
-    only then uploaded to object storage — so nothing reaches the bucket that has
-    not already been proved to be a plain tree of images.
+    Shared by both ways an archive can arrive — one request, or many chunks
+    assembled into one file. Everything after "there is a complete archive on
+    disk" is identical, and writing it twice would be an invitation for the two
+    paths to disagree about what a dataset is.
+
+    Takes ownership of ``upload_path``: it is deleted before this returns, along
+    with anything normalisation created alongside it.
     """
-    upload_path, _upload_bytes = await _stream_to_temp(
-        file, max_bytes=settings.dataset_max_upload_bytes
-    )
     scratch = [upload_path]
     try:
         try:
@@ -312,6 +324,267 @@ async def upload_dataset(
         ),
         layout_notes=notes,
     )
+
+
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    response_model=DatasetUploadAccepted,
+    dependencies=[Depends(require_admin_user)],
+)
+async def upload_dataset(
+    name: str = Form(pattern=DATASET_NAME_PATTERN),
+    description: str | None = Form(default=None, max_length=1024),
+    file: UploadFile = File(...),
+    user: User = Depends(require_admin_user),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings_dep),
+) -> DatasetUploadAccepted:
+    """Validate and store an image-classification dataset in one request.
+
+    The archive is streamed to disk, inspected without being decompressed, and
+    only then uploaded to object storage — so nothing reaches the bucket that has
+    not already been proved to be a plain tree of images.
+
+    Fine over a LAN, where 350 MB takes a couple of seconds. For an uploader
+    reaching this through a tunnel that cuts long transfers off, see the chunked
+    routes below.
+    """
+    upload_path, _upload_bytes = await _stream_to_temp(
+        file, max_bytes=settings.dataset_max_upload_bytes
+    )
+    return await _validate_and_store(
+        upload_path,
+        name=name,
+        description=description,
+        user=user,
+        session=session,
+        settings=settings,
+    )
+
+
+# --- Chunked, resumable upload ------------------------------------------------
+#
+# Declared before the /{dataset_id} routes so the shapes here are read first.
+# They do not actually collide -- "uploads/<id>" is two segments and
+# "{dataset_id}" is one -- but relying on that is a trap for whoever adds
+# /datasets/{dataset_id}/something next.
+
+
+def _upload_root(settings: Settings) -> Path:
+    """Directory holding partial uploads, created on first use."""
+    base = settings.dataset_upload_scratch_dir or os.path.join(
+        tempfile.gettempdir(), "gpu-orchestrator-uploads"
+    )
+    root = Path(base)
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _owned_session(root: Path, upload_id: uuid.UUID, user: User) -> UploadSession:
+    """Load a session belonging to ``user``, or 404.
+
+    Someone else's session answers exactly as a non-existent one does. A
+    distinguishable "that exists but is not yours" would turn this into a way
+    to enumerate what other people are uploading and under what names.
+    """
+    upload = load_session(root, upload_id)
+    if upload is None or upload.owner != user.username:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="unknown upload"
+        )
+    return upload
+
+
+def _status_of(upload: UploadSession) -> UploadSessionStatus:
+    return UploadSessionStatus(
+        upload_id=upload.upload_id,
+        chunk_bytes=upload.chunk_bytes,
+        total_chunks=upload.total_chunks,
+        total_bytes=upload.total_bytes,
+        received=received_chunks(upload),
+    )
+
+
+@router.post(
+    "/uploads",
+    status_code=status.HTTP_201_CREATED,
+    response_model=UploadSessionStatus,
+)
+async def open_upload_session(
+    body: UploadSessionCreate,
+    user: User = Depends(require_admin_user),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings_dep),
+) -> UploadSessionStatus:
+    """Open a chunked upload and say how to send it.
+
+    For an uploader whose route to here cuts long transfers off -- the public
+    tunnel does so after a minute or two -- a single request carrying a large
+    archive cannot succeed no matter how often it is retried. Splitting it means
+    no request runs long enough to be cut, and a chunk that fails anyway costs
+    one chunk rather than the whole file.
+
+    The name is checked now, not at the end. It is the same refusal either way,
+    and delivering it after the bytes have gone up is delivering it at the most
+    expensive possible moment.
+    """
+    root = _upload_root(settings)
+    # Reclaiming abandoned chunks at the moment someone asks for more disk needs
+    # no scheduler and no background task to keep alive.
+    swept = sweep_expired(root, ttl_seconds=settings.dataset_upload_session_ttl_seconds)
+    if swept:
+        logger.info("swept %d expired upload session(s)", swept)
+
+    conflict = await name_conflict(session, body.name)
+    if conflict is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=conflict)
+
+    try:
+        upload = create_session(
+            root,
+            name=body.name,
+            description=body.description,
+            total_bytes=body.total_bytes,
+            chunk_bytes=settings.dataset_upload_chunk_bytes,
+            owner=user.username,
+            max_upload_bytes=settings.dataset_max_upload_bytes,
+        )
+    except UploadSessionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)
+        ) from exc
+
+    logger.info(
+        "upload %s opened by %s: %d bytes in %d chunk(s)",
+        upload.upload_id,
+        user.username,
+        upload.total_bytes,
+        upload.total_chunks,
+    )
+    return _status_of(upload)
+
+
+@router.get("/uploads/{upload_id}", response_model=UploadSessionStatus)
+async def upload_session_status(
+    upload_id: uuid.UUID,
+    user: User = Depends(require_admin_user),
+    settings: Settings = Depends(get_settings_dep),
+) -> UploadSessionStatus:
+    """What has arrived so far -- the basis for resuming an interrupted upload."""
+    return _status_of(_owned_session(_upload_root(settings), upload_id, user))
+
+
+@router.put(
+    "/uploads/{upload_id}/chunks/{index}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    response_model=None,
+)
+async def put_upload_chunk(
+    upload_id: uuid.UUID,
+    index: int,
+    request: Request,
+    user: User = Depends(require_admin_user),
+    settings: Settings = Depends(get_settings_dep),
+) -> None:
+    """Store one chunk. Sending the same index again replaces it.
+
+    Idempotent on purpose: a chunk whose request died partway is exactly the
+    case this endpoint exists to survive, and the client's only sane response is
+    to send it again.
+    """
+    upload = _owned_session(_upload_root(settings), upload_id, user)
+
+    # Read with the ceiling applied as it arrives rather than from
+    # Content-Length, which the client controls and can simply misstate.
+    buffer = bytearray()
+    async for block in request.stream():
+        buffer.extend(block)
+        if len(buffer) > upload.chunk_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"a chunk may not exceed {upload.chunk_bytes} bytes",
+            )
+
+    try:
+        store_chunk(upload, index, bytes(buffer))
+    except UploadSessionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+
+@router.post(
+    "/uploads/{upload_id}/complete",
+    status_code=status.HTTP_201_CREATED,
+    response_model=DatasetUploadAccepted,
+)
+async def complete_upload_session(
+    upload_id: uuid.UUID,
+    user: User = Depends(require_admin_user),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings_dep),
+) -> DatasetUploadAccepted:
+    """Assemble the chunks and store the result.
+
+    From here on this is the single-shot path exactly: the same validation, the
+    same layout normalisation, the same record. How the bytes arrived stops
+    mattering once they are one file on disk.
+    """
+    upload = _owned_session(_upload_root(settings), upload_id, user)
+
+    handle, assembled = tempfile.mkstemp(suffix=".zip", prefix="dataset-assembled-")
+    os.close(handle)
+    try:
+        assemble(upload, assembled)
+    except UploadSessionError as exc:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(assembled)
+        # 409, not 422: nothing is wrong with the archive, the transfer is
+        # simply not finished. The client can fill the gaps and complete again.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+
+    try:
+        result = await _validate_and_store(
+            assembled,
+            name=upload.name,
+            description=upload.description,
+            user=user,
+            session=session,
+            settings=settings,
+        )
+    except HTTPException as exc:
+        # A 4xx is a verdict on the archive itself, and re-sending the same
+        # bytes would earn the same verdict -- so the chunks go. A 5xx is
+        # storage or the database having a bad moment, so they are kept and the
+        # uploader can complete again without re-sending anything.
+        if exc.status_code < 500:
+            discard_session(upload)
+        raise
+    discard_session(upload)
+    return result
+
+
+@router.delete(
+    "/uploads/{upload_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    response_model=None,
+)
+async def abandon_upload_session(
+    upload_id: uuid.UUID,
+    user: User = Depends(require_admin_user),
+    settings: Settings = Depends(get_settings_dep),
+) -> None:
+    """Give up on an upload and release its chunks straight away.
+
+    Expiry would get there eventually; a client that knows it has stopped should
+    not make the disk wait for it.
+    """
+    discard_session(_owned_session(_upload_root(settings), upload_id, user))
 
 
 @router.get("", response_model=DatasetListResponse)

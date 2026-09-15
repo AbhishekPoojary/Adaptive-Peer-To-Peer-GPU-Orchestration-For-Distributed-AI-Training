@@ -236,3 +236,65 @@ Three properties, in priority order:
 - A train-only class with fewer images than the carve stride is dropped rather
   than split, since a held-out set of zero is not one. An archive small enough
   for this to remove every class still gets the original rejection.
+
+
+## Amendment: chunked, resumable upload (2026-09-15)
+
+### What changed
+
+`POST /datasets` is unchanged and still accepts a whole archive in one request.
+Alongside it, five routes under `/datasets/uploads` let a client open an upload,
+send the archive in server-sized pieces, ask which pieces arrived, assemble, or
+abandon. The dashboard uses these for every upload.
+
+### Why
+
+Decision 4 above reasoned about the *archive's* path to the peer and got it
+right. It said nothing about the uploader's path to the orchestrator, because at
+the time that was a LAN.
+
+It stopped being a LAN the moment the dashboard was shared through a Cloudflare
+quick tunnel so someone on another network could use it — which is the whole
+point of the project. That tunnel cuts off any single request running longer
+than a minute or two. Measured on the link this was built for: 346 MB in one
+request died after 34 MB and 130s; 10 MB arrived in 64s; the same 346 MB over
+the LAN took 2.5s.
+
+That is not a failure a retry can fix, because every attempt hits the same wall
+at the same place. The request has to get smaller, which means there has to be
+more than one.
+
+### The properties that make it sound
+
+- **A chunk may be sent again.** Re-sending replaces the previous copy rather
+  than being refused. A client cannot distinguish a chunk that arrived from one
+  cut off just before the server wrote it, so resending must be safe — that is
+  what makes the client's retry a mechanism rather than a hope.
+- **A partial upload is refused, not validated.** Assembly checks every index is
+  present and the total matches what was declared. Handing a truncated archive
+  to the validator would report a transport problem as "that file is not a
+  readable .zip", sending the uploader to inspect a file that is fine.
+- **The ceilings are checked on the way in.** A session is disk handed out
+  before anything about the archive has been proved, which makes it the one
+  upload surface that can be made expensive without ever being valid. The
+  declared total is checked against the upload limit at creation, the stored
+  bytes against that total on every chunk, and the index against the session's
+  chunk count.
+- **Sessions are owned and expire.** Another account's session answers exactly
+  as a missing one, or this becomes a way to discover what other people are
+  uploading. Abandoned sessions are swept when the next one is opened — the
+  moment someone asks for disk is the moment it is worth reclaiming, and it
+  needs no scheduler.
+- **One path after assembly.** `_validate_and_store` is shared, so chunked and
+  single-shot uploads cannot drift apart on what counts as a dataset.
+
+### Consequences
+
+- The name is now checked when the upload is opened, not only at insert. It is
+  the same refusal, moved off the end of a long transfer. The unique index still
+  decides — the early check is advisory and races.
+- Partial uploads occupy disk under `DATASET_UPLOAD_SCRATCH_DIR` until they
+  complete or expire (`DATASET_UPLOAD_SESSION_TTL_SECONDS`, default 6 h).
+- Chunking removes the cut-off, not the bandwidth. A large archive over a home
+  upstream still takes as long as it takes, and the dashboard says so before
+  starting rather than leaving it to be discovered.

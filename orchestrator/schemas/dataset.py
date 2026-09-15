@@ -64,6 +64,41 @@ class DatasetUploadAccepted(BaseModel):
     layout_notes: list[str] = []
 
 
+class UploadSessionCreate(BaseModel):
+    """Body of POST /datasets/uploads — opening a chunked upload.
+
+    The name and description are taken now rather than at completion so a
+    clash is discovered before the bytes are sent, not after.
+    """
+
+    name: str = Field(pattern=DATASET_NAME_PATTERN)
+    description: str | None = Field(default=None, max_length=1024)
+    #: Size of the archive about to be sent. Checked against the upload ceiling
+    #: immediately, and against what actually arrives before anything is stored.
+    total_bytes: int = Field(gt=0)
+
+
+class UploadSessionStatus(BaseModel):
+    """An upload in progress.
+
+    ``received`` is what makes this resumable: a client that was interrupted
+    asks where it got to and sends only what is missing, rather than starting a
+    350 MB archive again because one chunk failed.
+    """
+
+    upload_id: uuid.UUID
+    #: Chunk size the server expects. The client does not choose it — a chunk
+    #: large enough to be cut off in transit would defeat the whole mechanism.
+    chunk_bytes: int
+    total_chunks: int
+    total_bytes: int
+    received: list[int]
+
+    @property
+    def is_complete(self) -> bool:
+        return len(self.received) == self.total_chunks
+
+
 class DatasetNameCheck(BaseModel):
     """Query params for name availability, used by the upload form."""
 

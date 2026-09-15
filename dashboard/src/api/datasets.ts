@@ -167,74 +167,138 @@ export interface UploadDatasetResult {
   layout_notes: string[];
 }
 
+/** One upload session, as the orchestrator describes it. */
+interface UploadSessionStatus {
+  upload_id: string;
+  chunk_bytes: number;
+  total_chunks: number;
+  total_bytes: number;
+  received: number[];
+}
+
+/** Attempts per chunk before the whole upload gives up. */
+const CHUNK_ATTEMPTS = 4;
+
+function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function postJson<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: {
+      ...authHeaders(),
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!response.ok) throw await toApiError(response);
+  return (await response.json()) as T;
+}
+
+/**
+ * Send one chunk, retrying a few times before giving up on the upload.
+ *
+ * Retrying is not belt-and-braces here, it is the mechanism. The transport this
+ * exists for drops transfers unpredictably, and the endpoint makes a repeated
+ * chunk replace its predecessor precisely so that resending is always safe.
+ * Without this, one unlucky chunk out of ninety would still lose the archive.
+ */
+async function sendChunk(
+  uploadId: string,
+  index: number,
+  piece: Blob,
+): Promise<void> {
+  let last: unknown;
+  for (let attempt = 0; attempt < CHUNK_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(
+        `${API_BASE}/datasets/uploads/${uploadId}/chunks/${index}`,
+        { method: "PUT", headers: authHeaders(), body: piece },
+      );
+      if (response.ok) return;
+      const error = await toApiError(response);
+      // A refusal is a verdict on the request, not on the connection, and it
+      // will be the same verdict next time. Only a server or transport fault
+      // is worth repeating.
+      if (response.status < 500) throw error;
+      last = error;
+    } catch (err) {
+      if (err instanceof ApiError && err.status !== undefined && err.status < 500) {
+        throw err;
+      }
+      last = err;
+    }
+    await pause(500 * 2 ** attempt);
+  }
+  throw last instanceof Error
+    ? last
+    : new ApiError("A piece of the upload could not be sent.", 0);
+}
+
 export function useUploadDatasetMutation() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: UploadDatasetInput): Promise<UploadDatasetResult> =>
-      // XMLHttpRequest rather than fetch, for the one thing fetch cannot do:
-      // report how much of a request body has been sent. A 350 MB archive over
-      // a home connection is minutes of a button that says "Uploading…" and
-      // nothing else, which is why the first question is always whether it has
-      // frozen.
-      new Promise<UploadDatasetResult>((resolve, reject) => {
-        const form = new FormData();
-        form.append("name", input.name);
-        if (input.description) form.append("description", input.description);
-        form.append("file", input.file);
+    /**
+     * Upload in chunks rather than one request.
+     *
+     * A single request carrying the whole archive is the obvious shape, and it
+     * works right up until the dashboard is reached through something that
+     * limits how long one request may run. The public Cloudflare tunnel cuts a
+     * transfer off after a minute or two, which on a home upstream arrives long
+     * before a large archive finishes — no amount of retrying a single request
+     * gets past that, because every attempt hits the same wall.
+     *
+     * Split into pieces, no request runs long enough to be cut, and one that
+     * fails anyway costs a piece instead of the file. Small archives take this
+     * path too: one code path that always works beats two where the rare one is
+     * the one that has to handle trouble.
+     */
+    mutationFn: async (input: UploadDatasetInput): Promise<UploadDatasetResult> => {
+      const session = await postJson<UploadSessionStatus>("/datasets/uploads", {
+        name: input.name,
+        description: input.description ?? null,
+        total_bytes: input.file.size,
+      });
 
-        const request = new XMLHttpRequest();
-        request.open("POST", `${API_BASE}/datasets`);
-        // Content-Type is deliberately not set: the browser has to add it
-        // itself so the multipart boundary matches the body it generates.
-        for (const [header, value] of Object.entries(authHeaders())) {
-          request.setRequestHeader(header, value);
-        }
+      const already = new Set(session.received);
+      let sent = already.size * session.chunk_bytes;
+      input.onProgress?.({
+        phase: "uploading",
+        loaded: sent,
+        total: input.file.size,
+      });
 
-        // Remembered so a failure can say how far it got. Without it every
-        // interruption looks identical to never having started.
-        let sentBytes = 0;
-        request.upload.onprogress = (event) => {
-          sentBytes = event.loaded;
+      try {
+        for (let index = 0; index < session.total_chunks; index += 1) {
+          if (already.has(index)) continue;
+          const from = index * session.chunk_bytes;
+          const piece = input.file.slice(from, from + session.chunk_bytes);
+          await sendChunk(session.upload_id, index, piece);
+          sent = Math.min(input.file.size, from + piece.size);
           input.onProgress?.({
             phase: "uploading",
-            loaded: event.loaded,
-            total: event.lengthComputable ? event.total : 0,
-          });
-        };
-        request.upload.onload = () => {
-          input.onProgress?.({
-            phase: "processing",
-            loaded: input.file.size,
+            loaded: sent,
             total: input.file.size,
           });
-        };
+        }
+      } catch (err) {
+        throw err instanceof ApiError && err.status === 0
+          ? uploadInterrupted(sent, input.file.size)
+          : err;
+      }
 
-        request.onload = () => {
-          if (request.status >= 200 && request.status < 300) {
-            try {
-              resolve(JSON.parse(request.responseText) as UploadDatasetResult);
-            } catch {
-              reject(
-                new ApiError(
-                  "The upload finished but the reply could not be read.",
-                  request.status,
-                ),
-              );
-            }
-            return;
-          }
-          reject(errorFromBody(request.status, request.responseText));
-        };
-        // Status 0: the request never completed, so there is no status to
-        // reason about — only how much of the body got out before it stopped.
-        request.onerror = () => reject(uploadInterrupted(sentBytes, input.file.size));
-        request.ontimeout = () =>
-          reject(new ApiError("The upload timed out before it finished.", 0));
-        request.onabort = () =>
-          reject(new ApiError("The upload was cancelled.", 0));
-
-        request.send(form);
-      }),
+      // The bytes are up; what remains is validation, possibly a layout
+      // rewrite, and the push to storage — none of which reports progress.
+      input.onProgress?.({
+        phase: "processing",
+        loaded: input.file.size,
+        total: input.file.size,
+      });
+      return await postJson<UploadDatasetResult>(
+        `/datasets/uploads/${session.upload_id}/complete`,
+      );
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["datasets"] });
     },

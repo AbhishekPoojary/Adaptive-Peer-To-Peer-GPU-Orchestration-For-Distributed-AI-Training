@@ -71,6 +71,21 @@ class Settings(BaseSettings):
     # relaxes a limit either way, because the rewritten archive is handed back
     # to the same validator before anything is stored.
     dataset_normalize_layout: bool = True
+    # Size of one piece of a chunked upload. The dashboard splits an archive
+    # into requests this big so no single request runs long enough to be cut
+    # off by whatever sits between the uploader and here -- a Cloudflare quick
+    # tunnel drops a transfer after a minute or two, which on a home upstream
+    # is reached well before a large archive finishes. 4 MiB is about 27s at
+    # 150 KB/s, comfortably inside that window, and small enough that a chunk
+    # which fails anyway is cheap to send again.
+    dataset_upload_chunk_bytes: int = 4 * 1024 * 1024
+    # How long an unfinished upload keeps its chunks. A client that vanishes
+    # mid-upload has spent disk that nothing will ever claim, so sessions past
+    # this age are swept the next time anyone opens one.
+    dataset_upload_session_ttl_seconds: int = 6 * 60 * 60
+    # Where partial uploads are held. Empty means a directory under the system
+    # temp dir, which is where the single-shot upload already stages its file.
+    dataset_upload_scratch_dir: str = ""
     # Fraction of train/ held out when a normalised archive supplies no test
     # split of its own. Every stride-th image, so both splits sample the whole
     # class. The choice is recorded on the dataset, never made silently.

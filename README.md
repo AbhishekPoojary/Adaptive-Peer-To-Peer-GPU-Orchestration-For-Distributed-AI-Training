@@ -372,23 +372,37 @@ Who submitted a job comes from your **token**, never from the request body —
 someone on another network can sign in, upload a dataset, and collect the
 trained model without installing anything.
 
-**That tunnel cuts off uploads that run longer than a minute or two.** It is a
-time limit, not a size one, so the practical ceiling is however much the
-uploader's connection covers in that window — on a typical home upstream,
-around 15 MB. Measured on the link this was built for:
+**That tunnel cuts off any single request that runs longer than a minute or
+two.** Measured on the link this was built for, one request carrying 346 MB died
+after 34 MB and 130 seconds, while 10 MB arrived fine in 64 seconds — it is a
+limit on elapsed time per request, not on the size of the file.
 
-| Archive | Over the tunnel | Over the LAN |
-|---|---|---|
-| 10 MB | arrived, 64s | under a second |
-| 346 MB | cut off after 34 MB, 130s | 2.5s |
+So the dashboard does not send an archive in one request. It opens an upload,
+sends the file in 4 MiB pieces, and asks the orchestrator to assemble them:
 
-So upload anything large **from the machine running the orchestrator**
-(`http://localhost:5173`) — those bytes never leave it. Keep archives shared
-over the public link small. The upload form warns before starting when a file
-looks too big for the link it is on, and says how far it got if one is cut off.
+```
+POST   /datasets/uploads                      open one, get the chunk size
+PUT    /datasets/uploads/{id}/chunks/{index}   send a piece (repeatable)
+GET    /datasets/uploads/{id}                  which pieces arrived
+POST   /datasets/uploads/{id}/complete         assemble, validate, store
+DELETE /datasets/uploads/{id}                  give up, release the disk
+```
 
-Lifting this properly means uploading in chunks rather than one request, which
-is a real feature rather than a setting; nothing here does that yet.
+No piece runs long enough to be cut off, and one that fails anyway is retried
+on its own rather than costing the whole archive. Because a repeated chunk
+replaces its predecessor, resending is always safe — which is what makes the
+retry sound rather than hopeful. `GET` reports what has arrived, so an upload
+interrupted at chunk 60 of 87 resumes instead of restarting.
+
+Everything after assembly is the single-shot path exactly: same validation,
+same layout normalisation, same record. `POST /datasets` still accepts a whole
+archive in one request and is the right tool from a script on the LAN.
+
+What chunking does **not** change is speed. A tunnel is still a home upstream —
+at the ~150 KB/s measured here, 346 MB is around forty minutes. Uploading from
+the machine running the orchestrator (`http://localhost:5173`) takes 2.5s for
+the same file, because those bytes never leave it. The form says so before you
+start.
 
 ---
 
