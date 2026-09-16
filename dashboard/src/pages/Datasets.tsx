@@ -192,6 +192,7 @@ test/dog/held-out.png`}
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="dataset-file">Archive</Label>
               <ArchiveDropzone
+                id="dataset-file"
                 file={file}
                 onFile={setFile}
                 maxBytes={maxUploadBytes}

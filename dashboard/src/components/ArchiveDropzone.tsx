@@ -27,6 +27,7 @@ import { cn } from "@/lib/utils";
  * simply refuses to respond.
  */
 export function ArchiveDropzone({
+  id,
   file,
   onFile,
   maxBytes,
@@ -34,6 +35,12 @@ export function ArchiveDropzone({
   error,
   onError,
 }: {
+  /**
+   * Id for the hidden file input, so a `<Label htmlFor>` outside this
+   * component still opens the picker. Omitting it is what broke the click:
+   * the label pointed at an input that no longer existed.
+   */
+  id?: string;
   file: File | null;
   onFile: (file: File | null) => void;
   /** The orchestrator's own upload ceiling, so the copy cannot drift from it. */
@@ -74,6 +81,7 @@ export function ArchiveDropzone({
   if (file) {
     return (
       <div className="flex items-center gap-3 rounded-[var(--radius-control)] bg-sunken p-3">
+        <input {...getInputProps({ id })} />
         <span
           aria-hidden="true"
           className="grid size-9 shrink-0 place-items-center rounded-[8px] bg-surface text-muted"
@@ -115,7 +123,7 @@ export function ArchiveDropzone({
           disabled && "pointer-events-none opacity-60",
         )}
       >
-        <input {...getInputProps()} aria-label="Dataset archive" />
+        <input {...getInputProps({ id })} />
         <UploadCloud
           className={cn(
             "size-6 transition-colors duration-200",
