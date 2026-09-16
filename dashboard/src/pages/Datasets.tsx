@@ -1,13 +1,16 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import {
   useDatasetsQuery,
   useDeleteDatasetMutation,
   useUploadDatasetMutation,
+  useUploadLimitsQuery,
   servedThroughQuickTunnel,
   type Dataset,
   type UploadProgress,
 } from "@/api/datasets";
 import { canShrinkArchives } from "@/api/shrinkArchive";
+import { ArchiveDropzone } from "@/components/ArchiveDropzone";
+import { Switch } from "@/components/ui/switch";
 import { ApiError } from "@/api/client";
 import { isAdmin } from "@/api/session";
 import { EmptyState } from "@/components/EmptyState";
@@ -40,12 +43,15 @@ export function Datasets() {
   const { data, isPending, error, refetch } = useDatasetsQuery();
   const upload = useUploadDatasetMutation();
   const remove = useDeleteDatasetMutation();
+  const limits = useUploadLimitsQuery();
+  const maxUploadBytes = limits.data?.max_upload_bytes ?? 2 * 1024 * 1024 * 1024;
   const admin = isAdmin();
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [dropError, setDropError] = useState<string | null>(null);
   // Kept on the page rather than left in a toast: these say what the server did
   // to someone's data, and a message that disappears after four seconds is not
   // a disclosure. The same text is written onto the dataset's description, so
@@ -56,9 +62,6 @@ export function Datasets() {
   // at no cost to the model, and someone who has never thought about image
   // resolution should get the fast path without having to ask for it.
   const [shrinkImages, setShrinkImages] = useState(true);
-  // A file input is uncontrolled: React state cannot clear the chosen
-  // filename after a successful upload, so it is reset through the node.
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function handleUpload(e: FormEvent) {
     e.preventDefault();
@@ -85,7 +88,6 @@ export function Datasets() {
       setName("");
       setDescription("");
       setFile(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
     } catch (err) {
       setFormError(
         err instanceof ApiError ? err.message : "Couldn't upload that dataset.",
@@ -186,34 +188,41 @@ test/dog/held-out.png`}
             </div>
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="dataset-file">Archive</Label>
-            <Input
-              id="dataset-file"
-              ref={fileInputRef}
-              type="file"
-              accept=".zip,application/zip"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              required
-            />
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="dataset-file">Archive</Label>
+              <ArchiveDropzone
+                file={file}
+                onFile={setFile}
+                maxBytes={maxUploadBytes}
+                disabled={upload.isPending}
+                error={dropError}
+                onError={setDropError}
+              />
+            </div>
+
             {canShrinkArchives() && (
-              <label className="flex max-w-[78ch] items-start gap-2 text-xs text-secondary">
-                <input
-                  type="checkbox"
+              <div className="flex items-start gap-3">
+                <Switch
+                  id="shrink-images"
                   checked={shrinkImages}
-                  onChange={(e) => setShrinkImages(e.target.checked)}
+                  onCheckedChange={setShrinkImages}
+                  disabled={upload.isPending}
                   className="mt-0.5"
                 />
-                <span>
-                  Shrink images before uploading.{" "}
-                  <span className="text-tertiary">
-                    Training resizes every image to a small fixed size anyway, so
-                    doing it here sends far less over the network and changes
-                    nothing the model sees. It is recorded on the dataset. Turn
-                    this off to upload the archive exactly as it is.
-                  </span>
-                </span>
-              </label>
+                <Label
+                  htmlFor="shrink-images"
+                  className="max-w-[72ch] cursor-pointer text-xs leading-relaxed font-normal text-muted"
+                >
+                  <span className="font-medium text-ink">
+                    Shrink images before uploading.
+                  </span>{" "}
+                  Training resizes every image to a small fixed size anyway, so
+                  doing it here sends far less over the network and changes
+                  nothing the model sees. It is recorded on the dataset. Turn
+                  this off to upload the archive exactly as it is.
+                </Label>
+              </div>
             )}
 
             {/*

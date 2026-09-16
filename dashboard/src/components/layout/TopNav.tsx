@@ -100,8 +100,15 @@ export function TopNav() {
               end={end}
               className={({ isActive }) =>
                 cn(
-                  "block rounded-full px-3.5 py-1.5 text-[0.8125rem] font-medium whitespace-nowrap transition-colors duration-200 ease-out",
-                  isActive ? "text-white" : "text-muted hover:text-ink",
+                  "block rounded-full px-3.5 py-1.5 text-[0.8125rem] font-medium whitespace-nowrap transition-colors duration-150 ease-out",
+                  // The incoming label waits for the pill. Turning it white the
+                  // instant it becomes active leaves it white-on-canvas — and
+                  // so unreadable — for the whole 320ms the pill is travelling.
+                  // The outgoing label has no delay: the pill is leaving it, so
+                  // going muted immediately is the correct reading.
+                  isActive
+                    ? "text-white delay-200 motion-reduce:delay-0"
+                    : "text-muted delay-0 hover:text-ink",
                 )
               }
             >

@@ -18,7 +18,8 @@ export function JobsList() {
   if (query.isPending) {
     return (
       <PageShell title="Runs">
-        <DataTable columns={columns} rows={[]} getRowKey={(j) => j.id} isLoading skeletonRows={4} />
+        <DataTable
+      maxBodyHeight="max-h-[calc(100vh-15rem)]" columns={columns} rows={[]} getRowKey={(j) => j.id} isLoading skeletonRows={4} />
       </PageShell>
     );
   }

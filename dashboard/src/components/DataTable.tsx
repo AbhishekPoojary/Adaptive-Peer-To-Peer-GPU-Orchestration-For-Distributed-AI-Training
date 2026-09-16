@@ -26,6 +26,12 @@ export interface DataTableProps<T> {
   /** rendered instead of body rows while the first fetch is in flight */
   isLoading?: boolean;
   skeletonRows?: number;
+  /**
+   * Cap the body's height so the sticky header has something to stick to.
+   * Left unset for short tables, where an inner scroller would be a worse
+   * experience than simply letting the page scroll.
+   */
+  maxBodyHeight?: string;
   className?: string;
 }
 
@@ -46,6 +52,7 @@ export function DataTable<T>({
   onRowClick,
   isLoading,
   skeletonRows = 5,
+  maxBodyHeight,
   className,
 }: DataTableProps<T>) {
   return (
@@ -55,7 +62,7 @@ export function DataTable<T>({
         className,
       )}
     >
-      <Table>
+      <Table scrollerClassName={maxBodyHeight}>
         <TableHeader>
           <TableRow>
             {columns.map((col) => (

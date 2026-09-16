@@ -56,6 +56,7 @@ export function NodesList() {
     return (
       <PageShell title="Machines" right={addNodeButton}>
         <DataTable
+      maxBodyHeight="max-h-[calc(100vh-15rem)]"
           columns={columns}
           rows={[]}
           getRowKey={(n) => n.id}

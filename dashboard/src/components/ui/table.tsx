@@ -13,11 +13,16 @@ import { cn } from "@/lib/utils";
  * Rows are 44px rather than 36px. Slightly generous for an operator scanning a
  * hundred of them, and a long way from cramped for the visitor reading three.
  */
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+function Table({
+  className,
+  scrollerClassName,
+  ...props
+}: React.ComponentProps<"table"> & { scrollerClassName?: string }) {
   return (
     // Its own scroller: a wide table scrolls sideways inside the panel rather
-    // than making the whole page scroll horizontally.
-    <div className="w-full overflow-x-auto">
+    // than making the whole page scroll horizontally, and when a height is
+    // given it becomes the scroll parent the sticky header anchors to.
+    <div className={cn("w-full overflow-auto", scrollerClassName)}>
       <table
         className={cn("w-full caption-bottom border-collapse text-[0.8125rem]", className)}
         {...props}
@@ -30,7 +35,15 @@ function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
   return (
     <thead
       className={cn(
-        "border-b border-hairline bg-sunken [&_tr]:hover:bg-transparent",
+        "bg-sunken [&_tr]:hover:bg-transparent",
+        // Sticks to the top of the nearest scroll container while the rows
+        // pass under it. On the 61-row Machines page a column heading that
+        // scrolls away leaves you counting cells to work out what you are
+        // looking at.
+        "[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-sunken",
+        // The hairline rides as a shadow: a sticky cell leaves its own border
+        // behind at the original position.
+        "[&_th]:shadow-[inset_0_-1px_0_var(--hairline)]",
         className,
       )}
       {...props}
