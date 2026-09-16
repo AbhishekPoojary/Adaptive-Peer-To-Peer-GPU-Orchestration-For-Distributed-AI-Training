@@ -160,7 +160,10 @@ def main(argv: list[str]) -> int:
 
     classes = sorted(set(found["train"]) & set(found["test"]))
     if len(classes) < 2:
-        print(f"ERROR: need at least 2 classes with both train and test images; found {len(classes)}.")
+        print(
+            "ERROR: need at least 2 classes with both train and test images; "
+            f"found {len(classes)}."
+        )
         return 1
 
     with zipfile.ZipFile(src) as zf, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as out:
