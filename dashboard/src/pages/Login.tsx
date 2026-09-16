@@ -75,18 +75,30 @@ export function Login() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-base px-4 text-primary">
-      <div className="w-full max-w-sm">
-        <div className="mb-6">
-          <h1 className="text-lg font-semibold text-primary">GPU Orchestrator</h1>
-          <p className="mt-1 text-sm text-secondary">
-            Sign in to submit training jobs and watch the fleet.
+    <div className="flex min-h-screen items-center justify-center bg-canvas px-4 text-ink">
+      <div className="w-full max-w-[25rem]">
+        <div className="mb-7">
+          <svg
+            viewBox="0 0 20 20"
+            className="mb-4 size-6"
+            aria-hidden="true"
+            fill="none"
+          >
+            <rect x="2" y="9" width="4" height="9" rx="1.4" fill="var(--nosignal)" />
+            <rect x="8" y="5" width="4" height="13" rx="1.4" fill="var(--accent)" />
+            <rect x="14" y="2" width="4" height="16" rx="1.4" fill="var(--ink)" />
+          </svg>
+          <h1 className="text-[1.375rem] font-semibold tracking-[-0.02em] text-ink">
+            Sign in to Orchestrator
+          </h1>
+          <p className="mt-1.5 text-[0.8125rem] text-muted">
+            Train on machines you don&apos;t have to own.
           </p>
         </div>
 
         <form
           onSubmit={(e) => void handleSubmit(e)}
-          className="flex flex-col gap-4 rounded-lg border border-hairline bg-panel p-5"
+          className="flex flex-col gap-4 rounded-[var(--radius-panel)] bg-surface p-6 shadow-panel"
         >
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="username">Username</Label>
@@ -115,7 +127,7 @@ export function Login() {
           {formError && (
             <div
               role="alert"
-              className="rounded-md border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-primary"
+              className="rounded-[var(--radius-control)] bg-fault-wash px-3 py-2.5 text-[0.8125rem] text-fault"
             >
               {formError}
             </div>
@@ -132,7 +144,7 @@ export function Login() {
             <>
               <div className="flex items-center gap-3" aria-hidden="true">
                 <span className="h-px flex-1 bg-hairline" />
-                <span className="text-xs text-tertiary">or</span>
+                <span className="text-xs text-faint">or</span>
                 <span className="h-px flex-1 bg-hairline" />
               </div>
 
@@ -143,14 +155,14 @@ export function Login() {
                   disabled={googleMutation.isPending || loginMutation.isPending}
                 />
                 {googleMutation.isPending && (
-                  <p className="text-xs text-secondary">Signing in with Google…</p>
+                  <p className="text-xs text-muted">Signing in with Google…</p>
                 )}
               </div>
             </>
           )}
         </form>
 
-        <p className="mt-4 text-xs text-tertiary">
+        <p className="mt-5 text-xs leading-relaxed text-muted">
           No account? Accounts are created on the orchestrator host with{" "}
           <code className="font-data">python -m scripts.create_user</code>. Ask
           whoever runs the fleet.

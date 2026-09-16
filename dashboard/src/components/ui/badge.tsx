@@ -2,16 +2,26 @@ import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
+/**
+ * Status badge.
+ *
+ * A tinted wash with same-hue text, no border. On a light ground the previous
+ * border-plus-10%-fill recipe produced a ring of dirty colour around every
+ * state; a flat wash at full text contrast reads cleaner and holds AA.
+ *
+ * Colour is never the only channel — `StatusPill` always pairs these with a
+ * label and an icon, so the state survives greyscale and colour-blindness.
+ */
 const badgeVariants = cva(
-  "inline-flex items-center gap-1.5 rounded border px-1.5 py-0.5 text-xs font-medium font-sans w-fit whitespace-nowrap shrink-0",
+  "inline-flex w-fit shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 font-sans text-[0.6875rem] font-medium whitespace-nowrap [&_svg]:size-3 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
-        neutral: "border-hairline bg-elevated text-secondary",
-        good: "border-good/40 bg-good/10 text-good",
-        active: "border-active/40 bg-active/10 text-active",
-        warn: "border-warn/40 bg-warn/10 text-warn",
-        bad: "border-bad/40 bg-bad/10 text-bad",
+        neutral: "bg-sunken text-muted",
+        good: "bg-ok-wash text-ok",
+        active: "bg-accent-wash text-accent",
+        warn: "bg-caution-wash text-caution",
+        bad: "bg-fault-wash text-fault",
       },
     },
     defaultVariants: { variant: "neutral" },

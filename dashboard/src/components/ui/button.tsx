@@ -3,25 +3,37 @@ import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
+/**
+ * Buttons.
+ *
+ * The primary action is **ink**, not the accent. The accent is spent on focus,
+ * live measurement and chart lines; a thing being the main action and a thing
+ * being live are different claims, and sharing one colour makes both vaguer.
+ *
+ * No focus ring here. `:focus-visible` is themed once globally, drawn outside
+ * the element so it never shifts layout or gets clipped by a rounded parent —
+ * a second ring at component level just doubles it.
+ */
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium font-sans transition-colors motion-reduce:transition-none disabled:pointer-events-none disabled:opacity-50 outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base [&_svg]:size-4 [&_svg]:shrink-0",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-control)] font-sans text-[0.8125rem] font-medium outline-none transition-[background-color,color,border-color,box-shadow] duration-150 ease-out motion-reduce:transition-none disabled:pointer-events-none disabled:opacity-45 [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
-        default: "bg-accent text-base hover:opacity-90",
+        default: "bg-ink text-white shadow-[0_1px_2px_rgba(14,22,38,0.16)] hover:bg-[#1c2740]",
         secondary:
-          "bg-elevated text-primary border border-hairline hover:bg-elevated/80",
+          "border border-hairline bg-surface text-ink hover:border-hairline-strong hover:bg-sunken",
         outline:
-          "border border-hairline bg-transparent text-primary hover:bg-elevated",
-        ghost: "bg-transparent text-secondary hover:bg-elevated hover:text-primary",
-        destructive: "bg-bad text-base hover:opacity-90",
-        link: "bg-transparent text-accent underline-offset-4 hover:underline",
+          "border border-hairline-strong bg-transparent text-ink hover:bg-sunken",
+        ghost: "bg-transparent text-muted hover:bg-sunken hover:text-ink",
+        destructive:
+          "border border-[color-mix(in_srgb,var(--fault)_30%,transparent)] bg-fault-wash text-fault hover:bg-[color-mix(in_srgb,var(--fault)_16%,transparent)]",
+        link: "bg-transparent text-accent underline decoration-[1.5px] underline-offset-[3px] hover:decoration-2",
       },
       size: {
-        default: "h-8 px-3 py-1.5",
-        sm: "h-7 px-2 text-xs",
-        lg: "h-10 px-4",
-        icon: "h-8 w-8",
+        default: "h-9 px-3.5",
+        sm: "h-8 px-3 text-xs",
+        lg: "h-11 px-5 text-sm",
+        icon: "size-9",
       },
     },
     defaultVariants: {

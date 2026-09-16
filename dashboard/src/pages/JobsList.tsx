@@ -17,7 +17,7 @@ export function JobsList() {
 
   if (query.isPending) {
     return (
-      <PageShell title="Jobs">
+      <PageShell title="Runs">
         <DataTable columns={columns} rows={[]} getRowKey={(j) => j.id} isLoading skeletonRows={4} />
       </PageShell>
     );
@@ -25,7 +25,7 @@ export function JobsList() {
 
   if (query.isError) {
     return (
-      <PageShell title="Jobs">
+      <PageShell title="Runs">
         <ErrorState error={query.error} onRetry={() => query.refetch()} />
       </PageShell>
     );
@@ -35,7 +35,7 @@ export function JobsList() {
 
   return (
     <PageShell
-      title="Jobs"
+      title="Runs"
       right={<UpdatedAgo dataUpdatedAt={query.dataUpdatedAt} isFetching={query.isFetching} />}
     >
       {jobs.length === 0 ? (
@@ -45,7 +45,7 @@ export function JobsList() {
           description="Queue a real training job against the enrolled fleet."
           action={
             <Button asChild size="sm">
-              <Link to="/submit">Submit a job</Link>
+              <Link to="/submit">Train something</Link>
             </Button>
           }
         />
@@ -71,7 +71,13 @@ const columns: DataTableColumn<JobSummary>[] = [
         <div className="flex flex-col">
           <span className="font-data text-xs font-medium text-primary">{shortId(j.id)}</span>
           <span className="text-xs text-secondary">
-            {spec.model ?? "unknown model"} · {spec.dataset ?? "?"}
+            {spec.model ?? "unknown model"} ·{" "}
+            {spec.dataset ??
+              (j.dataset_name
+                ? j.dataset_deleted
+                  ? `${j.dataset_name} (deleted)`
+                  : j.dataset_name
+                : "—")}
           </span>
         </div>
       );
@@ -119,7 +125,7 @@ function PageShell({
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-primary">{title}</h1>
+        <h1 className="text-[1.375rem] font-semibold tracking-[-0.02em] text-ink">{title}</h1>
         {right}
       </div>
       {children}

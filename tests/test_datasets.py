@@ -620,3 +620,45 @@ async def test_a_builtin_dataset_job_carries_no_dataset_name(
     body = detail.json()
     assert body["dataset_name"] is None
     assert body["dataset_deleted"] is False
+
+
+async def test_job_list_names_the_dataset_without_a_query_per_job(
+    api_client: AsyncClient,
+) -> None:
+    """The list is where the gap showed: `spec.dataset` is null for uploaded
+    datasets, so every such row rendered "?" where the record of what it
+    trained on belongs.
+
+    Resolved in one batched query for the whole page rather than one per job —
+    a job list is unbounded, and the obvious per-row lookup turns a single
+    page render into N round trips.
+    """
+    admin = api_client.admin_token  # type: ignore[attr-defined]
+    dataset_id = (await upload(api_client, name="listed", token=admin)).json()[
+        "dataset"
+    ]["id"]
+
+    for _ in range(3):
+        created = await api_client.post(
+            "/jobs",
+            json={"spec": {**_SPEC, "dataset": None, "dataset_id": dataset_id}},
+        )
+        assert created.status_code == 201, created.text
+    builtin = await api_client.post("/jobs", json={"spec": _SPEC})
+    assert builtin.status_code == 201
+
+    listing = await api_client.get("/jobs")
+    assert listing.status_code == 200
+    jobs = listing.json()["jobs"]
+
+    custom = [j for j in jobs if j["spec"].get("dataset_id") == dataset_id]
+    assert len(custom) == 3
+    for job in custom:
+        assert job["dataset_name"] == "listed"
+        assert job["dataset_deleted"] is False
+
+    # A built-in dataset names itself in the spec, so a second field would be
+    # noise rather than information.
+    for job in jobs:
+        if job["spec"].get("dataset") == "cifar10":
+            assert job["dataset_name"] is None

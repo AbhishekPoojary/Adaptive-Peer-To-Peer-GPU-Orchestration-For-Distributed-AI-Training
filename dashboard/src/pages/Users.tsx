@@ -130,8 +130,8 @@ export function Users() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-xl font-semibold text-primary">People</h1>
-        <p className="mt-1 text-sm text-secondary">
+        <h1 className="text-[1.375rem] font-semibold tracking-[-0.02em] text-ink">People</h1>
+        <p className="mt-1.5 max-w-[68ch] text-[0.8125rem] leading-relaxed text-muted">
           Accounts that can sign in and submit jobs. Adding someone here replaces
           running <code className="font-data">scripts/create_user.py</code> on the
           orchestrator host.
@@ -140,10 +140,10 @@ export function Users() {
 
       <form
         onSubmit={(e) => void handleCreate(e)}
-        className="flex flex-col gap-4 rounded-lg border border-hairline bg-panel p-5"
+        className="flex flex-col gap-4 rounded-[var(--radius-panel)] bg-surface shadow-panel p-5"
       >
         <div>
-          <h2 className="text-sm font-semibold text-primary">Add someone</h2>
+          <h2 className="text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">Add someone</h2>
           <p className="mt-1 text-xs text-secondary">
             Give an email and they sign in with Google — no password to share.
             Give a password instead for an account that works offline. Both is
@@ -212,7 +212,7 @@ export function Users() {
         {formError && (
           <div
             role="alert"
-            className="rounded-md border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-primary"
+            className="rounded-[var(--radius-control)] bg-fault-wash px-3 py-2 text-sm text-primary"
           >
             {formError}
           </div>
@@ -236,13 +236,13 @@ export function Users() {
             return (
               <article
                 key={user.id}
-                className={`rounded-lg border border-hairline bg-panel p-4 ${
+                className={`rounded-[var(--radius-panel)] bg-surface shadow-panel p-5 ${
                   disabled ? "opacity-60" : ""
                 }`}
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <h3 className="text-sm font-semibold text-primary">
+                    <h3 className="text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">
                       {user.username}
                       {isMe && (
                         <span className="ml-2 text-xs font-normal text-tertiary">

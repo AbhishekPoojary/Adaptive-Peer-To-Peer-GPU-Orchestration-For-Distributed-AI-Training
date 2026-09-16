@@ -255,11 +255,44 @@ def _summary(job: Job) -> JobSummary:
 
 
 async def list_jobs(session: AsyncSession) -> list[JobSummary]:
-    """Every job, newest submission first."""
+    """Every job, newest submission first, each naming the dataset it used."""
     rows = (
         await session.execute(select(Job).order_by(Job.submitted_at.desc()))
     ).scalars().all()
-    return [_summary(j) for j in rows]
+
+    # One query for every dataset the page references, rather than one per job.
+    # Deleted datasets are included deliberately: a finished run must still be
+    # able to say what it trained on (ADR-014).
+    wanted: set[uuid.UUID] = set()
+    for job in rows:
+        raw = job.spec.get("dataset_id")
+        if not raw:
+            continue
+        try:
+            wanted.add(uuid.UUID(str(raw)))
+        except (ValueError, AttributeError):
+            continue
+
+    names: dict[uuid.UUID, tuple[str, bool]] = {}
+    if wanted:
+        found = (
+            await session.execute(select(Dataset).where(Dataset.id.in_(wanted)))
+        ).scalars().all()
+        names = {d.id: (d.name, d.deleted_at is not None) for d in found}
+
+    summaries = []
+    for job in rows:
+        summary = _summary(job)
+        raw = job.spec.get("dataset_id")
+        if raw:
+            try:
+                entry = names.get(uuid.UUID(str(raw)))
+            except (ValueError, AttributeError):
+                entry = None
+            if entry is not None:
+                summary.dataset_name, summary.dataset_deleted = entry
+        summaries.append(summary)
+    return summaries
 
 
 async def get_job_detail(
@@ -287,13 +320,12 @@ async def get_job_detail(
         for e in job.events
     ]
     leases = [_lease_out(lease) for lease in job.leases]
-    name, deleted = await _resolve_dataset(session, job.spec)
+    summary = _summary(job)
+    summary.dataset_name, summary.dataset_deleted = await _resolve_dataset(
+        session, job.spec
+    )
     return JobDetailResponse(
-        **_summary(job).model_dump(),
-        events=events,
-        leases=leases,
-        dataset_name=name,
-        dataset_deleted=deleted,
+        **summary.model_dump(), events=events, leases=leases
     )
 
 

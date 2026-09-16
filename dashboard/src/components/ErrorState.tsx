@@ -21,7 +21,7 @@ export function ErrorState({ error, onRetry, className }: ErrorStateProps) {
   return (
     <div
       className={cn(
-        "flex flex-col items-center justify-center gap-2 rounded-md border border-bad/30 bg-panel px-6 py-12 text-center",
+        "flex flex-col items-center justify-center gap-2 rounded-[var(--radius-control)] border border-bad/30 bg-panel px-6 py-12 text-center",
         className,
       )}
     >

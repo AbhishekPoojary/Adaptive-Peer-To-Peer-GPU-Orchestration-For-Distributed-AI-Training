@@ -76,3 +76,66 @@ returns, including its absence.
   (our call for "collapsible on narrow viewports") rather than a bottom
   tab bar, since five destinations read better as a list than as cramped
   icons at 375px.
+
+## Amendment: light visual world, top navigation (2026-09-16)
+
+### What changed
+
+The stack decisions above stand unchanged: React 19, Radix primitives against
+our own tokens, Tailwind, TanStack Query owning server state, React Router in
+data mode with no loaders. What changed is the visual world this ADR assumed.
+
+- **Dark-first became light.** The tokens are now a light ground with a cool
+  cast (`--canvas: #f2f5f9`), white panels, ink text, one accent reserved for
+  focus, live measurement and chart lines, and a four-role state palette whose
+  `--nosignal` exists so an unmeasured value can be visibly not-a-value.
+- **The 220px left sidebar became a top pill row.** `Sidebar.tsx` is deleted;
+  `TopNav.tsx` replaces it.
+- **Panels lost their borders.** A tinted canvas plus one soft shadow with a
+  real offset carries the edge, so the outer border went; hairlines survive
+  inside tables and on inputs. Panels do not nest.
+- **Geist and Geist Mono are self-hosted** rather than `Inter, system-ui`.
+
+### Why
+
+This ADR's premise was that the audience "runs this while training jobs
+execute" — an operator at a console, for whom dark is the right call. PRODUCT.md
+records a different primary user: someone with a dataset and no GPU who wants a
+trained model back and does not know what a lease is. Writing the use scene out
+as one sentence — a person at a desk in a lit room, checking whether strangers'
+machines are still working on their model — settles it. A dark console tells
+that person they have wandered into somebody's internal tooling.
+
+The sidebar went for a related reason. It spent a fifth of a laptop screen
+permanently advertising six destinations the primary user does not need, while
+the pages that *are* dense — Jobs, Nodes, the scheduling audit — are tables that
+want the width.
+
+### How the direction was chosen
+
+Through the Impeccable direction round (seed `8c98ab03`, scope direction, mode
+operate). The roll assigned a distinctive grounded direction; the owner reviewed
+the hand and deliberately took the standing exit — the modern product-SaaS
+idiom, executed straight at a named craft bar (Stripe, Resend) rather than with
+a smuggled quirk. That preference is recorded in PRODUCT.md under Brand
+Commitments so future surfaces inherit it instead of reopening the question.
+The idiom is evidenced, not guessed: two of the highest-engagement dashboard
+shots on Dribbble independently share a tinted-light ground, a top pill nav,
+borderless panels and oversized numerals.
+
+The direction contract lives in `.impeccable/surfaces/dashboard-src.md`.
+
+### Consequences
+
+- Legacy token aliases (`--color-base`, `--color-panel`, `--color-primary` …)
+  are kept pointing at the new values so no surface renders unstyled. They are
+  migration scaffolding, not part of the system.
+- `StatTile` is no longer a panel. Every caller already places it inside one,
+  and a shadowed box inside a shadowed box reads as two levels of importance
+  where there is only one.
+- Browser surfaces — selection, caret, scrollbars, focus ring, underline
+  offset, tabular numerals — are themed from the palette rather than left at
+  browser defaults.
+- No dark theme ships. The token layer is authored so one is possible without
+  restructuring, but nothing promises it, and claiming a theme that has never
+  been rendered would be the same class of error as a fabricated metric.

@@ -73,7 +73,7 @@ export function JobDetail() {
   if (query.isPending) {
     return (
       <div className="flex flex-col gap-4">
-        <Breadcrumbs items={[{ label: "Jobs", to: "/jobs" }, { label: "…" }]} />
+        <Breadcrumbs items={[{ label: "Runs", to: "/jobs" }, { label: "…" }]} />
         <Skeleton className="h-8 w-64" />
         <Skeleton className="h-48 w-full" />
         <Skeleton className="h-64 w-full" />
@@ -84,7 +84,7 @@ export function JobDetail() {
   if (query.isError) {
     return (
       <div className="flex flex-col gap-4">
-        <Breadcrumbs items={[{ label: "Jobs", to: "/jobs" }, { label: "Error" }]} />
+        <Breadcrumbs items={[{ label: "Runs", to: "/jobs" }, { label: "Error" }]} />
         <ErrorState error={query.error} onRetry={() => query.refetch()} />
       </div>
     );
@@ -134,11 +134,11 @@ export function JobDetail() {
 
   return (
     <div className="flex flex-col gap-5">
-      <Breadcrumbs items={[{ label: "Jobs", to: "/jobs" }, { label: shortId(job.id) }]} />
+      <Breadcrumbs items={[{ label: "Runs", to: "/jobs" }, { label: shortId(job.id) }]} />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-3">
-          <h1 className="font-data text-lg font-semibold text-primary">{shortId(job.id)}</h1>
+          <h1 className="font-data text-[1.25rem] font-semibold tracking-[-0.02em] text-ink">{shortId(job.id)}</h1>
           <StatusPill kind="job" status={job.state} />
         </div>
         <div className="flex items-center gap-3">
@@ -152,15 +152,15 @@ export function JobDetail() {
       </div>
 
       {job.failure_reason && (
-        <div className="rounded-md border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-primary">
+        <div className="rounded-[var(--radius-control)] bg-fault-wash px-3 py-2 text-sm text-primary">
           <span className="font-medium">Failure reason: </span>
           {job.failure_reason}
         </div>
       )}
 
       {result && (
-        <section className="rounded-md border border-hairline bg-panel p-4">
-          <h2 className="mb-3 text-sm font-semibold text-primary">Training result</h2>
+        <section className="rounded-[var(--radius-panel)] bg-surface shadow-panel p-5">
+          <h2 className="mb-4 text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">Training result</h2>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <StatTile
               label="Final test accuracy"
@@ -190,15 +190,15 @@ export function JobDetail() {
       <TrainedModelCard jobId={job.id} />
 
       {/* Rank strip: which peer holds which rank right now, plain-language. */}
-      <section className="rounded-md border border-hairline bg-panel p-4">
-        <h2 className="mb-3 text-sm font-semibold text-primary">Peers</h2>
+      <section className="rounded-[var(--radius-panel)] bg-surface shadow-panel p-5">
+        <h2 className="mb-4 text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">Peers</h2>
         <RankStrip leases={currentLeases} nodeNames={nodeNames} />
       </section>
 
       {/* The viva demo surface: live logs + live loss/accuracy curves. */}
-      <section className="rounded-md border border-hairline bg-panel p-4">
+      <section className="rounded-[var(--radius-panel)] bg-surface shadow-panel p-5">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-primary">Live training log</h2>
+          <h2 className="text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">Live training log</h2>
           {!pollWhileLive && (
             <span className="text-xs text-tertiary">Job finished — no longer polling</span>
           )}
@@ -211,7 +211,7 @@ export function JobDetail() {
       </section>
 
       {metricsQuery.isError && (
-        <div className="flex items-center gap-1.5 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
+        <div className="flex items-center gap-1.5 rounded-[var(--radius-control)] bg-caution-wash px-3 py-2 text-xs text-warn">
           Reconnecting to fetch the latest metrics… showing the last known values.
         </div>
       )}
@@ -231,8 +231,8 @@ export function JobDetail() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <section className="rounded-md border border-hairline bg-panel p-4">
-          <h2 className="mb-3 text-sm font-semibold text-primary">Training spec</h2>
+        <section className="rounded-[var(--radius-panel)] bg-surface shadow-panel p-5">
+          <h2 className="mb-4 text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">Training spec</h2>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
             <Field label="Dataset" value={datasetLabel} />
             <Field label="Model" value={spec.model ?? "—"} />
@@ -252,8 +252,8 @@ export function JobDetail() {
           </dl>
         </section>
 
-        <section className="rounded-md border border-hairline bg-panel p-4">
-          <h2 className="mb-3 text-sm font-semibold text-primary">Assignment</h2>
+        <section className="rounded-[var(--radius-panel)] bg-surface shadow-panel p-5">
+          <h2 className="mb-4 text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">Assignment</h2>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
             <Field label="Scheduler" value={job.scheduler_name} mono />
             <div className="col-span-2">
@@ -262,7 +262,7 @@ export function JobDetail() {
                 {job.scheduled_node_id ? (
                   <Link
                     to={`/nodes/${job.scheduled_node_id}`}
-                    className="text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
+                    className="text-accent hover:underline focus-visible:outline-none rounded"
                   >
                     {nodeNames[job.scheduled_node_id] ?? shortId(job.scheduled_node_id)}
                   </Link>
@@ -279,8 +279,8 @@ export function JobDetail() {
         </section>
       </div>
 
-      <section className="rounded-md border border-hairline bg-panel p-4">
-        <h2 className="mb-3 text-sm font-semibold text-primary">Event timeline</h2>
+      <section className="rounded-[var(--radius-panel)] bg-surface shadow-panel p-5">
+        <h2 className="mb-4 text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">Event timeline</h2>
         {job.events.length === 0 ? (
           <p className="text-sm text-secondary">No events recorded yet.</p>
         ) : (
@@ -437,7 +437,7 @@ export function JobDetail() {
                                 key={`${c.node_id ?? "unknown"}-${i}`}
                                 className={
                                   c.was_selected
-                                    ? "bg-accent/10 font-data"
+                                    ? "bg-accent-wash font-data"
                                     : "font-data text-secondary"
                                 }
                               >

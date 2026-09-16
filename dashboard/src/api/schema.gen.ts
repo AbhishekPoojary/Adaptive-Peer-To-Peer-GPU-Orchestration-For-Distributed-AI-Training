@@ -1358,10 +1358,6 @@ export interface components {
             failure_reason: string | null;
             /** Result */
             result?: Record<string, never> | null;
-            /** Events */
-            events: components["schemas"]["JobEventOut"][];
-            /** Leases */
-            leases: components["schemas"]["LeaseOut"][];
             /** Dataset Name */
             dataset_name?: string | null;
             /**
@@ -1369,6 +1365,10 @@ export interface components {
              * @default false
              */
             dataset_deleted: boolean;
+            /** Events */
+            events: components["schemas"]["JobEventOut"][];
+            /** Leases */
+            leases: components["schemas"]["LeaseOut"][];
         };
         /**
          * JobEventOut
@@ -1479,6 +1479,13 @@ export interface components {
             failure_reason: string | null;
             /** Result */
             result?: Record<string, never> | null;
+            /** Dataset Name */
+            dataset_name?: string | null;
+            /**
+             * Dataset Deleted
+             * @default false
+             */
+            dataset_deleted: boolean;
         };
         /**
          * LeaseCompleteRequest

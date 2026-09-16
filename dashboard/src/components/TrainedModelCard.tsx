@@ -29,7 +29,7 @@ export function TrainedModelCard({ jobId }: { jobId: string }) {
   // Storage being unreachable is worth saying; "no checkpoint" is not.
   if (error) {
     return (
-      <section className="rounded-md border border-hairline bg-panel p-4">
+      <section className="rounded-[var(--radius-panel)] bg-surface shadow-panel p-5">
         <h2 className="mb-1 text-sm font-semibold text-primary">Trained model</h2>
         <p className="text-xs text-secondary">
           {error instanceof ApiError
@@ -81,7 +81,7 @@ export function TrainedModelCard({ jobId }: { jobId: string }) {
   }
 
   return (
-    <section className="rounded-md border border-hairline bg-panel p-4">
+    <section className="rounded-[var(--radius-panel)] bg-surface shadow-panel p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-primary">Trained model</h2>

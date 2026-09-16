@@ -36,7 +36,7 @@ export function RankStrip({ leases, nodeNames, className }: RankStripProps) {
         <Link
           key={lease.id}
           to={`/nodes/${lease.node_id}`}
-          className="flex items-center gap-2 rounded-md border border-hairline bg-elevated px-3 py-2 text-sm outline-none transition-colors hover:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent"
+          className="flex items-center gap-2 rounded-[var(--radius-control)] border border-hairline bg-elevated px-3 py-2 text-sm outline-none transition-colors hover:border-accent/50"
         >
           <span className="rounded bg-base px-1.5 py-0.5 font-data text-xs text-tertiary">
             rank {lease.rank}

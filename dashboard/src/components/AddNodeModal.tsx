@@ -243,7 +243,7 @@ export function AddNodeModal({ open, onOpenChange, existingNodes }: AddNodeModal
 
         <div className="flex flex-col gap-3">
           {!isAdmin() && (
-            <div className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-primary">
+            <div className="rounded-[var(--radius-control)] bg-caution-wash px-3 py-2 text-sm text-primary">
               Adding a node needs an admin account, and you're signed in as an
               operator. Ask whoever runs the fleet to enroll the machine, or to
               give your account the admin role.
@@ -258,7 +258,7 @@ export function AddNodeModal({ open, onOpenChange, existingNodes }: AddNodeModal
           )}
 
           {mintMutation.isError && (
-            <div className="rounded-md border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-primary">
+            <div className="rounded-[var(--radius-control)] bg-fault-wash px-3 py-2 text-sm text-primary">
               <p>
                 {mintMutation.error instanceof ApiError
                   ? mintMutation.error.message
@@ -284,10 +284,10 @@ export function AddNodeModal({ open, onOpenChange, existingNodes }: AddNodeModal
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
                   spellCheck={false}
-                  className="w-full rounded-md border border-hairline bg-elevated px-2.5 py-1.5 font-data text-xs text-primary outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  className="w-full rounded-[var(--radius-control)] border border-hairline bg-elevated px-2.5 py-1.5 font-data text-xs text-primary outline-none"
                 />
                 {unreachable ? (
-                  <p className="rounded-md border border-bad/40 bg-bad/10 px-2.5 py-1.5 text-xs text-primary">
+                  <p className="rounded-[var(--radius-control)] bg-fault-wash px-2.5 py-1.5 text-xs text-primary">
                     <strong>Another computer cannot reach this address.</strong>{" "}
                     On their machine <code className="font-data">localhost</code>{" "}
                     means <em>their</em> machine. Replace it with your LAN address
@@ -312,8 +312,8 @@ export function AddNodeModal({ open, onOpenChange, existingNodes }: AddNodeModal
                     onClick={() => setOs(value)}
                     className={
                       os === value
-                        ? "rounded-md bg-elevated px-2.5 py-1 text-xs font-medium text-accent border border-hairline"
-                        : "rounded-md px-2.5 py-1 text-xs text-secondary hover:bg-elevated"
+                        ? "rounded-[var(--radius-control)] bg-elevated px-2.5 py-1 text-xs font-medium text-accent border border-hairline"
+                        : "rounded-[var(--radius-control)] px-2.5 py-1 text-xs text-secondary hover:bg-elevated"
                     }
                   >
                     {OS_LABEL[value]}
@@ -362,7 +362,7 @@ export function AddNodeModal({ open, onOpenChange, existingNodes }: AddNodeModal
                 the installer offers a simpler path and says what that gives up.
               </p>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-hairline bg-panel px-3 py-2 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-control)] bg-sunken px-3 py-2.5 text-xs">
                 <span className={expired ? "text-warn" : "text-secondary"}>
                   {expired
                     ? "Token expired — regenerate to get a fresh one."
@@ -379,7 +379,7 @@ export function AddNodeModal({ open, onOpenChange, existingNodes }: AddNodeModal
                 </Button>
               </div>
 
-              <div className="flex items-center gap-2 rounded-md border border-hairline bg-panel px-3 py-2 text-sm text-secondary">
+              <div className="flex items-center gap-2 rounded-[var(--radius-control)] bg-sunken px-3 py-2.5 text-[0.8125rem] text-muted">
                 <RefreshCw
                   className="size-3.5 shrink-0 animate-spin text-tertiary motion-reduce:animate-none"
                   aria-hidden="true"
@@ -390,7 +390,7 @@ export function AddNodeModal({ open, onOpenChange, existingNodes }: AddNodeModal
           )}
 
           {connectedNode && (
-            <div className="flex items-center gap-2 rounded-md border border-good/40 bg-good/10 px-3 py-2 text-sm text-primary">
+            <div className="flex items-center gap-2 rounded-[var(--radius-control)] bg-ok-wash px-3 py-2 text-sm text-primary">
               <Check className="size-4 shrink-0 text-good" aria-hidden="true" />
               <span>
                 <strong className="font-data">{connectedNode.name}</strong> connected —{" "}

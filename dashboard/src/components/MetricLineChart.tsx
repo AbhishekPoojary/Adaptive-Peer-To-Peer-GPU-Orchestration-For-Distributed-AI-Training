@@ -46,7 +46,7 @@ export function MetricLineChart({
     return (
       <div
         className={cn(
-          "rounded-md border border-hairline bg-panel p-4",
+          "rounded-[var(--radius-panel)] bg-surface shadow-panel p-5",
           className,
         )}
       >
@@ -102,7 +102,7 @@ export function MetricLineChart({
   }
 
   return (
-    <div className={cn("rounded-md border border-hairline bg-panel p-4", className)}>
+    <div className={cn("rounded-[var(--radius-panel)] bg-surface shadow-panel p-5", className)}>
       <div className="mb-2 flex items-baseline justify-between">
         <h3 className="text-sm font-semibold text-primary">{title}</h3>
         <span className="font-data text-sm text-primary">{formatY(last.y)}</span>
@@ -110,7 +110,7 @@ export function MetricLineChart({
       <svg
         ref={svgRef}
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-        className="h-40 w-full touch-none rounded outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        className="h-40 w-full touch-none rounded outline-none"
         role="img"
         tabIndex={0}
         aria-label={`${title}: ${points.length} points, latest ${formatY(last.y)}. Use arrow keys to inspect values.`}

@@ -47,7 +47,7 @@ export function LogViewer({ lines, isLoading, isReconnecting, className }: LogVi
   }
 
   return (
-    <div className={cn("relative rounded-md border border-hairline bg-base/60", className)}>
+    <div className={cn("relative rounded-[var(--radius-control)] border border-hairline bg-base/60", className)}>
       {isReconnecting && (
         <div className="absolute right-2 top-2 z-10 flex items-center gap-1.5 rounded border border-warn/40 bg-panel/95 px-2 py-1 text-xs text-warn">
           <RefreshCw className="size-3 animate-spin motion-reduce:animate-none" aria-hidden="true" />
@@ -59,7 +59,7 @@ export function LogViewer({ lines, isLoading, isReconnecting, className }: LogVi
         onScroll={handleScroll}
         tabIndex={0}
         aria-label="Live training log transcript"
-        className="h-72 overflow-y-auto p-3 font-data text-xs leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
+        className="h-72 overflow-y-auto p-3 font-data text-xs leading-relaxed outline-none focus-visible:ring-inset"
       >
         {isLoading ? (
           <div className="flex flex-col gap-2">
@@ -91,7 +91,7 @@ export function LogViewer({ lines, isLoading, isReconnecting, className }: LogVi
         <button
           type="button"
           onClick={jumpToLatest}
-          className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-md border border-hairline bg-elevated px-2.5 py-1.5 text-xs font-medium text-primary shadow-lg outline-none hover:bg-elevated/80 focus-visible:ring-2 focus-visible:ring-accent"
+          className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-[var(--radius-control)] border border-hairline bg-elevated px-2.5 py-1.5 text-xs font-medium text-primary shadow-lg outline-none hover:bg-elevated/80"
         >
           <ArrowDown className="size-3.5" aria-hidden="true" />
           Jump to latest

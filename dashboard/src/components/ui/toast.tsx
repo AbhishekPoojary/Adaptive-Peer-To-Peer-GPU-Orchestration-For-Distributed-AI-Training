@@ -22,7 +22,7 @@ function ToastViewport({
 }
 
 const toastVariants = cva(
-  "group pointer-events-auto relative flex w-full items-start justify-between gap-3 overflow-hidden rounded-md border p-3 shadow-lg",
+  "group pointer-events-auto relative flex w-full items-start justify-between gap-3 overflow-hidden rounded-[var(--radius-control)] border p-3 shadow-lg",
   {
     variants: {
       variant: {
@@ -80,7 +80,7 @@ function ToastClose({
   return (
     <ToastPrimitives.Close
       className={cn(
-        "shrink-0 rounded text-tertiary outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-accent",
+        "shrink-0 rounded text-tertiary outline-none hover:text-primary",
         className,
       )}
       toast-close=""

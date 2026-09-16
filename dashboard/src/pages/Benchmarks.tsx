@@ -9,7 +9,7 @@ import { EmptyState } from "@/components/EmptyState";
 export function Benchmarks() {
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="text-lg font-semibold text-primary">Benchmarks</h1>
+      <h1 className="text-[1.375rem] font-semibold tracking-[-0.02em] text-ink">Benchmarks</h1>
       <EmptyState
         icon={<FlaskConical className="size-8" />}
         title="No benchmark runs yet"

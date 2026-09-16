@@ -121,8 +121,8 @@ export function Datasets() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-xl font-semibold text-primary">Datasets</h1>
-        <p className="mt-1 text-sm text-secondary">
+        <h1 className="text-[1.375rem] font-semibold tracking-[-0.02em] text-ink">Datasets</h1>
+        <p className="mt-1.5 max-w-[68ch] text-[0.8125rem] leading-relaxed text-muted">
           Your own image sets, available to train on alongside the built-in
           CIFAR-10 and MNIST.
         </p>
@@ -131,21 +131,21 @@ export function Datasets() {
       {admin && (
         <form
           onSubmit={(e) => void handleUpload(e)}
-          className="flex flex-col gap-4 rounded-lg border border-hairline bg-panel p-5"
+          className="flex flex-col gap-4 rounded-[var(--radius-panel)] bg-surface shadow-panel p-5"
         >
           <div>
-            <h2 className="text-sm font-semibold text-primary">Upload a dataset</h2>
-            <p className="mt-1 text-xs text-secondary">
+            <h2 className="text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">Upload a dataset</h2>
+            <p className="max-w-[70ch] mt-1 text-xs text-secondary">
               A <code className="font-data">.zip</code> of class folders. This
               is the layout it is stored in:
             </p>
-            <pre className="mt-2 overflow-x-auto rounded border border-hairline bg-base p-3 text-xs text-secondary font-data">
+            <pre className="mt-3 overflow-x-auto rounded-[var(--radius-control)] bg-sunken p-3.5 font-data text-xs leading-relaxed text-muted">
 {`train/cat/anything.png
 train/dog/anything.jpg
 test/cat/held-out.png
 test/dog/held-out.png`}
             </pre>
-            <p className="mt-2 text-xs text-tertiary">
+            <p className="max-w-[70ch] mt-2 text-xs text-tertiary">
               Your archive does not have to look like that. Common layouts —{" "}
               <code className="font-data">seg_train/</code>,{" "}
               <code className="font-data">training/</code> and{" "}
@@ -153,7 +153,7 @@ test/dog/held-out.png`}
               labels in the filenames — are rearranged into it for you, and you
               are told exactly what changed.
             </p>
-            <p className="mt-2 text-xs text-tertiary">
+            <p className="max-w-[70ch] mt-2 text-xs text-tertiary">
               Supply a test split if you can: it is what the reported accuracy
               is measured on, so it is worth choosing deliberately. If there
               isn&rsquo;t one, a portion of <code className="font-data">train/</code>{" "}
@@ -197,7 +197,7 @@ test/dog/held-out.png`}
               required
             />
             {canShrinkArchives() && (
-              <label className="flex items-start gap-2 text-xs text-secondary">
+              <label className="flex max-w-[78ch] items-start gap-2 text-xs text-secondary">
                 <input
                   type="checkbox"
                   checked={shrinkImages}
@@ -238,7 +238,7 @@ test/dog/held-out.png`}
           {formError && (
             <div
               role="alert"
-              className="rounded-md border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-primary"
+              className="rounded-[var(--radius-control)] bg-fault-wash px-3 py-2 text-sm text-primary"
             >
               {formError}
             </div>
@@ -247,7 +247,7 @@ test/dog/held-out.png`}
           {layoutNotes.length > 0 && (
             <div
               role="status"
-              className="rounded-md border border-hairline bg-base px-3 py-2 text-sm text-primary"
+              className="rounded-[var(--radius-control)] border border-hairline bg-base px-3 py-2 text-sm text-primary"
             >
               <p className="font-semibold">
                 Your archive was rearranged to fit the required layout
@@ -257,7 +257,7 @@ test/dog/held-out.png`}
                   <li key={note}>{note}</li>
                 ))}
               </ul>
-              <p className="mt-2 text-xs text-tertiary">
+              <p className="max-w-[70ch] mt-2 text-xs text-tertiary">
                 This is recorded on the dataset&rsquo;s description as well, so it
                 stays visible next to any accuracy measured against it.
               </p>
@@ -296,19 +296,19 @@ test/dog/held-out.png`}
           {data.map((dataset) => (
             <article
               key={dataset.id}
-              className="rounded-lg border border-hairline bg-panel p-4"
+              className="rounded-[var(--radius-panel)] bg-surface shadow-panel p-5"
             >
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h3 className="text-sm font-semibold text-primary">
+                  <h3 className="text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">
                     {dataset.name}
                   </h3>
                   {dataset.description && (
-                    <p className="mt-0.5 text-xs text-secondary">
+                    <p className="mt-1 max-w-[80ch] text-xs leading-relaxed text-muted">
                       {dataset.description}
                     </p>
                   )}
-                  <p className="mt-1 text-xs text-secondary">
+                  <p className="max-w-[70ch] mt-1 text-xs text-secondary">
                     {dataset.num_classes} classes ·{" "}
                     {dataset.train_images.toLocaleString()} train ·{" "}
                     {dataset.test_images.toLocaleString()} test ·{" "}
@@ -323,7 +323,8 @@ test/dog/held-out.png`}
                 </div>
                 {admin && (
                   <Button
-                    variant="ghost"
+                    variant="destructive"
+                    size="sm"
                     onClick={() => void handleDelete(dataset)}
                     disabled={remove.isPending}
                   >
@@ -336,10 +337,10 @@ test/dog/held-out.png`}
                 {dataset.classes.map((className) => (
                   <span
                     key={className}
-                    className="rounded border border-hairline px-1.5 py-0.5 text-xs text-secondary font-data"
+                    className="rounded-full bg-sunken px-2 py-0.5 font-data text-xs text-muted"
                   >
                     {className}
-                    <span className="ml-1 text-tertiary">
+                    <span className="ml-1.5 text-faint">
                       {dataset.per_class_counts.train?.[className] ?? 0}
                     </span>
                   </span>

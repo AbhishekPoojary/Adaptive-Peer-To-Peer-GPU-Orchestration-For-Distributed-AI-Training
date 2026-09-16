@@ -55,7 +55,7 @@ export function NodeDetail() {
   if (query.isPending) {
     return (
       <div className="flex flex-col gap-4">
-        <Breadcrumbs items={[{ label: "Nodes", to: "/nodes" }, { label: "…" }]} />
+        <Breadcrumbs items={[{ label: "Machines", to: "/nodes" }, { label: "…" }]} />
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-40 w-full" />
         <Skeleton className="h-64 w-full" />
@@ -66,7 +66,7 @@ export function NodeDetail() {
   if (query.isError) {
     return (
       <div className="flex flex-col gap-4">
-        <Breadcrumbs items={[{ label: "Nodes", to: "/nodes" }, { label: "Error" }]} />
+        <Breadcrumbs items={[{ label: "Machines", to: "/nodes" }, { label: "Error" }]} />
         <ErrorState error={query.error} onRetry={() => query.refetch()} />
       </div>
     );
@@ -93,11 +93,11 @@ export function NodeDetail() {
 
   return (
     <div className="flex flex-col gap-5">
-      <Breadcrumbs items={[{ label: "Nodes", to: "/nodes" }, { label: node.name }]} />
+      <Breadcrumbs items={[{ label: "Machines", to: "/nodes" }, { label: node.name }]} />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-3">
-          <h1 className="font-data text-lg font-semibold text-primary">{node.name}</h1>
+          <h1 className="font-data text-[1.25rem] font-semibold tracking-[-0.02em] text-ink">{node.name}</h1>
           <StatusPill kind="node" status={node.status} />
           {node.heartbeat_stale && <Badge variant="warn">Heartbeat stale</Badge>}
         </div>
@@ -122,8 +122,8 @@ export function NodeDetail() {
         />
       </div>
 
-      <section className="rounded-md border border-hairline bg-panel p-4">
-        <h2 className="mb-3 text-sm font-semibold text-primary">Hardware</h2>
+      <section className="rounded-[var(--radius-panel)] bg-surface shadow-panel p-5">
+        <h2 className="mb-4 text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">Hardware</h2>
         <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-4">
           <Field label="Hostname" value={node.hardware.hostname} mono />
           <Field label="OS" value={node.hardware.os} />
@@ -144,9 +144,9 @@ export function NodeDetail() {
         </dl>
       </section>
 
-      <section className="rounded-md border border-hairline bg-panel p-4">
+      <section className="rounded-[var(--radius-panel)] bg-surface shadow-panel p-5">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-primary">Telemetry history</h2>
+          <h2 className="text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">Telemetry history</h2>
           <div className="flex items-center gap-2">
             <span className="text-xs text-tertiary">Samples</span>
             <Select value={samples} onValueChange={(v) => setSamples(v as typeof samples)}>
@@ -177,8 +177,8 @@ export function NodeDetail() {
         )}
       </section>
 
-      <section className="rounded-md border border-hairline bg-panel p-4">
-        <h2 className="mb-3 text-sm font-semibold text-primary">Lease history</h2>
+      <section className="rounded-[var(--radius-panel)] bg-surface shadow-panel p-5">
+        <h2 className="mb-4 text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">Lease history</h2>
         {jobsQuery.isPending || leasesStillLoading ? (
           <Skeleton className="h-24 w-full" />
         ) : leaseRows.length === 0 ? (

@@ -148,7 +148,7 @@ export function Submit() {
   return (
     <div className="flex max-w-2xl flex-col gap-5">
       <div>
-        <h1 className="text-lg font-semibold text-primary">Submit a training job</h1>
+        <h1 className="text-[1.375rem] font-semibold tracking-[-0.02em] text-ink">Train a model</h1>
         <p className="text-sm text-secondary">
           Queues a real job against the fleet. Once a peer picks it up it runs
           real training (real dataset, real backprop) inside a container on
@@ -258,7 +258,7 @@ export function Submit() {
         </Field>
 
         <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-          <CollapsibleTrigger className="flex items-center gap-2 rounded-md border border-hairline bg-panel px-3 py-2 text-left text-sm font-medium text-secondary outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-accent">
+          <CollapsibleTrigger className="flex items-center gap-2 rounded-[var(--radius-panel)] bg-surface shadow-panel px-3.5 py-2.5 text-left text-[0.8125rem] font-medium text-muted outline-none hover:text-ink">
             <Settings2 className="size-3.5" aria-hidden="true" />
             Advanced options
             <ChevronRight
@@ -269,7 +269,7 @@ export function Submit() {
               aria-hidden="true"
             />
           </CollapsibleTrigger>
-          <CollapsibleContent className="mt-2 rounded-md border border-hairline bg-panel p-3">
+          <CollapsibleContent className="mt-2 rounded-[var(--radius-panel)] bg-surface shadow-panel p-4">
             <Field label="Min GPU memory (bytes)" htmlFor="min_gpu_mem_bytes">
               <Input
                 id="min_gpu_mem_bytes"
@@ -289,7 +289,7 @@ export function Submit() {
           </CollapsibleContent>
         </Collapsible>
 
-        <div className="rounded-md border border-hairline bg-panel px-3 py-2 text-sm text-secondary">
+        <div className="rounded-[var(--radius-panel)] bg-surface shadow-panel px-3.5 py-2.5 text-[0.8125rem] text-muted">
           {eligibleCount === null ? (
             "Checking node eligibility…"
           ) : (
@@ -306,7 +306,7 @@ export function Submit() {
         </div>
 
         {eligibleCount !== null && Number.isInteger(Number(worldSize)) && Number(worldSize) > eligibleCount && (
-          <div className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-primary">
+          <div className="rounded-[var(--radius-control)] bg-caution-wash px-3 py-2 text-sm text-primary">
             This job needs {worldSize} {Number(worldSize) === 1 ? "peer" : "peers"} but
             only {eligibleCount} {eligibleCount === 1 ? "is" : "are"} eligible right
             now. It will still be submitted, but it will sit queued until enough
@@ -315,7 +315,7 @@ export function Submit() {
         )}
 
         {formError && (
-          <div className="rounded-md border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-primary">
+          <div className="rounded-[var(--radius-control)] bg-fault-wash px-3 py-2 text-sm text-primary">
             {formError}
           </div>
         )}

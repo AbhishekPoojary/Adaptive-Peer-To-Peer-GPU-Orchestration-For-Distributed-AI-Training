@@ -54,7 +54,7 @@ export function NodesList() {
 
   if (query.isPending) {
     return (
-      <PageShell title="Nodes" right={addNodeButton}>
+      <PageShell title="Machines" right={addNodeButton}>
         <DataTable
           columns={columns}
           rows={[]}
@@ -69,7 +69,7 @@ export function NodesList() {
 
   if (query.isError) {
     return (
-      <PageShell title="Nodes" right={addNodeButton}>
+      <PageShell title="Machines" right={addNodeButton}>
         <ErrorState error={query.error} onRetry={() => query.refetch()} />
         {addNodeModal}
       </PageShell>
@@ -80,7 +80,7 @@ export function NodesList() {
 
   return (
     <PageShell
-      title="Nodes"
+      title="Machines"
       right={
         <div className="flex items-center gap-3">
           <UpdatedAgo dataUpdatedAt={query.dataUpdatedAt} isFetching={query.isFetching} />
@@ -181,7 +181,7 @@ function PageShell({
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-primary">{title}</h1>
+        <h1 className="text-[1.375rem] font-semibold tracking-[-0.02em] text-ink">{title}</h1>
         {right}
       </div>
       {children}

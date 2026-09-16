@@ -26,7 +26,7 @@ export function TechnicalDetails({
   const [open, setOpen] = useState(defaultOpen);
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-md border border-hairline bg-panel px-3 py-2 text-left text-sm font-medium text-secondary outline-none transition-colors motion-reduce:transition-none hover:text-primary focus-visible:ring-2 focus-visible:ring-accent">
+      <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-[var(--radius-panel)] bg-surface shadow-panel px-3.5 py-2.5 text-left text-[0.8125rem] font-medium text-muted outline-none transition-colors duration-150 ease-out motion-reduce:transition-none hover:text-ink">
         <Terminal className="size-3.5" aria-hidden="true" />
         {title}
         <ChevronRight
@@ -37,7 +37,7 @@ export function TechnicalDetails({
           aria-hidden="true"
         />
       </CollapsibleTrigger>
-      <CollapsibleContent className="mt-2 rounded-md border border-hairline bg-base/40 p-3">
+      <CollapsibleContent className="mt-2 rounded-[var(--radius-control)] border border-hairline bg-base/40 p-3">
         {children}
       </CollapsibleContent>
     </Collapsible>

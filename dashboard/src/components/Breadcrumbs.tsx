@@ -20,7 +20,7 @@ export function Breadcrumbs({ items }: { items: Crumb[] }) {
             {item.to && !isLast ? (
               <Link
                 to={item.to}
-                className="text-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
+                className="text-secondary hover:text-primary focus-visible:outline-none rounded"
               >
                 {item.label}
               </Link>

@@ -1,72 +1,41 @@
-import { useState } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
-import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { LogOut, Menu, X } from "lucide-react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { ChevronDown, LogOut } from "lucide-react";
 import { useLogout } from "@/api/auth";
 import { getUser } from "@/api/session";
-import { SidebarNav } from "@/components/layout/Sidebar";
+import { TopNav } from "@/components/layout/TopNav";
 import { Toaster } from "@/components/ui/toaster";
 
 /**
- * Navigation shell: persistent ~220px left sidebar at >=768px (md), collapsing
- * to a hamburger + slide-in drawer below that (our call for the "collapsible
- * on narrow viewports" requirement — documented in ADR-011 / the milestone
- * report rather than a bottom-nav bar, since 5 destinations read better as a
- * list than as cramped bottom-nav icons at 375px).
+ * Application shell.
+ *
+ * One header band on the canvas, then content. The header does not float, does
+ * not blur and is not sticky: this is a surface people read tables on, and a
+ * translucent bar over a scrolling table is a decoration that costs
+ * legibility. It sits on the tinted canvas with a single hairline under it.
  */
 export function AppShell() {
-  const [drawerOpen, setDrawerOpen] = useState(false);
-
   return (
-    <div className="flex min-h-screen bg-base text-primary">
-      {/* Persistent sidebar, >=768px */}
-      <aside className="hidden md:flex md:w-[220px] md:shrink-0 md:flex-col md:border-r md:border-hairline md:bg-panel">
-        <Brand />
-        <SidebarNav />
-        <SessionFooter />
-      </aside>
-
-      {/* Mobile top bar, <768px */}
-      <div className="fixed inset-x-0 top-0 z-40 flex h-12 items-center gap-2 border-b border-hairline bg-panel px-3 md:hidden">
-        <button
-          type="button"
-          aria-label="Open navigation menu"
-          onClick={() => setDrawerOpen(true)}
-          className="rounded p-1.5 text-secondary outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-accent"
-        >
-          <Menu className="size-5" />
-        </button>
-        <span className="text-sm font-semibold text-primary">GPU Orchestrator</span>
-      </div>
-
-      {/* Mobile drawer */}
-      <DialogPrimitive.Root open={drawerOpen} onOpenChange={setDrawerOpen}>
-        <DialogPrimitive.Portal>
-          <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 md:hidden" />
-          <DialogPrimitive.Content
-            className="fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-hairline bg-panel outline-none md:hidden"
-            aria-describedby={undefined}
-          >
-            <DialogPrimitive.Title className="sr-only">
-              Navigation menu
-            </DialogPrimitive.Title>
-            <div className="flex items-center justify-between px-3 py-3">
-              <Brand compact />
-              <DialogPrimitive.Close
-                aria-label="Close navigation menu"
-                className="rounded p-1.5 text-secondary outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-accent"
-              >
-                <X className="size-5" />
-              </DialogPrimitive.Close>
+    <div className="flex min-h-screen flex-col bg-canvas text-ink">
+      <header className="border-b border-hairline bg-canvas">
+        <div className="mx-auto flex max-w-[1240px] flex-col gap-3 px-4 py-3 sm:px-6 md:flex-row md:items-center md:gap-6">
+          <div className="flex items-center justify-between gap-3">
+            <Brand />
+            <div className="md:hidden">
+              <AccountMenu />
             </div>
-            <SidebarNav onNavigate={() => setDrawerOpen(false)} />
-            <SessionFooter />
-          </DialogPrimitive.Content>
-        </DialogPrimitive.Portal>
-      </DialogPrimitive.Root>
+          </div>
+          <div className="min-w-0 md:flex-1">
+            <TopNav />
+          </div>
+          <div className="hidden md:block">
+            <AccountMenu />
+          </div>
+        </div>
+      </header>
 
-      <main className="min-w-0 flex-1 pt-12 md:pt-0">
-        <div className="mx-auto max-w-6xl px-4 py-5 sm:px-6">
+      <main className="min-w-0 flex-1">
+        <div className="mx-auto max-w-[1240px] px-4 py-7 sm:px-6">
           <Outlet />
         </div>
       </main>
@@ -76,49 +45,95 @@ export function AppShell() {
   );
 }
 
+function Brand() {
+  return (
+    <div className="flex items-center gap-2">
+      {/* Drawn, not an emoji or a glyph standing in for a mark: three bars of
+          unequal height, which is what this product is — borrowed machines of
+          unequal capability doing one job together. */}
+      <svg
+        viewBox="0 0 20 20"
+        className="size-[19px] shrink-0"
+        aria-hidden="true"
+        fill="none"
+      >
+        <rect x="2" y="9" width="4" height="9" rx="1.4" fill="var(--nosignal)" />
+        <rect x="8" y="5" width="4" height="13" rx="1.4" fill="var(--accent)" />
+        <rect x="14" y="2" width="4" height="16" rx="1.4" fill="var(--ink)" />
+      </svg>
+      <span className="text-[0.9375rem] font-semibold tracking-[-0.015em] text-ink">
+        Orchestrator
+      </span>
+    </div>
+  );
+}
+
 /**
- * Who you're signed in as, and the way out.
+ * Who you are signed in as, and the way out.
  *
- * Shows the role alongside the username because it changes what the UI offers
- * (only an ADMIN can mint enrollment tokens) — without it, an operator hitting
- * a 403 on "Add a node" would have no way to tell why.
+ * The role is shown because it changes what the interface offers — only an
+ * ADMIN can upload a dataset or enrol a machine. Without it, someone hitting a
+ * 403 would have no way to tell why.
  */
-function SessionFooter() {
+function AccountMenu() {
   const user = getUser();
   const logout = useLogout();
   const navigate = useNavigate();
 
   if (!user) return null;
 
-  return (
-    <div className="mt-auto border-t border-hairline p-2">
-      <div className="px-1.5 pb-1.5">
-        <div className="truncate text-sm font-medium text-primary" title={user.username}>
-          {user.username}
-        </div>
-        <div className="text-xs text-tertiary">{user.role.toLowerCase()}</div>
-      </div>
-      <button
-        type="button"
-        onClick={() => {
-          logout();
-          navigate("/login", { replace: true });
-        }}
-        className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium text-secondary outline-none transition-colors hover:bg-elevated hover:text-primary focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none"
-      >
-        <LogOut className="size-4 shrink-0" aria-hidden="true" />
-        Sign out
-      </button>
-    </div>
-  );
-}
+  const initial = user.username.slice(0, 1).toUpperCase();
 
-function Brand({ compact }: { compact?: boolean }) {
   return (
-    <div className={compact ? "" : "border-b border-hairline px-3 py-3.5"}>
-      <span className="text-sm font-semibold tracking-tight text-primary">
-        GPU Orchestrator
-      </span>
-    </div>
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger className="group flex items-center gap-2 rounded-full py-1 pr-2 pl-1 text-left transition-colors duration-150 ease-out hover:bg-sunken">
+        <span
+          aria-hidden="true"
+          className="grid size-7 shrink-0 place-items-center rounded-full bg-ink text-[0.6875rem] font-semibold text-white"
+        >
+          {initial}
+        </span>
+        <span className="hidden min-w-0 sm:block">
+          <span className="block max-w-[11ch] truncate text-[0.8125rem] leading-4 font-medium text-ink">
+            {user.username}
+          </span>
+          <span className="block text-[0.6875rem] leading-3 text-faint">
+            {user.role.toLowerCase()}
+          </span>
+        </span>
+        <ChevronDown
+          className="size-3.5 shrink-0 text-faint transition-transform duration-150 ease-out group-data-[state=open]:rotate-180"
+          aria-hidden="true"
+        />
+      </DropdownMenu.Trigger>
+
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="end"
+          sideOffset={8}
+          className="pop-in z-50 w-56 origin-[var(--radix-dropdown-menu-content-transform-origin)] rounded-[var(--radius-control)] border border-hairline bg-surface p-1 shadow-raised"
+        >
+          <div className="px-2.5 py-2">
+            <p className="truncate text-[0.8125rem] font-medium text-ink">
+              {user.username}
+            </p>
+            <p className="text-xs text-muted">
+              Signed in as {user.role.toLowerCase()}
+            </p>
+          </div>
+          <DropdownMenu.Separator className="my-1 h-px bg-hairline" />
+          <DropdownMenu.Item
+            onSelect={() => {
+              logout();
+              navigate("/login", { replace: true });
+            }}
+            className="flex cursor-pointer items-center gap-2 rounded-[7px] px-2.5 py-2 text-[0.8125rem] text-ink outline-none select-none data-[highlighted]:bg-sunken"
+          >
+            <LogOut className="size-4 shrink-0 text-muted" aria-hidden="true" />
+            Sign out
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 }

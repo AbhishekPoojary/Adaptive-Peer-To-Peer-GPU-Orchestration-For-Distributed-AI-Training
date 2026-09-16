@@ -30,10 +30,14 @@ export interface DataTableProps<T> {
 }
 
 /**
- * Shared table shell used by both the Nodes and Jobs list pages. Every row is
- * fully clickable (not just a link fragment) and keyboard-reachable via
- * tabIndex + Enter/Space, per the M3.5 quality floor. Sorting is not wired up
- * this milestone but the column shape is ready for it later.
+ * Shared table shell used by the Nodes, Jobs, People and Benchmarks pages.
+ * Every row is fully clickable (not just a link fragment) and keyboard-reachable
+ * via tabIndex + Enter/Space. Sorting is not wired up but the column shape is
+ * ready for it.
+ *
+ * Borderless, like every other panel: the sunken header band and the hairlines
+ * between rows carry the structure, and the soft shadow provides the edge. An
+ * outer border plus internal rules is what makes a dense page read as a cage.
  */
 export function DataTable<T>({
   columns,
@@ -45,7 +49,12 @@ export function DataTable<T>({
   className,
 }: DataTableProps<T>) {
   return (
-    <div className={cn("rounded-md border border-hairline bg-panel", className)}>
+    <div
+      className={cn(
+        "overflow-hidden rounded-[var(--radius-panel)] bg-surface shadow-panel",
+        className,
+      )}
+    >
       <Table>
         <TableHeader>
           <TableRow>
@@ -86,9 +95,7 @@ export function DataTable<T>({
                         : undefined
                     }
                     className={
-                      onRowClick
-                        ? "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
-                        : undefined
+                      onRowClick ? "focus-visible:outline-offset-[-2px]" : undefined
                     }
                   >
                     {columns.map((col) => (

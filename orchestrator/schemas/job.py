@@ -137,6 +137,22 @@ class JobSummary(BaseModel):
     # "exit_code", "device"}. Returned as a free-form dict like `spec` — the
     # write boundary (TrainingResultIn) is what validates it.
     result: dict[str, Any] | None = None
+    #: Name of the uploaded dataset this job trained on, resolved from
+    #: ``spec.dataset_id``. Null for a built-in dataset, where ``spec.dataset``
+    #: already names it.
+    #:
+    #: On the summary as well as the detail because the job *list* is where the
+    #: gap showed: `spec.dataset` is null for every uploaded-dataset run, so the
+    #: list rendered "?" in the column recording what each run trained on.
+    #:
+    #: Resolved server-side because a client can only see datasets that still
+    #: exist. ADR-014 keeps a deleted dataset's row precisely so a finished job
+    #: still points at something, and that job is the one whose name is hardest
+    #: to recover and most worth having.
+    dataset_name: str | None = None
+    #: True when that dataset has since been retired. The run and its accuracy
+    #: stand; the dataset cannot be selected again.
+    dataset_deleted: bool = False
 
 
 class JobListResponse(BaseModel):
@@ -150,20 +166,6 @@ class JobDetailResponse(JobSummary):
 
     events: list[JobEventOut]
     leases: list[LeaseOut]
-    #: Name of the uploaded dataset this job trained on, resolved from
-    #: ``spec.dataset_id``. Null for a built-in dataset, where ``spec.dataset``
-    #: already names it.
-    #:
-    #: Resolved here rather than by the client because a client can only see
-    #: datasets that still exist. ADR-014 keeps a deleted dataset's row
-    #: precisely so a finished job still points at something, and a job whose
-    #: dataset has since been retired is exactly the one whose name is hardest
-    #: to recover and most worth having.
-    dataset_name: str | None = None
-    #: True when that dataset has since been retired. The run and its accuracy
-    #: stand; the dataset cannot be selected again, and a reader comparing two
-    #: results deserves to know which of them can still be reproduced.
-    dataset_deleted: bool = False
 
 
 class CheckpointOut(BaseModel):
