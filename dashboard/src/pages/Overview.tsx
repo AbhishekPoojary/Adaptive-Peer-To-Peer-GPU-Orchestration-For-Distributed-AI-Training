@@ -251,6 +251,11 @@ function LatestRun({ job }: { job: JobSummary }) {
             unmeasuredReason={
               live ? "still training" : "this run reported none"
             }
+            delta={
+              points.length > 1
+                ? `+${(points[points.length - 1].y - points[0].y).toFixed(1)} pts since epoch ${points[0].x}`
+                : undefined
+            }
             tone="ink"
           />
         </div>
@@ -452,6 +457,9 @@ function Sparkline({
         role="img"
         aria-label={`Accuracy from ${ys[0].toFixed(1)}% at epoch ${xMin} to ${ys[ys.length - 1].toFixed(1)}% at epoch ${xMax}`}
       >
+        {/* Drawn rather than faded in: the line arriving left-to-right is
+            the epochs arriving in order, which is what the data actually did.
+            pathLength normalises the dash maths regardless of geometry. */}
         <polyline
           points={line}
           fill="none"
@@ -460,6 +468,8 @@ function Sparkline({
           strokeLinecap="round"
           strokeLinejoin="round"
           vectorEffect="non-scaling-stroke"
+          pathLength={1}
+          className="draw-in"
         />
         <circle cx={lastX} cy={lastY} r="3.5" fill="var(--accent)" />
         {live && (

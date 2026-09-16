@@ -1,3 +1,5 @@
+import { TrendingUp } from "lucide-react";
+import { useCountUp } from "@/hooks/use-count-up";
 import { cn } from "@/lib/utils";
 
 /**
@@ -19,6 +21,7 @@ export function Figure({
   measuredBy,
   unmeasuredReason = "not reported",
   tone = "ink",
+  delta,
   className,
 }: {
   /** The measured value, or null when nothing has reported one. */
@@ -29,9 +32,25 @@ export function Figure({
   /** Shown in place of `measuredBy` when the value is null. */
   unmeasuredReason?: string;
   tone?: "ink" | "ok" | "caution" | "fault";
+  /**
+   * A change this figure actually measured, e.g. "+22.4 pts since epoch 1".
+   *
+   * The idiom this was rebuilt into puts a trend chip here, usually reading
+   * "vs last month". This product keeps no historical series for most of these
+   * figures, so such a chip would be an invented comparison — the one thing
+   * PRODUCT.md rules out. Passed only where a real before-and-after exists.
+   */
+  delta?: string;
   className?: string;
 }) {
   const unmeasured = value === null;
+  // Animated only when the figure is a bare number. A formatted string like
+  // "86.4%" is left alone rather than parsed and re-formatted, which would put
+  // this component in the business of guessing at its own callers' units.
+  const numeric = typeof value === "number" ? value : null;
+  const counted = useCountUp(numeric);
+  const shown =
+    numeric !== null && counted !== null ? Math.round(counted) : value;
 
   return (
     <div className={cn("min-w-0", className)}>
@@ -45,9 +64,17 @@ export function Figure({
           !unmeasured && tone === "fault" && "text-fault",
         )}
       >
-        {unmeasured ? "—" : value}
+        {unmeasured ? "—" : shown}
       </div>
-      <div className="label mt-1.5">{label}</div>
+      <div className="label mt-1.5 flex items-center gap-2">
+        {label}
+        {!unmeasured && delta && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-ok-wash px-1.5 py-px text-[0.625rem] font-medium tracking-normal normal-case text-ok">
+            <TrendingUp className="size-2.5" aria-hidden="true" />
+            {delta}
+          </span>
+        )}
+      </div>
       <div
         className={cn(
           "mt-0.5 truncate text-xs",

@@ -317,3 +317,21 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* A line that draws itself left to right, because that is the order the epochs
+   actually arrived in. `pathLength={1}` on the element normalises the dash
+   maths so the timing does not depend on the path's real length. */
+@keyframes draw-in {
+  from {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 0;
+  }
+}
+
+.draw-in {
+  animation: draw-in 900ms var(--ease-out-expo) both;
+}
