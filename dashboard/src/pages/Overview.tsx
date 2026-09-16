@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { ArrowRight, Download } from "lucide-react";
-import { useJobsQuery } from "@/api/jobs";
+import { useJobMetricsQuery, useJobsQuery } from "@/api/jobs";
 import { useNodesQuery } from "@/api/nodes";
 import { isAdmin } from "@/api/session";
 import {
@@ -208,7 +208,21 @@ function LatestRun({ job }: { job: JobSummary }) {
   const result = asJobResult(job.result);
   const live = job.state === "RUNNING" || job.state === "LEASED";
   const done = job.state === "COMPLETED" && result !== null;
-  const accuracy = result?.final_test_accuracy;
+
+  // Polls only while the run can still produce a point. Once terminal the
+  // curve is final and further requests would be spent on a page someone left
+  // open.
+  const metrics = useJobMetricsQuery(job.id, live);
+  const points = (metrics.data?.metrics ?? [])
+    .filter((m) => m.test_accuracy !== null && m.test_accuracy !== undefined)
+    .map((m) => ({ x: m.epoch, y: (m.test_accuracy as number) * 100 }));
+
+  // While training, the latest measured epoch is the honest headline — the
+  // final accuracy does not exist yet and must not be implied.
+  const latestPoint = points.length > 0 ? points[points.length - 1] : undefined;
+  const accuracy =
+    result?.final_test_accuracy ??
+    (latestPoint ? latestPoint.y / 100 : undefined);
 
   return (
     <Panel className="flex flex-col">
@@ -230,7 +244,9 @@ function LatestRun({ job }: { job: JobSummary }) {
             measuredBy={
               typeof result?.epochs_completed === "number"
                 ? `after ${result.epochs_completed} epochs on ${result.device ?? "an unnamed device"}`
-                : undefined
+                : latestPoint
+                  ? `measured at epoch ${latestPoint.x}, still running`
+                  : undefined
             }
             unmeasuredReason={
               live ? "still training" : "this run reported none"
@@ -256,6 +272,12 @@ function LatestRun({ job }: { job: JobSummary }) {
           />
         </dl>
       </div>
+
+      {points.length > 1 && (
+        <div className="mt-6">
+          <Sparkline points={points} live={live} />
+        </div>
+      )}
 
       {job.failure_reason && (
         <p className="mt-5 rounded-[var(--radius-control)] bg-fault-wash px-3 py-2.5 text-[0.8125rem] text-fault">
@@ -375,4 +397,81 @@ function greeting(): string {
   if (hour < 12) return "Good morning";
   if (hour < 18) return "Good afternoon";
   return "Good evening";
+}
+
+/**
+ * The run's accuracy curve, drawn inside the run panel.
+ *
+ * Not `MetricLineChart` — that component is itself a panel, and a panel inside
+ * a panel is the nested-card mistake. This is the same data at reading scale.
+ *
+ * The height is fixed and the axis range is derived from the data, so a new
+ * epoch arriving extends the line without moving a single element around it.
+ * That is the contract's signature interaction: the number advances in place
+ * because the data is arriving, not because the page is reloading.
+ */
+function Sparkline({
+  points,
+  live,
+}: {
+  points: { x: number; y: number }[];
+  live: boolean;
+}) {
+  const W = 640;
+  const H = 96;
+  const PAD = 4;
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  const xMin = Math.min(...xs);
+  const xMax = Math.max(...xs);
+  const yMin = Math.min(...ys);
+  const yMax = Math.max(...ys);
+  // A flat series would divide by zero; give it a band to sit in the middle of.
+  const ySpan = yMax - yMin < 1 ? 1 : yMax - yMin;
+  const xSpan = xMax - xMin || 1;
+
+  const at = (p: { x: number; y: number }) => [
+    PAD + ((p.x - xMin) / xSpan) * (W - PAD * 2),
+    H - PAD - ((p.y - yMin) / ySpan) * (H - PAD * 2),
+  ];
+  const line = points.map((p) => at(p).join(",")).join(" ");
+  const [lastX, lastY] = at(points[points.length - 1]);
+
+  return (
+    <figure className="m-0">
+      <div className="flex items-baseline justify-between">
+        <figcaption className="label">Accuracy by epoch</figcaption>
+        <span className="font-data text-xs text-muted">
+          epoch {xMin}–{xMax}
+        </span>
+      </div>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="mt-2 h-24 w-full"
+        preserveAspectRatio="none"
+        role="img"
+        aria-label={`Accuracy from ${ys[0].toFixed(1)}% at epoch ${xMin} to ${ys[ys.length - 1].toFixed(1)}% at epoch ${xMax}`}
+      >
+        <polyline
+          points={line}
+          fill="none"
+          stroke="var(--accent)"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          vectorEffect="non-scaling-stroke"
+        />
+        <circle cx={lastX} cy={lastY} r="3.5" fill="var(--accent)" />
+        {live && (
+          <circle
+            cx={lastX}
+            cy={lastY}
+            r="3.5"
+            fill="var(--accent)"
+            className="live-dot"
+          />
+        )}
+      </svg>
+    </figure>
+  );
 }
