@@ -10,6 +10,8 @@ import {
 } from "@/api/datasets";
 import { canShrinkArchives } from "@/api/shrinkArchive";
 import { ArchiveDropzone } from "@/components/ArchiveDropzone";
+import { CodeBlock } from "@/components/ui/code-block";
+import { accentHex } from "@/lib/accent";
 import { Switch } from "@/components/ui/switch";
 import { ApiError } from "@/api/client";
 import { isAdmin } from "@/api/session";
@@ -138,15 +140,24 @@ export function Datasets() {
           <div>
             <h2 className="text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">Upload a dataset</h2>
             <p className="max-w-[70ch] mt-1 text-xs text-secondary">
-              A <code className="font-data">.zip</code> of class folders. This
-              is the layout it is stored in:
+              A <code className="font-data">.zip</code> of class folders.
             </p>
-            <pre className="mt-3 overflow-x-auto rounded-[var(--radius-control)] bg-sunken p-3.5 font-data text-xs leading-relaxed text-muted">
-{`train/cat/anything.png
+            {/* Rare UI's CodeBlock, themed from our own accent. The sample is
+                something people copy into a terminal to check their folders,
+                so a copy button is the point rather than decoration. */}
+            <div className="mt-3">
+              <CodeBlock
+                code={`train/cat/anything.png
 train/dog/anything.jpg
 test/cat/held-out.png
 test/dog/held-out.png`}
-            </pre>
+                language="text"
+                filename="the layout it is stored in"
+                accent={accentHex()}
+                mode="light"
+                showLineNumbers={false}
+              />
+            </div>
             <p className="max-w-[70ch] mt-2 text-xs text-tertiary">
               Your archive does not have to look like that. Common layouts —{" "}
               <code className="font-data">seg_train/</code>,{" "}
