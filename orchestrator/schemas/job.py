@@ -22,6 +22,14 @@ _FORBID = ConfigDict(extra="forbid")
 #: uploaded first and referenced by id (ADR-014).
 BuiltinDataset = Literal["cifar10", "mnist"]
 
+#: The architectures the trainer implements. SmallCNN is the only one; "cnn" is
+#: its long-standing alias, used by every benchmark and most historical jobs.
+#: Free text was accepted before, and the trainer silently trained SmallCNN for
+#: anything it did not recognise -- four stored jobs say "resnet18", "resnet"
+#: or "m" and trained SmallCNN. An allowlist makes the record true at submit.
+#: Stored specs are returned as plain dicts, so those historical jobs still read.
+ModelName = Literal["small_cnn", "cnn"]
+
 
 class JobSpec(BaseModel):
     """A training job's specification.
@@ -41,7 +49,7 @@ class JobSpec(BaseModel):
     #: fails immediately, not on some peer twenty minutes later) and again at
     #: claim time, when the peer is told where to fetch it.
     dataset_id: uuid.UUID | None = None
-    model: str = Field(min_length=1, max_length=128)
+    model: ModelName
     epochs: int = Field(ge=1)
     batch_size: int = Field(ge=1)
     learning_rate: float = Field(gt=0)

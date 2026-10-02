@@ -53,7 +53,8 @@ export function Submit() {
   // architecture actually implemented; defaulting to a name it doesn't
   // recognize (e.g. "resnet18") would train fine but silently substitute
   // SmallCNN anyway, which is honest in the logs but a confusing default.
-  const [model, setModel] = useState("cnn");
+  // The trainer implements one architecture; the API rejects any other name.
+  const model = "small_cnn";
   const [epochs, setEpochs] = useState("5");
   const [batchSize, setBatchSize] = useState("32");
   const [learningRate, setLearningRate] = useState("0.01");
@@ -90,7 +91,6 @@ export function Submit() {
   }, [nodesQuery.data, jobsQuery.data, parsedMinGpuMem]);
 
   function validate(): string | null {
-    if (!model.trim()) return "Model is required.";
     const e = Number(epochs);
     if (!Number.isInteger(e) || e < 1) return "Epochs must be a whole number >= 1.";
     const bs = Number(batchSize);
@@ -126,7 +126,7 @@ export function Submit() {
         // Exactly one of these is set; the server rejects both or neither.
         dataset: uploadedId ? null : (dataset as "cifar10" | "mnist"),
         ...(uploadedId ? { dataset_id: uploadedId } : {}),
-        model: model.trim(),
+        model,
         epochs: Number(epochs),
         batch_size: Number(batchSize),
         learning_rate: Number(learningRate),
@@ -179,16 +179,15 @@ export function Submit() {
             </Select>
           </Field>
 
-          <Field label="Model" htmlFor="model">
-            <Input
-              id="model"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder="cnn"
-              maxLength={128}
-              required
-            />
-          </Field>
+          {/* Not a Field: there is nothing to choose, and a <label> must
+              name a control. Styled as one so the form still scans evenly. */}
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm font-medium text-secondary">Model</span>
+            <p className="py-2 text-[0.875rem] text-ink">
+              Small CNN{" "}
+              <span className="text-muted">— the one architecture the trainer runs</span>
+            </p>
+          </div>
 
           <Field label="Epochs" htmlFor="epochs">
             <Input

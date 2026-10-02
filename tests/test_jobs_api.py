@@ -20,7 +20,7 @@ from tests.helpers import register_new_node, send_heartbeat
 
 _SPEC = {
     "dataset": "cifar10",
-    "model": "resnet18",
+    "model": "small_cnn",
     "epochs": 2,
     "batch_size": 64,
     "learning_rate": 0.01,
@@ -154,3 +154,14 @@ async def test_illegal_transition_rejected_and_event_written(
     ).scalars().all()
     assert [e.to_state for e in events] == [JobState.QUEUED, JobState.CANCELLED]
     assert all("message" in e.detail for e in events)
+
+
+async def test_an_unimplemented_model_is_refused_at_submit(api_client: AsyncClient) -> None:
+    """The trainer implements SmallCNN only. "resnet18" used to be accepted and
+    silently trained SmallCNN, leaving a job that misdescribed itself."""
+    spec = dict(_SPEC, model="resnet18")
+    resp = await api_client.post("/jobs", json={"spec": spec})
+    assert resp.status_code == 422
+    for name in ("small_cnn", "cnn"):
+        ok = await api_client.post("/jobs", json={"spec": dict(_SPEC, model=name)})
+        assert ok.status_code == 201, ok.text
