@@ -152,3 +152,18 @@ def test_acceptable_pause_absorbs_a_tunnel_stall() -> None:
     assert evaluate_suspicion(intervals, elapsed_seconds=4.9, config=strict).failed is True
     assert evaluate_suspicion(intervals, elapsed_seconds=4.9, config=tolerant).failed is False
     assert evaluate_suspicion(intervals, elapsed_seconds=8.0, config=tolerant).failed is True
+
+
+def test_liveness_record_reports_recent_activity_only() -> None:
+    import time
+    import uuid
+
+    from orchestrator.services import liveness
+
+    node = uuid.uuid4()
+    assert liveness.active_within(node, 3.0) is False
+    liveness.record_activity(node)
+    assert liveness.active_within(node, 3.0) is True
+    liveness._last_activity[node] = time.monotonic() - 10.0
+    assert liveness.active_within(node, 3.0) is False
+    liveness.forget(node)

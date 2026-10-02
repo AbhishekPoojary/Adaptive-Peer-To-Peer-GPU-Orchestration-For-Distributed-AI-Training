@@ -208,3 +208,31 @@ async def test_slow_cadence_node_tolerated_at_same_silence(session: AsyncSession
     await session.commit()
     assert declared == []
     assert (await session.get(Node, node.id)).status is NodeStatus.ONLINE
+
+
+async def test_a_node_busy_with_its_lease_is_not_declared_dead(
+    session: AsyncSession,
+) -> None:
+    """Heartbeats silent for 8 s -- which alone is a declared failure, see
+    test_detector_declares_offline_and_reassigns_before_ttl -- but the node has
+    just pulled a chunk of its dataset. Observed over a tunnel: the download
+    saturated the link and starved the heartbeats, and the node was declared
+    dead while the orchestrator was serving it data."""
+    from orchestrator.services import liveness
+
+    settings = get_settings()
+    node = await _make_online_node(
+        session, name="node-busy", intervals=[2.0] * 12, silence_seconds=8.0
+    )
+    job, _lease = await _running_job_on(session, node)
+    await session.commit()
+
+    liveness.record_activity(node.id)
+    try:
+        declared = await run_failure_detection_pass(session, settings=settings)
+        await session.commit()
+    finally:
+        liveness.forget(node.id)
+
+    assert declared == []
+    assert (await session.get(Job, job.id)).state is JobState.RUNNING

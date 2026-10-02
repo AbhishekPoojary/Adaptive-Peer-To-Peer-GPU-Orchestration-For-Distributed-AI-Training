@@ -58,6 +58,7 @@ from orchestrator.services.leases import (
     rendezvous_assignment,
     renew_lease,
 )
+from orchestrator.services.liveness import record_activity
 from orchestrator.services.object_store import (
     CheckpointObjectStore,
     DatasetObjectStore,
@@ -203,6 +204,7 @@ async def renew(
     settings: Settings = Depends(get_settings_dep),
 ) -> LeaseOut:
     """Extend an ACTIVE lease's TTL (epoch-fenced)."""
+    record_activity(node.id)
     try:
         lease = await renew_lease(
             session, lease_id=lease_id, node=node, epoch=body.lease_epoch, settings=settings
@@ -379,6 +381,8 @@ async def read_lease_dataset(
         )
     except CheckpointAccessDeniedError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    node_id = grant.lease.node_id
+    record_activity(node_id)
     raw_id = grant.job.spec.get("dataset_id")
     if not raw_id:
         raise HTTPException(status_code=404, detail="this job trains on a built-in dataset")
@@ -413,8 +417,12 @@ async def read_lease_dataset(
         raise HTTPException(status_code=503, detail="dataset storage is unreachable") from exc
 
     def body():  # type: ignore[no-untyped-def]
+        # Each chunk is pulled only as the peer consumes the last one, so this
+        # is live evidence the node is there, for the whole of a long piece.
         yield first
-        yield from chunks
+        for chunk in chunks:
+            record_activity(node_id)
+            yield chunk
 
     return StreamingResponse(
         body(),
@@ -436,7 +444,7 @@ async def _checkpoint_grant(
     """Authenticate the trainer's lease token and apply the checkpoint rules."""
     token_lease, token_job = _bearer_token(authorization, settings)
     try:
-        await authorize(
+        grant = await authorize(
             session,
             token_lease_id=token_lease,
             token_job_id=token_job,
@@ -446,6 +454,7 @@ async def _checkpoint_grant(
         )
     except CheckpointAccessDeniedError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    record_activity(grant.lease.node_id)
 
 
 @router.get("/leases/{lease_id}/checkpoint-objects/{key:path}")

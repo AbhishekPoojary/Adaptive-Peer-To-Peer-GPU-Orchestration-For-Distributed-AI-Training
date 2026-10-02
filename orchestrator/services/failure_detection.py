@@ -46,6 +46,7 @@ from orchestrator.models.job import Job
 from orchestrator.models.lease import Lease, LeaseState
 from orchestrator.models.node import Node, NodeStatus, NodeTelemetrySample
 from orchestrator.services.leases import reassign_job_attempt
+from orchestrator.services.liveness import active_within
 
 #: Numerical floor on P_later so φ = -log10(P_later) stays finite as silence → ∞.
 _P_LATER_FLOOR = 1e-12
@@ -325,6 +326,11 @@ async def run_failure_detection_pass(
         )
         suspicion = evaluate_suspicion(intervals, elapsed, config)
         if not suspicion.failed:
+            continue
+        # Heartbeats are not the only evidence. A node still consuming its
+        # dataset, uploading a checkpoint or streaming logs is alive, however
+        # late its heartbeat is stuck behind that traffic (liveness.py).
+        if active_within(node.id, config.floor_seconds):
             continue
 
         node.status = NodeStatus.OFFLINE

@@ -44,6 +44,7 @@ from orchestrator.core.security import JWTValidationError, decode_node_jwt
 from orchestrator.models.job import Job
 from orchestrator.models.lease import Lease, LeaseState
 from orchestrator.services.jobs import record_resume_event
+from orchestrator.services.liveness import record_activity
 from orchestrator.services.training import record_log_line, record_metric
 
 logger = logging.getLogger("orchestrator.streaming")
@@ -302,6 +303,7 @@ async def lease_stream(
             if not isinstance(frame, dict):
                 logger.warning("dropping non-object frame for job=%s: %r", job_id, frame)
                 continue
+            record_activity(node_id)
             await _persist_frame_resiliently(
                 session, job_id=job_id, lease_id=lease_id, frame=frame
             )
