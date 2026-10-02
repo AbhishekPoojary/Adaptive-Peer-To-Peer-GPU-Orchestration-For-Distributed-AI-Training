@@ -1,0 +1,239 @@
+{
+  "timestamp_utc": "2026-10-02T19:15:52.493484+00:00",
+  "git_sha": "f1124b90e9e3559238373efaa2fe69bc800f7d59",
+  "hardware": {
+    "cpu": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel (12C/16T)",
+    "gpu": "NVIDIA GeForce RTX 3050 Laptop GPU (4.0 GB)",
+    "ram_gb": 15.63,
+    "os": "Windows 11 (python 3.13.13)"
+  },
+  "scenario": "scalability",
+  "results": {
+    "fleet_sizes": [
+      1,
+      2,
+      4,
+      8,
+      16
+    ],
+    "by_fleet_size": [
+      {
+        "agents": 1,
+        "window_seconds": 30.0,
+        "heartbeats_per_second": 0.8,
+        "request_handling": {
+          "heartbeat": {
+            "observations": 24,
+            "mean_ms": 58.92,
+            "p95_at_most_ms": 100.0
+          },
+          "lease_claim": {
+            "observations": 24,
+            "mean_ms": 8.54,
+            "p95_at_most_ms": 25.0
+          }
+        },
+        "background_passes": {
+          "scheduler_pass": {
+            "observations": 10,
+            "mean_ms": 5.59,
+            "p95_at_most_ms": 10.0
+          },
+          "failure_detector_pass": {
+            "observations": 64,
+            "mean_ms": 8.09,
+            "p95_at_most_ms": 25.0
+          }
+        },
+        "placements": 10,
+        "nodes_falsely_declared_dead": 0,
+        "submit_to_scheduled_ms": {
+          "median": 15.5,
+          "max": 25.4
+        },
+        "scheduled_to_leased_ms": {
+          "median": 1920.6,
+          "max": 2455.5
+        },
+        "orchestrator_cpu_percent_mean": 3.7,
+        "orchestrator_memory_mib_max": 79.6
+      },
+      {
+        "agents": 2,
+        "window_seconds": 30.0,
+        "heartbeats_per_second": 1.63,
+        "request_handling": {
+          "heartbeat": {
+            "observations": 49,
+            "mean_ms": 57.63,
+            "p95_at_most_ms": 100.0
+          },
+          "lease_claim": {
+            "observations": 49,
+            "mean_ms": 8.46,
+            "p95_at_most_ms": 25.0
+          }
+        },
+        "background_passes": {
+          "scheduler_pass": {
+            "observations": 11,
+            "mean_ms": 5.38,
+            "p95_at_most_ms": 10.0
+          },
+          "failure_detector_pass": {
+            "observations": 64,
+            "mean_ms": 8.15,
+            "p95_at_most_ms": 25.0
+          }
+        },
+        "placements": 10,
+        "nodes_falsely_declared_dead": 0,
+        "submit_to_scheduled_ms": {
+          "median": 11.2,
+          "max": 13.8
+        },
+        "scheduled_to_leased_ms": {
+          "median": 1113.1,
+          "max": 2438.7
+        },
+        "orchestrator_cpu_percent_mean": 4.8,
+        "orchestrator_memory_mib_max": 81.2
+      },
+      {
+        "agents": 4,
+        "window_seconds": 30.0,
+        "heartbeats_per_second": 3.07,
+        "request_handling": {
+          "heartbeat": {
+            "observations": 92,
+            "mean_ms": 58.71,
+            "p95_at_most_ms": 100.0
+          },
+          "lease_claim": {
+            "observations": 92,
+            "mean_ms": 8.9,
+            "p95_at_most_ms": 25.0
+          }
+        },
+        "background_passes": {
+          "scheduler_pass": {
+            "observations": 10,
+            "mean_ms": 5.53,
+            "p95_at_most_ms": 10.0
+          },
+          "failure_detector_pass": {
+            "observations": 60,
+            "mean_ms": 8.94,
+            "p95_at_most_ms": 25.0
+          }
+        },
+        "placements": 10,
+        "nodes_falsely_declared_dead": 0,
+        "submit_to_scheduled_ms": {
+          "median": 14.1,
+          "max": 15.0
+        },
+        "scheduled_to_leased_ms": {
+          "median": 1138.3,
+          "max": 2346.6
+        },
+        "orchestrator_cpu_percent_mean": 9.5,
+        "orchestrator_memory_mib_max": 82.4
+      },
+      {
+        "agents": 8,
+        "window_seconds": 30.0,
+        "heartbeats_per_second": 6.13,
+        "request_handling": {
+          "heartbeat": {
+            "observations": 184,
+            "mean_ms": 59.02,
+            "p95_at_most_ms": 100.0
+          },
+          "lease_claim": {
+            "observations": 184,
+            "mean_ms": 9.63,
+            "p95_at_most_ms": 25.0
+          }
+        },
+        "background_passes": {
+          "scheduler_pass": {
+            "observations": 10,
+            "mean_ms": 4.97,
+            "p95_at_most_ms": 10.0
+          },
+          "failure_detector_pass": {
+            "observations": 60,
+            "mean_ms": 7.87,
+            "p95_at_most_ms": 25.0
+          }
+        },
+        "placements": 10,
+        "nodes_falsely_declared_dead": 0,
+        "submit_to_scheduled_ms": {
+          "median": 13.9,
+          "max": 24.7
+        },
+        "scheduled_to_leased_ms": {
+          "median": 1104.5,
+          "max": 2499.7
+        },
+        "orchestrator_cpu_percent_mean": 11.7,
+        "orchestrator_memory_mib_max": 83.2
+      },
+      {
+        "agents": 16,
+        "window_seconds": 30.0,
+        "heartbeats_per_second": 13.2,
+        "request_handling": {
+          "heartbeat": {
+            "observations": 396,
+            "mean_ms": 63.48,
+            "p95_at_most_ms": 100.0
+          },
+          "lease_claim": {
+            "observations": 396,
+            "mean_ms": 12.51,
+            "p95_at_most_ms": 25.0
+          }
+        },
+        "background_passes": {
+          "scheduler_pass": {
+            "observations": 11,
+            "mean_ms": 6.81,
+            "p95_at_most_ms": 25.0
+          },
+          "failure_detector_pass": {
+            "observations": 66,
+            "mean_ms": 8.36,
+            "p95_at_most_ms": 25.0
+          }
+        },
+        "placements": 10,
+        "nodes_falsely_declared_dead": 0,
+        "submit_to_scheduled_ms": {
+          "median": 12.8,
+          "max": 19.1
+        },
+        "scheduled_to_leased_ms": {
+          "median": 595.4,
+          "max": 2434.6
+        },
+        "orchestrator_cpu_percent_mean": 24.2,
+        "orchestrator_memory_mib_max": 83.7
+      }
+    ],
+    "not_measured_here": [
+      "training throughput vs. node count: every agent shares one GPU",
+      "gradient synchronization delay: needs ranks on separate machines"
+    ],
+    "contention_note": "all agents and the orchestrator share one host's CPU"
+  },
+  "limitations": {
+    "load_term_differentiable": false,
+    "latency_term_differentiable": false,
+    "notes": [
+      "All 16 agents ran on one physical host (1 distinct hostname). psutil.cpu_percent() and NVML utilization are host/device-wide, so every node reports the same load truthfully; RTT is loopback for all of them. The L and D terms of S_i are therefore untested here \u2014 only the reliability term R is differentiated (ADR-013)."
+    ]
+  }
+}

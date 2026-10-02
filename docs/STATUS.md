@@ -36,10 +36,11 @@ it is written.
 | **GPU utilization above the report's 80% target**, for batch 256 | CIFAR-10 batch 256: 93.8% mean over the trainer's own training phase (p10 84%), 79.7% over the whole run including container start. `bench/report/20261002T175843-gpu_utilization.json`. Before the GPU-resident data path the same job averaged 44% |
 | **Uploaded datasets above the 80% target** | A real 6-class, 17k-image upload (Intel scenes): 93.4% mean at batch 64 and 91.7% at batch 256 over the training phase, from 86.2% and 85.1% before decode-once. `bench/report/20261002T182653-gpu_utilization_custom.json` (baseline `20261002T181554`). The batch pipeline now delivers 68k images/s from GPU memory and 111k/s streamed from disk, against 2,695/s this GPU trains -- measured in the trainer image, not by the harness |
 | Recovery still resumes with background checkpoint uploads | Detected 2.92 s, restored step 2814 at 8.39 s, job finished 22 s after the kill. `bench/report/20261002T180001-failure_recovery.json` |
+| **Control-plane overhead stays flat from 1 to 16 nodes** | Real agents at 1/2/4/8/16: scheduling a job 12.8-15.5 ms after submit at every size (report target < 500 ms), scheduler pass 5-7 ms, detector pass about 8 ms, orchestrator memory 80-84 MB; its CPU grows with heartbeat rate (4% at 1 node, 24% at 16 on this laptop). No healthy node declared dead at any size. `bench/report/20261002T191552-scalability.json` |
 | **Peers update themselves** | The agent restarts into a newer bundle while idle and pulls a newer trainer image (ADR-015). A real agent at an old version exited for update within one check interval; the full installer loop on a real peer is not yet verified |
 | **Downloading the trained model** | ADR-006 addendum 2; a July run's checkpoint streamed byte-identical to storage (sha256 `471b73f9…` on both sides), opening as a valid torch archive |
 
-524 tests, all against a real Postgres. No mocked database, no simulated
+525 tests, all against a real Postgres. No mocked database, no simulated
 failures outside `tests/`.
 
 ---
@@ -86,8 +87,23 @@ caps how far a broken job spec can walk the fleet, but no data says 2 is the
 right number — it is a small bound chosen to make the failure mode cheap, and
 it is configurable for that reason.
 
-**No load testing.** Nothing here has been run with more than a handful of
-nodes or jobs. Scheduler pass cost is O(candidates) per job and the audit trail
+**Scalability is measured to 16 nodes on one host, and only for the control
+plane.** The `scalability` scenario grew a real fleet to 16 agents; every agent
+shared one laptop's CPU and GPU with the orchestrator, so training throughput
+and gradient-sync delay as nodes are added remain unmeasured, and nothing has
+run past 16 nodes. Its first run found real bugs instead of numbers: cancelling
+a job silenced its agent for 11 s while the trainer refused SIGTERM, and the
+detector declared healthy nodes dead 48 times (`20261002T185648`, kept).
+
+**Requests with a body cost about 45 ms extra under Docker Desktop on
+Windows.** A heartbeat takes about 5 ms of work inside the container but 58 ms
+measured at the server: Docker Desktop's port forwarding relays a client's
+header and body writes as two segments and holds the second for a delayed ACK.
+Bodyless requests (a claim: 10 ms) do not pay it. The figures above include it,
+because that is how this deployment runs.
+
+**No load testing beyond that.** Nothing here has been run with more than 16
+nodes or with concurrent jobs at scale. Scheduler pass cost is O(candidates) per job and the audit trail
 writes a row per candidate per decision; neither has been profiled. Custom
 datasets add a second unprofiled path: every peer claiming a job downloads the
 archive, and nothing has measured what a large dataset across many peers costs.
