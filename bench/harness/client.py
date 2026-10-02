@@ -107,6 +107,18 @@ class BenchClient:
     async def cancel(self, job_id: str) -> None:
         await self._post(f"/jobs/{job_id}/cancel")
 
+    async def logs(self, job_id: str) -> list[dict[str, Any]]:
+        """The job's whole retained log transcript, every page."""
+        lines: list[dict[str, Any]] = []
+        after: int | None = None
+        while True:
+            query = f"?limit=1000&after={after}" if after is not None else "?limit=1000"
+            page = await self._get(f"/jobs/{job_id}/logs{query}")
+            lines.extend(page["lines"])
+            if not page["lines"]:
+                return lines
+            after = page["next_after"]
+
     async def scheduling_decisions(self, job_id: str) -> list[dict[str, Any]]:
         body = await self._get(f"/jobs/{job_id}/scheduling-decisions")
         return list(body["decisions"])

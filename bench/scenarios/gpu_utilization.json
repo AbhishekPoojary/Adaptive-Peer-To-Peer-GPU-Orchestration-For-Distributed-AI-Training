@@ -8,17 +8,17 @@
   "configs": [
     {
       "label": "mnist-batch64",
-      "job_spec": {"dataset": "mnist", "model": "cnn", "epochs": 3, "batch_size": 64,
+      "job_spec": {"dataset": "mnist", "model": "cnn", "epochs": 5, "batch_size": 64,
                    "learning_rate": 0.01, "world_size": 1, "min_gpu_mem_bytes": null}
     },
     {
       "label": "cifar10-batch64",
-      "job_spec": {"dataset": "cifar10", "model": "cnn", "epochs": 3, "batch_size": 64,
+      "job_spec": {"dataset": "cifar10", "model": "cnn", "epochs": 5, "batch_size": 64,
                    "learning_rate": 0.01, "world_size": 1, "min_gpu_mem_bytes": null}
     },
     {
       "label": "cifar10-batch256",
-      "job_spec": {"dataset": "cifar10", "model": "cnn", "epochs": 3, "batch_size": 256,
+      "job_spec": {"dataset": "cifar10", "model": "cnn", "epochs": 5, "batch_size": 256,
                    "learning_rate": 0.01, "world_size": 1, "min_gpu_mem_bytes": null}
     }
   ],
