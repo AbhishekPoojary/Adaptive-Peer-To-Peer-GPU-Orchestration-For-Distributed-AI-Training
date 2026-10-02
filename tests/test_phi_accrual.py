@@ -133,3 +133,22 @@ def test_bootstrap_still_respects_the_floor() -> None:
     # Even though 3 s > the (misconfigured) 2 s bootstrap, the 5 s floor wins.
     v = evaluate_suspicion([2.0], elapsed_seconds=3.0, config=cfg)
     assert v.failed is False
+
+
+def test_acceptable_pause_absorbs_a_tunnel_stall() -> None:
+    """The real case: over a Cloudflare tunnel heartbeats averaged 2.5 s apart
+    (std 0.7 s), and one arrived 4.9 s late. Without a pause allowance that
+    scored phi 3.5 and a healthy peer was declared dead; with the 2 s
+    allowance it is not -- while a peer silent for 8 s still is."""
+    intervals = [2.0, 3.2, 2.1, 3.3, 1.9, 2.6, 3.0, 2.0]
+    strict = PhiAccrualConfig(
+        threshold=3.0, window_samples=20, min_std_seconds=0.5, min_intervals=3,
+        floor_seconds=3.0, bootstrap_silence_seconds=10.0,
+    )
+    tolerant = PhiAccrualConfig(
+        threshold=3.0, window_samples=20, min_std_seconds=0.5, min_intervals=3,
+        floor_seconds=3.0, bootstrap_silence_seconds=10.0, acceptable_pause_seconds=2.0,
+    )
+    assert evaluate_suspicion(intervals, elapsed_seconds=4.9, config=strict).failed is True
+    assert evaluate_suspicion(intervals, elapsed_seconds=4.9, config=tolerant).failed is False
+    assert evaluate_suspicion(intervals, elapsed_seconds=8.0, config=tolerant).failed is True

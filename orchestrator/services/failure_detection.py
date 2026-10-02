@@ -61,6 +61,14 @@ class PhiAccrualConfig:
     min_intervals: int
     floor_seconds: float
     bootstrap_silence_seconds: float
+    #: Akka's "acceptable heartbeat pause": a fixed allowance added to the
+    #: expected interval before any suspicion accrues. The Normal fit's tails
+    #: are far too thin for internet jitter: over a Cloudflare tunnel (mean
+    #: interval 2.5 s, std 0.7 s), one heartbeat 4.9 s late scored phi 3.5 and
+    #: a healthy peer was declared dead twice in one run. The allowance absorbs
+    #: such a stall without slowing detection of a peer that is really gone by
+    #: more than itself.
+    acceptable_pause_seconds: float = 0.0
 
     @classmethod
     def from_settings(cls, settings: Settings) -> PhiAccrualConfig:
@@ -71,6 +79,7 @@ class PhiAccrualConfig:
             min_intervals=settings.phi_accrual_min_intervals,
             floor_seconds=settings.heartbeat_floor_seconds,
             bootstrap_silence_seconds=settings.phi_accrual_bootstrap_silence_seconds,
+            acceptable_pause_seconds=settings.phi_accrual_acceptable_pause_seconds,
         )
 
 
@@ -145,13 +154,18 @@ def evaluate_suspicion(
     window = intervals[-config.window_samples :]
     mean = statistics.fmean(window)
     std = max(statistics.pstdev(window), config.min_std_seconds)
-    phi = phi_suspicion(elapsed_seconds, mean, std)
+    phi = phi_suspicion(elapsed_seconds, mean + config.acceptable_pause_seconds, std)
     failed = phi >= config.threshold and elapsed_seconds >= config.floor_seconds
     reason = (
         f"φ-accrual suspicion {phi:.1f} "
         f"{'≥' if phi >= config.threshold else '<'} {config.threshold:.1f} "
         f"after {elapsed_seconds:.1f}s of silence "
-        f"(mean interval {mean:.2f}s, std {std:.2f}s)"
+        f"(mean interval {mean:.2f}s, std {std:.2f}s"
+        + (
+            f", acceptable pause {config.acceptable_pause_seconds:.1f}s)"
+            if config.acceptable_pause_seconds
+            else ")"
+        )
     )
     return Suspicion(
         failed=failed,

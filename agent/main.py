@@ -1116,54 +1116,79 @@ async def run(args: argparse.Namespace) -> None:
             orchestrator,
         )
 
-        update_every = args.update_check_minutes * 60
-        next_update_check = time.monotonic() + update_every
-        while True:
-            if time.time() > expires_at - _REFRESH_MARGIN_SECONDS:
+        # Heartbeats run on their own task. They used to share one loop with
+        # lease servicing, so every slow claim or renewal delayed the next
+        # heartbeat; over an internet tunnel, where each request costs about a
+        # second, that stretched the interval to 2.5 s and made one stall look
+        # like a dead node to the failure detector. Token refresh lives here
+        # too, and the lease loop below reads whatever token is current.
+        async def heartbeat_forever() -> None:
+            nonlocal access_token, expires_at
+            while True:
+                if time.time() > expires_at - _REFRESH_MARGIN_SECONDS:
+                    try:
+                        access_token, expires_in = await refresh_token(
+                            client,
+                            orchestrator=orchestrator,
+                            node_id=state.node_id,
+                            private_key=private_key,
+                        )
+                        expires_at = time.time() + expires_in
+                        logger.info("refreshed access token (expires_in=%ss)", expires_in)
+                    except (TokenRefreshError, httpx.HTTPError) as exc:
+                        logger.error("token refresh failed, will retry next cycle: %s", exc)
+
                 try:
-                    access_token, expires_in = await refresh_token(
+                    body, rtt_ms = await send_heartbeat(
                         client,
                         orchestrator=orchestrator,
                         node_id=state.node_id,
-                        private_key=private_key,
+                        access_token=access_token,
+                        rtt_ms=rtt_tracker.value,
                     )
-                    expires_at = time.time() + expires_in
-                    logger.info("refreshed access token (expires_in=%ss)", expires_in)
-                except (TokenRefreshError, httpx.HTTPError) as exc:
-                    logger.error("token refresh failed, will retry next cycle: %s", exc)
+                    agent_ewma = rtt_tracker.observe(rtt_ms)
+                    logger.info(
+                        "heartbeat ok: status=%s measured_rtt_ms=%.1f agent_rtt_ewma_ms=%.1f "
+                        "server_rtt_ewma_ms=%s",
+                        body.get("status"),
+                        rtt_ms,
+                        agent_ewma,
+                        body.get("rtt_ewma_ms"),
+                    )
+                    metrics_state.record_heartbeat_sent(rtt_ewma_ms=agent_ewma)
+                    # Same NVML source the heartbeat payload just read from, polled
+                    # again here rather than threaded through the payload builder's
+                    # return value — a second cheap NVML read per cycle, not a
+                    # second data path (CONTRIBUTING.md #2: still real or absent,
+                    # never invented).
+                    metrics_state.record_gpu_telemetry(collect_gpu_telemetry())
+                except httpx.HTTPStatusError as exc:
+                    logger.error(
+                        "heartbeat rejected (%s): %s", exc.response.status_code, exc.response.text
+                    )
+                except httpx.HTTPError as exc:
+                    logger.error("heartbeat failed (network): %s", exc)
+                await asyncio.sleep(args.heartbeat_interval_seconds)
 
-            try:
-                body, rtt_ms = await send_heartbeat(
-                    client,
-                    orchestrator=orchestrator,
-                    node_id=state.node_id,
-                    access_token=access_token,
-                    rtt_ms=rtt_tracker.value,
-                )
-                agent_ewma = rtt_tracker.observe(rtt_ms)
-                logger.info(
-                    "heartbeat ok: status=%s measured_rtt_ms=%.1f agent_rtt_ewma_ms=%.1f "
-                    "server_rtt_ewma_ms=%s",
-                    body.get("status"),
-                    rtt_ms,
-                    agent_ewma,
-                    body.get("rtt_ewma_ms"),
-                )
-                metrics_state.record_heartbeat_sent(rtt_ewma_ms=agent_ewma)
-                # Same NVML source the heartbeat payload just read from, polled
-                # again here rather than threaded through the payload builder's
-                # return value — a second cheap NVML read per cycle, not a
-                # second data path (CONTRIBUTING.md #2: still real or absent,
-                # never invented).
-                metrics_state.record_gpu_telemetry(collect_gpu_telemetry())
-            except httpx.HTTPStatusError as exc:
-                logger.error(
-                    "heartbeat rejected (%s): %s", exc.response.status_code, exc.response.text
-                )
-            except httpx.HTTPError as exc:
-                logger.error("heartbeat failed (network): %s", exc)
+        async def heartbeat_guarded() -> None:
+            # A task that dies takes the heartbeat with it, and the node then
+            # looks dead while it is still training. Anything unexpected is
+            # logged and the heartbeat restarts after one interval.
+            while True:
+                try:
+                    await heartbeat_forever()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("heartbeat loop failed; restarting it")
+                    await asyncio.sleep(args.heartbeat_interval_seconds)
 
-            # After each heartbeat: poll for / renew / execute a lease. A lease
+        background_tasks.add(asyncio.create_task(heartbeat_guarded()))
+
+        update_every = args.update_check_minutes * 60
+        next_update_check = time.monotonic() + update_every
+        while True:
+            # On the same cadence: poll for / renew / execute a lease. A lease
             # with a running trainer container keeps getting renewed here on
             # schedule regardless of how long training takes; execution
             # itself runs as a background task (see _service_lease).

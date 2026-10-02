@@ -301,6 +301,10 @@ class Settings(BaseSettings):
     # Bootstrap fallback: with too little history to fit a distribution, declare
     # failed only after this much continuous silence (still ≥ the 5 s floor).
     phi_accrual_bootstrap_silence_seconds: float = 10.0
+    # Added to each node's expected heartbeat interval before suspicion accrues
+    # (Akka's acceptable-heartbeat-pause). Without it a peer on an internet
+    # link was declared dead for one 4.9 s stall (ADR-004 addendum 3).
+    phi_accrual_acceptable_pause_seconds: float = 2.0
 
     # --- Read API (M1) ---
     # A node is reported `heartbeat_stale: true` when now - last_heartbeat_at
