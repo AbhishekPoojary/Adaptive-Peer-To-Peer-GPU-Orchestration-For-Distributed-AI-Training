@@ -109,7 +109,8 @@ async def _measure_one(
     return {
         "label": label,
         "job_id": job_id,
-        "spec": spec,
+        # Unset fields dropped: the artifact never carries a null.
+        "spec": {k: v for k, v in spec.items() if v is not None},
         "running_seconds": round(seconds, 1),
         "final_test_accuracy": result.get("final_test_accuracy"),
         "device": result.get("device"),
