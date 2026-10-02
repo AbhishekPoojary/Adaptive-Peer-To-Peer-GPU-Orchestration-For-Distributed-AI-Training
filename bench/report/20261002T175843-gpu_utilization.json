@@ -1,0 +1,151 @@
+{
+  "timestamp_utc": "2026-10-02T17:58:43.970622+00:00",
+  "git_sha": "596a720cecb95e629f647bfc7df3907a7f76ac9c",
+  "hardware": {
+    "cpu": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel (12C/16T)",
+    "gpu": "NVIDIA GeForce RTX 3050 Laptop GPU (4.0 GB)",
+    "ram_gb": 15.63,
+    "os": "Windows 11 (python 3.13.13)"
+  },
+  "scenario": "gpu_utilization",
+  "results": {
+    "report_target_percent": 80.0,
+    "sample_interval_seconds": 0.5,
+    "windows": {
+      "whole_run": "orchestrator RUNNING -> COMPLETED (container start, data load, training, evaluation)",
+      "training_phase": "trainer log 'dataset ready' -> 'training complete' (every epoch and evaluation)"
+    },
+    "runs": [
+      {
+        "label": "mnist-batch64",
+        "job_id": "091c42c1-54b0-4134-b0ad-b6bf2b8df224",
+        "spec": {
+          "dataset": "mnist",
+          "model": "cnn",
+          "epochs": 5,
+          "batch_size": 64,
+          "learning_rate": 0.01,
+          "world_size": 1
+        },
+        "running_seconds": 42.1,
+        "final_test_accuracy": 0.9896,
+        "device": "cuda",
+        "idle_baseline": {
+          "samples": 10,
+          "mean_percent": 0.0,
+          "p10_percent": 0.0,
+          "p50_percent": 0.0,
+          "p90_percent": 0.0,
+          "share_at_or_above_target": 0.0
+        },
+        "whole_run": {
+          "samples": 80,
+          "mean_percent": 63.0,
+          "p10_percent": 0.0,
+          "p50_percent": 71.0,
+          "p90_percent": 88.0,
+          "share_at_or_above_target": 0.188
+        },
+        "training_phase_seconds": 38.2,
+        "training_phase": {
+          "samples": 72,
+          "mean_percent": 69.9,
+          "p10_percent": 55.0,
+          "p50_percent": 71.5,
+          "p90_percent": 88.0,
+          "share_at_or_above_target": 0.208
+        },
+        "training_phase_meets_report_target": false
+      },
+      {
+        "label": "cifar10-batch64",
+        "job_id": "a70dfe98-c81a-4f91-afa3-8e9f64e197ed",
+        "spec": {
+          "dataset": "cifar10",
+          "model": "cnn",
+          "epochs": 5,
+          "batch_size": 64,
+          "learning_rate": 0.01,
+          "world_size": 1
+        },
+        "running_seconds": 52.3,
+        "final_test_accuracy": 0.7435,
+        "device": "cuda",
+        "idle_baseline": {
+          "samples": 10,
+          "mean_percent": 0.0,
+          "p10_percent": 0.0,
+          "p50_percent": 0.0,
+          "p90_percent": 0.0,
+          "share_at_or_above_target": 0.0
+        },
+        "whole_run": {
+          "samples": 99,
+          "mean_percent": 53.0,
+          "p10_percent": 0.0,
+          "p50_percent": 73.0,
+          "p90_percent": 93.0,
+          "share_at_or_above_target": 0.354
+        },
+        "training_phase_seconds": 46.2,
+        "training_phase": {
+          "samples": 87,
+          "mean_percent": 59.4,
+          "p10_percent": 0.0,
+          "p50_percent": 74.0,
+          "p90_percent": 94.0,
+          "share_at_or_above_target": 0.402
+        },
+        "training_phase_meets_report_target": false
+      },
+      {
+        "label": "cifar10-batch256",
+        "job_id": "ca3cc64c-9188-472a-bbc2-d9164167d3bf",
+        "spec": {
+          "dataset": "cifar10",
+          "model": "cnn",
+          "epochs": 5,
+          "batch_size": 256,
+          "learning_rate": 0.01,
+          "world_size": 1
+        },
+        "running_seconds": 34.8,
+        "final_test_accuracy": 0.7547,
+        "device": "cuda",
+        "idle_baseline": {
+          "samples": 10,
+          "mean_percent": 0.0,
+          "p10_percent": 0.0,
+          "p50_percent": 0.0,
+          "p90_percent": 0.0,
+          "share_at_or_above_target": 0.0
+        },
+        "whole_run": {
+          "samples": 66,
+          "mean_percent": 79.7,
+          "p10_percent": 0.0,
+          "p50_percent": 100.0,
+          "p90_percent": 100.0,
+          "share_at_or_above_target": 0.803
+        },
+        "training_phase_seconds": 29.5,
+        "training_phase": {
+          "samples": 55,
+          "mean_percent": 93.8,
+          "p10_percent": 84.0,
+          "p50_percent": 100.0,
+          "p90_percent": 100.0,
+          "share_at_or_above_target": 0.945
+        },
+        "training_phase_meets_report_target": true
+      }
+    ]
+  },
+  "limitations": {
+    "load_term_differentiable": false,
+    "latency_term_differentiable": false,
+    "notes": [
+      "All 1 agents ran on one physical host (1 distinct hostname). psutil.cpu_percent() and NVML utilization are host/device-wide, so every node reports the same load truthfully; RTT is loopback for all of them. The L and D terms of S_i are therefore untested here \u2014 only the reliability term R is differentiated (ADR-013)."
+    ]
+  }
+}
