@@ -116,6 +116,30 @@ async def _run(args: argparse.Namespace) -> int:
         await client.aclose()
         return 2
 
+    # Preflight: an unfinished job from an earlier run -- an interrupted
+    # benchmark, most often -- is still queued for whatever node comes ONLINE
+    # next, which is this run's freshly started agents. It then occupies one,
+    # and this run's job waits for it: a measurement of a queue, not of the
+    # system. Observed for real: a re-let measured at 38.8 s was exactly the
+    # time a leftover job took to finish on the surviving agent.
+    try:
+        leftovers = await client.unfinished_jobs()
+    except OrchestratorError as exc:
+        logger.error("%s", exc)
+        await client.aclose()
+        return 2
+    if leftovers:
+        listing = ", ".join(f"{j['id'][:8]} ({j['state']})" for j in leftovers)
+        logger.error(
+            "%d unfinished job(s) are waiting for a node: %s. This run's agents "
+            "would pick them up and every timing would include them. Cancel "
+            "them (dashboard, or POST /jobs/<id>/cancel) and retry.",
+            len(leftovers),
+            listing,
+        )
+        await client.aclose()
+        return 2
+
     workdir = Path(tempfile.mkdtemp(prefix=f"bench-{args.scenario}-"))
     fleet = Fleet(client=client, workdir=workdir, orchestrator_url=args.orchestrator)
     logger.info("scenario=%s workdir=%s", args.scenario, workdir)

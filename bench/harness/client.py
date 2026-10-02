@@ -96,6 +96,11 @@ class BenchClient:
             )
         )
 
+    async def unfinished_jobs(self) -> list[dict[str, Any]]:
+        """Jobs not yet COMPLETED, FAILED or CANCELLED."""
+        jobs = (await self._get("/jobs"))["jobs"]
+        return [j for j in jobs if j["state"] not in ("COMPLETED", "FAILED", "CANCELLED")]
+
     async def job(self, job_id: str) -> dict[str, Any]:
         return dict(await self._get(f"/jobs/{job_id}"))
 
