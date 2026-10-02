@@ -35,7 +35,17 @@ class Settings(BaseSettings):
     api_port: int = 8000
 
     # --- Object storage (MinIO / S3 API) ---
+    # Where the orchestrator itself reaches MinIO. In compose this is the
+    # internal service name, which never changes.
     s3_endpoint_url: str = "http://localhost:9000"
+    # Where a *peer* reaches MinIO, used only to sign dataset download URLs
+    # (ADR-014): a signature covers the host it names, so a URL signed for
+    # the internal name is useless to a peer on another machine. Unset means
+    # "the same as s3_endpoint_url". Kept separate so that when this host's
+    # LAN address changes, only dataset links break -- and only until this is
+    # updated -- rather than every checkpoint and upload the orchestrator does
+    # on its own behalf.
+    s3_public_endpoint_url: str | None = None
     s3_access_key: str = "minioadmin"
     s3_secret_key: str = "minioadmin"
     s3_bucket_checkpoints: str = "checkpoints"
@@ -301,7 +311,7 @@ class Settings(BaseSettings):
     node_detail_default_samples: int = 50
     node_detail_max_samples: int = 500
 
-    @field_validator("google_oauth_client_id", mode="after")
+    @field_validator("google_oauth_client_id", "s3_public_endpoint_url", mode="after")
     @classmethod
     def _blank_client_id_is_absent(cls, value: str | None) -> str | None:
         """Treat an empty or whitespace-only client ID as unset.
@@ -313,6 +323,9 @@ class Settings(BaseSettings):
         an unconfigured deployment would report ``enabled: true`` from
         ``GET /auth/providers``, the dashboard would draw a Google button, and it
         would fail inside Google's script with nothing pointing back at the cause.
+
+        ``s3_public_endpoint_url`` is set the same way and shares the rule: blank
+        means "sign with the internal endpoint", not "sign with an empty host".
         """
         if value is None:
             return None

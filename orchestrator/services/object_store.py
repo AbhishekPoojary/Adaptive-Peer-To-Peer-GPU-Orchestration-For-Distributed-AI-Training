@@ -57,11 +57,16 @@ class _BucketStore:
         self._access_key = settings.s3_access_key
         self._secret_key = settings.s3_secret_key
         self._region = settings.s3_region
+        self._public_endpoint = settings.s3_public_endpoint_url or settings.s3_endpoint_url
         self._client: Any | None = None
+        self._public_client: Any | None = None
 
     def _get_client(self) -> Any:
-        if self._client is not None:
-            return self._client
+        if self._client is None:
+            self._client = self._make_client(self._endpoint)
+        return self._client
+
+    def _make_client(self, endpoint: str) -> Any:
         try:
             import boto3
             from botocore.client import Config
@@ -70,17 +75,26 @@ class _BucketStore:
                 "boto3 is not installed; dataset storage is unavailable"
             ) from exc
 
-        self._client = boto3.client(
+        return boto3.client(
             "s3",
-            endpoint_url=self._endpoint,
+            endpoint_url=endpoint,
             aws_access_key_id=self._access_key,
             aws_secret_access_key=self._secret_key,
             region_name=self._region,
-            # MinIO requires path-style addressing: virtual-host style would
-            # resolve "bucket.localhost", which does not exist.
-            config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+            config=Config(
+                signature_version="s3v4",
+                # MinIO requires path-style addressing: virtual-host style would
+                # resolve "bucket.localhost", which does not exist.
+                s3={"addressing_style": "path"},
+                # Fail fast. botocore's defaults (60 s to connect, several
+                # retries) turned an unreachable MinIO into minutes per call,
+                # and a trainer waiting on a checkpoint write waited with it.
+                # Storage that has not answered in 5 s is reported as down.
+                connect_timeout=5,
+                read_timeout=60,
+                retries={"max_attempts": 2, "mode": "standard"},
+            ),
         )
-        return self._client
 
     def ensure_bucket(self) -> None:
         """Create the datasets bucket if it is missing.
@@ -212,7 +226,11 @@ class _BucketStore:
         """
         import botocore.exceptions
 
-        client = self._get_client()
+        # Signed against the endpoint a peer can reach. Signing is local
+        # computation, so this client never has to reach that address itself.
+        if self._public_client is None:
+            self._public_client = self._make_client(self._public_endpoint)
+        client = self._public_client
         try:
             url: str = client.generate_presigned_url(
                 "get_object",

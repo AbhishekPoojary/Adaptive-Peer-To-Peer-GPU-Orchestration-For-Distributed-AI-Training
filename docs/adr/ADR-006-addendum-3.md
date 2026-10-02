@@ -74,3 +74,22 @@ The direct-S3 path stays, behind the token: a co-located setup that configures
   trainer's agent stops it within a renewal cycle of losing the lease.
 * The trainer image must be rebuilt to pick up `ApiObjectStore`. An old image
   ignores the new variables and runs without checkpoints, exactly as before.
+
+## Found on the first live run: the storage endpoint and its timeouts
+The first benchmark after this change resumed nothing: every checkpoint
+request returned 503, and training stalled for about two minutes on each one.
+
+* **The endpoint.** `S3_ENDPOINT_URL` had been set to this laptop's LAN address,
+  because ADR-014 needed signed dataset URLs to name a host remote peers can
+  reach. The laptop's address had since changed, and with this change the
+  orchestrator's *own* storage traffic now included every checkpoint. The
+  setting is now split: `S3_ENDPOINT_URL` is what the orchestrator uses
+  (`http://minio:9000` in compose, which never changes), and
+  `S3_PUBLIC_ENDPOINT_URL` is used only to sign dataset links. A changed
+  address now breaks dataset links for remote peers until it is updated, and
+  nothing else.
+* **The timeouts.** botocore's defaults (60 s to connect, several retries) made
+  each unreachable-storage call take minutes, and the trainer blocks on its
+  checkpoint write. The orchestrator now gives MinIO 5 s to connect and two
+  attempts, so an outage costs seconds per checkpoint rather than stalling the
+  run.
