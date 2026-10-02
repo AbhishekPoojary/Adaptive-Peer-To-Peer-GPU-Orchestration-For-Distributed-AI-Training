@@ -20,10 +20,10 @@ it is written.
 | Lease-based pull assignment survives NAT (agents dial out only) | ADR-003; agents ran with no inbound ports open |
 | Epoch fencing rejects a zombie leaseholder's writes | `tests/test_lease_fencing.py` |
 | Claim races resolve to exactly one winner | `tests/test_lease_claim_race.py` (real Postgres row locks) |
-| φ-accrual detects a vanished peer | 5.8 s of silence → suspicion 11.9 vs threshold 3.0 |
-| A job survives its node disappearing | Reassigned and completed, 55.89 s end to end |
+| φ-accrual detects a vanished peer **within the report's 5 s target** | 2.41 s from SIGKILL to `REASSIGNED`, `bench/report/20261002T165107` (ADR-004 addendum 2; was 5.8 s under the old 5 s floor) |
+| A job survives its node disappearing **within the 15 s recovery target** | Training restarted on the survivor 4.53 s after the kill and had restored the dead peer's checkpoint (step 1600) at 7.6 s; completed at 98.75%. Same artifact |
 | A job survives its *trainer* being killed | Retried on another peer, completed to 99.12% (ADR-005 addendum 2) |
-| Checkpoint to MinIO and resume on reassignment | ADR-006, `tests/test_checkpoint_manifest.py` |
+| Checkpoint and resume on reassignment, **on real peers** | Through the orchestrator with a lease-scoped token, so peers hold no storage keys (ADR-006 addendum 3). Before that, no installed peer ever checkpointed and every recovery restarted from step 0 -- both earlier `failure_recovery` artifacts show it |
 | Adaptive placement beats the baselines on reliability | 6/6 vs 2/6 and 3/6, `bench/report/20260728T155702` |
 | A node that lets an offer lapse is skipped briefly, not re-offered | `tests/test_claim_backoff.py` (M7.1c) |
 | Multi-rank DDP under torchrun with real c10d rendezvous | ADR-005, M5 |
@@ -35,7 +35,7 @@ it is written.
 | **Adding people from the dashboard** instead of SSH | ADR-012 addendum 2; `tests/test_users_api.py` |
 | **Downloading the trained model** | ADR-006 addendum 2; a July run's checkpoint streamed byte-identical to storage (sha256 `471b73f9…` on both sides), opening as a valid torch archive |
 
-416 tests, all against a real Postgres. No mocked database, no simulated
+497 tests, all against a real Postgres. No mocked database, no simulated
 failures outside `tests/`.
 
 ---
