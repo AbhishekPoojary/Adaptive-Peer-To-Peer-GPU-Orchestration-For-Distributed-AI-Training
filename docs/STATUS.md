@@ -36,6 +36,7 @@ it is written.
 | **GPU utilization above the report's 80% target**, for batch 256 | CIFAR-10 batch 256: 93.8% mean over the trainer's own training phase (p10 84%), 79.7% over the whole run including container start. `bench/report/20261002T175843-gpu_utilization.json`. Before the GPU-resident data path the same job averaged 44% |
 | **Uploaded datasets above the 80% target** | A real 6-class, 17k-image upload (Intel scenes): 93.4% mean at batch 64 and 91.7% at batch 256 over the training phase, from 86.2% and 85.1% before decode-once. `bench/report/20261002T182653-gpu_utilization_custom.json` (baseline `20261002T181554`). The batch pipeline now delivers 68k images/s from GPU memory and 111k/s streamed from disk, against 2,695/s this GPU trains -- measured in the trainer image, not by the harness |
 | Recovery still resumes with background checkpoint uploads | Detected 2.92 s, restored step 2814 at 8.39 s, job finished 22 s after the kill. `bench/report/20261002T180001-failure_recovery.json` |
+| **Adaptive placement prefers the closer node** (the `γ·D_i` term) | Two identical containerised agents, one with 100 ms of real `tc netem` egress delay (RTT EWMA 26 vs 124 ms): adaptive 10/10 on the near node, least_loaded 8/10, round_robin 5/10. The audit row shows L and R equal and D 0 vs 1. `bench/report/20261002T192259-latency_placement.json` |
 | **Control-plane overhead stays flat from 1 to 16 nodes** | Real agents at 1/2/4/8/16: scheduling a job 12.8-15.5 ms after submit at every size (report target < 500 ms), scheduler pass 5-7 ms, detector pass about 8 ms, orchestrator memory 80-84 MB; its CPU grows with heartbeat rate (4% at 1 node, 24% at 16 on this laptop). No healthy node declared dead at any size. `bench/report/20261002T191552-scalability.json` |
 | **Peers update themselves** | The agent restarts into a newer bundle while idle and pulls a newer trainer image (ADR-015). A real agent at an old version exited for update within one check interval; the full installer loop on a real peer is not yet verified |
 | **Downloading the trained model** | ADR-006 addendum 2; a July run's checkpoint streamed byte-identical to storage (sha256 `471b73f9…` on both sides), opening as a valid torch archive |
@@ -72,11 +73,12 @@ is trivially separable. It demonstrates that upload, digest verification,
 extraction, and ImageFolder loading work; it says nothing about how this system
 performs on a real image set, and the number must never be quoted as a result.
 
-**The `α` (load) and `γ` (latency) terms of the scheduler are untested.** Two
-agents on one host read the same `psutil.cpu_percent()` and the same NVML
-device, and both dial loopback, so those terms could not be differentiated.
-Every benchmark artifact says so in a machine-written `limitations` block
-(ADR-013). Only the reliability term `β·R_i` has been validated.
+**The `α` (load) term of the scheduler is untested.** Agents on one host read
+the same `psutil.cpu_percent()` and the same NVML device, so their load cannot
+differ. Every benchmark artifact says so in a machine-written `limitations`
+block (ADR-013). The reliability term `β·R_i` and the latency term `γ·D_i` have
+both been validated; the latency test used one fixed `tc netem` delay with no
+jitter or loss, not a real long-distance link.
 
 **The significant-spread constants are unvalidated assumptions.** `25.0` load
 points and `50.0 ms` are argued from the domain (ADR-009 addendum), not

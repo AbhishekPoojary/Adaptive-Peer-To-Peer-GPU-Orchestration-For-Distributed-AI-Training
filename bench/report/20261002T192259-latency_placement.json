@@ -1,0 +1,100 @@
+{
+  "timestamp_utc": "2026-10-02T19:22:59.398436+00:00",
+  "git_sha": "f911af4fb7bb2eb347ade1b607fea411a50eb47a",
+  "hardware": {
+    "cpu": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel (12C/16T)",
+    "gpu": "NVIDIA GeForce RTX 3050 Laptop GPU (4.0 GB)",
+    "ram_gb": 15.63,
+    "os": "Windows 11 (python 3.13.13)"
+  },
+  "scenario": "latency_placement",
+  "results": {
+    "hypothesis": "With equal load and equal history, only the adaptive scheduler has an input (measured RTT) that separates the two nodes, so only it should consistently prefer the near one.",
+    "injected_delay_ms": 100,
+    "delay_mechanism": "tc netem on the far agent container's egress (eth0)",
+    "rtt_ewma_ms_after_settling": {
+      "near": 26.0,
+      "far": 123.5
+    },
+    "nodes": {
+      "near": {
+        "node_id": "2240e733-2014-4148-a469-83e3bc8877f4",
+        "node_name": "node-117"
+      },
+      "far": {
+        "node_id": "37f5d1dc-48f3-43f5-bf8f-7d2bcb5d1bc1",
+        "node_name": "node-118"
+      }
+    },
+    "placement_by_scheduler": {
+      "adaptive": {
+        "trials": 10,
+        "placed_on_near": 10,
+        "placed_on_far": 0,
+        "near_share": 1.0
+      },
+      "least_loaded": {
+        "trials": 10,
+        "placed_on_near": 8,
+        "placed_on_far": 2,
+        "near_share": 0.8
+      },
+      "round_robin": {
+        "trials": 10,
+        "placed_on_near": 5,
+        "placed_on_far": 5,
+        "near_share": 0.5
+      }
+    },
+    "first_adaptive_decision": [
+      {
+        "id": "456ba4d1-cdf1-4f32-94cb-eb9567323e85",
+        "job_id": "18dd93c3-f487-4ee1-9b6a-14e829572add",
+        "ts": "2026-10-02T19:22:53.914461Z",
+        "scheduler_name": "adaptive",
+        "alpha": 1.0,
+        "beta": 1.0,
+        "gamma": 0.5,
+        "reliability_halflife_seconds": 86400.0,
+        "wilson_z": 1.96,
+        "selected_node_id": "2240e733-2014-4148-a469-83e3bc8877f4",
+        "candidates": [
+          {
+            "node_id": "2240e733-2014-4148-a469-83e3bc8877f4",
+            "node_name": "node-117",
+            "l_score": 0.0,
+            "r_score": 0.09452865480086611,
+            "d_score": 0.0,
+            "s_score": -0.09452865480086611,
+            "raw_util": 0.0,
+            "raw_rtt_ewma_ms": 25.962078754290147,
+            "weighted_success": 1.0,
+            "weighted_failure": 1.0,
+            "was_selected": true
+          },
+          {
+            "node_id": "37f5d1dc-48f3-43f5-bf8f-7d2bcb5d1bc1",
+            "node_name": "node-118",
+            "l_score": 0.0,
+            "r_score": 0.09452865480086611,
+            "d_score": 1.0,
+            "s_score": 0.40547134519913386,
+            "raw_util": 0.0,
+            "raw_rtt_ewma_ms": 123.54305190368767,
+            "weighted_success": 1.0,
+            "weighted_failure": 1.0,
+            "was_selected": false
+          }
+        ]
+      }
+    ]
+  },
+  "limitations": {
+    "load_term_differentiable": false,
+    "latency_term_differentiable": true,
+    "notes": [
+      "Both agents ran in identical containers on one Docker VM, so the load term L could not differ between them; only latency was varied.",
+      "Latency was real: tc netem delayed every packet the far agent sent. The delay is synthetic in origin (one fixed value, no jitter or loss), not a measurement of a real long-distance link."
+    ]
+  }
+}
