@@ -20,8 +20,9 @@ it is written.
 | Lease-based pull assignment survives NAT (agents dial out only) | ADR-003; agents ran with no inbound ports open |
 | Epoch fencing rejects a zombie leaseholder's writes | `tests/test_lease_fencing.py` |
 | Claim races resolve to exactly one winner | `tests/test_lease_claim_race.py` (real Postgres row locks) |
-| φ-accrual detects a vanished peer **within the report's 5 s target** | 2.41 s from SIGKILL to `REASSIGNED`, `bench/report/20261002T165107` (ADR-004 addendum 2; was 5.8 s under the old 5 s floor) |
-| A job survives its node disappearing **within the 15 s recovery target** | Training restarted on the survivor 4.53 s after the kill and had restored the dead peer's checkpoint (step 1600) at 7.6 s; completed at 98.75%. Same artifact |
+| φ-accrual detects a vanished peer **within the report's 5 s target** | 4.40 s from SIGKILL to `REASSIGNED`, `bench/report/20261002T200914`. Was 5.8 s under the old 5 s floor and 2.41 s (`20261002T165107`) before the 2 s acceptable pause, which a real internet link proved necessary (ADR-004 addenda 2 and 3). The margin under 5 s is 0.6 s |
+| A job survives its node disappearing **within the 15 s recovery target** | Training restarted on the survivor 6.08 s after the kill and had restored the dead peer's checkpoint (step 2900) at 9.53 s; completed at 99.06%. Same artifact |
+| **A peer on another network joins over HTTPS with nothing to configure** | `demo.ps1 -Public` gives the orchestrator its own Cloudflare quick tunnel. Verified with a real agent through it: enrolled via `https://`, trained an uploaded 39 MB dataset (downloaded in ranged pieces through the tunnel, digest verified) on its first lease with no false failure, streamed logs and wrote checkpoints over the same link |
 | A job survives its *trainer* being killed | Retried on another peer, completed to 99.12% (ADR-005 addendum 2) |
 | Checkpoint and resume on reassignment, **on real peers** | Through the orchestrator with a lease-scoped token, so peers hold no storage keys (ADR-006 addendum 3). Before that, no installed peer ever checkpointed and every recovery restarted from step 0 -- both earlier `failure_recovery` artifacts show it |
 | Adaptive placement beats the baselines on reliability | 6/6 vs 2/6 and 3/6, `bench/report/20260728T155702` |
@@ -41,7 +42,7 @@ it is written.
 | **Peers update themselves** | The agent restarts into a newer bundle while idle and pulls a newer trainer image (ADR-015). A real agent at an old version exited for update within one check interval; the full installer loop on a real peer is not yet verified |
 | **Downloading the trained model** | ADR-006 addendum 2; a July run's checkpoint streamed byte-identical to storage (sha256 `471b73f9…` on both sides), opening as a valid torch archive |
 
-525 tests, all against a real Postgres. No mocked database, no simulated
+548 tests, all against a real Postgres. No mocked database, no simulated
 failures outside `tests/`.
 
 ---
@@ -125,15 +126,20 @@ since M11 were all built to remove friction that was inferred rather than
 observed, and only a real session would say whether the right friction was
 removed.
 
-### 2. No TLS
+### 2. TLS: encrypted paths exist; the plain LAN port is still open
 
-ADR-010 assumes a Tailscale overlay, which encrypts transport. Exposing the
-orchestrator on any other network would put bearer tokens on the wire in
-plaintext. Anything beyond the overlay needs TLS terminated in front.
+Peers can join encrypted two ways: Tailscale, which encrypts transport itself,
+and the orchestrator's own Cloudflare tunnel from `demo.ps1 -Public`, which
+terminates TLS with a certificate every machine already trusts. Uploaded
+datasets and checkpoints travel the same encrypted path as everything else.
 
-This got slightly worse: `POST /users` and `PATCH /users/{id}` now carry
-plaintext passwords (ADR-012 addendum 2 §5). That is not a new exposure class —
-`POST /auth/login` always did — but it is one more place it matters.
+What remains: the orchestrator still listens on plain HTTP on the LAN
+(port 8090), and a peer or browser pointed at that address sends tokens and
+passwords unencrypted. The agent says so at start-up. There is no TLS of the
+orchestrator's own (no certificate for a bare LAN IP that peers would trust
+without manual setup), and the quick tunnel's address changes every time it
+starts, so it suits a session rather than a permanent deployment; a named
+Cloudflare tunnel or Tailscale is the long-lived answer.
 
 ### 3. Token revocation is bounded by TTL only
 

@@ -1,0 +1,181 @@
+{
+  "timestamp_utc": "2026-10-02T20:09:14.228561+00:00",
+  "git_sha": "63d1495c6747934f88963bf822c2e74ebeace0d6",
+  "hardware": {
+    "cpu": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel (12C/16T)",
+    "gpu": "NVIDIA GeForce RTX 3050 Laptop GPU (4.0 GB)",
+    "ram_gb": 15.63,
+    "os": "Windows 11 (python 3.13.13)"
+  },
+  "scenario": "failure_recovery",
+  "results": {
+    "job_id": "7f2cad71-4912-4484-a097-0e26dd6b2c3e",
+    "scheduler": "adaptive",
+    "failure_mode": "SIGKILL of the agent process holding the lease",
+    "warmup_seconds": 25.0,
+    "recovery_seconds": 23.09,
+    "stages": {
+      "detection_seconds": 4.4,
+      "relet_seconds": 4.98,
+      "training_restarted_seconds": 6.08,
+      "resumed_from_checkpoint": true,
+      "checkpoint_resume_seconds": 9.53,
+      "resumed_from_step": 2900
+    },
+    "report_targets_seconds": {
+      "detection": 5.0,
+      "recovery": 15.0
+    },
+    "clock_offset_seconds": -0.012,
+    "clock_offset_error_bound_seconds": 0.06,
+    "killed_node_id": "407830b9-dfa9-4710-a268-cd7873025574",
+    "killed_node_name": "node-126",
+    "completed_node_id": "c55b254d-dd86-4dd8-a5a2-b0b79cca4af4",
+    "completed_node_name": "node-127",
+    "reassigned_to_a_different_node": true,
+    "final_lease_epoch": 2,
+    "final_test_accuracy": 0.9906,
+    "final_loss": 0.027778540084611125,
+    "epochs_completed": 4,
+    "device": "cuda",
+    "event_timeline": [
+      {
+        "ts": "2026-10-02T20:08:23.929362Z",
+        "from_state": null,
+        "to_state": "QUEUED",
+        "detail": {
+          "message": "Job submitted by abhishek; queued for scheduling.",
+          "scheduler_name": "adaptive"
+        }
+      },
+      {
+        "ts": "2026-10-02T20:08:23.943096Z",
+        "from_state": "QUEUED",
+        "to_state": "SCHEDULED",
+        "detail": {
+          "cohort": [
+            {
+              "rank": 0,
+              "node_id": "407830b9-dfa9-4710-a268-cd7873025574",
+              "node_name": "node-126",
+              "is_rendezvous_host": true
+            }
+          ],
+          "message": "Scheduled by the adaptive scheduler as a world_size=1 cohort (epoch 1): rank 0=node-126(rendezvous). Rendezvous host: node-126.",
+          "world_size": 1,
+          "lease_epoch": 1,
+          "rendezvous_node_id": "407830b9-dfa9-4710-a268-cd7873025574",
+          "rendezvous_node_name": "node-126"
+        }
+      },
+      {
+        "ts": "2026-10-02T20:08:24.398685Z",
+        "from_state": "SCHEDULED",
+        "to_state": "LEASED",
+        "detail": {
+          "rank": 0,
+          "message": "Lease granted for rank 0 (epoch 1); expires in 15s.",
+          "lease_id": "74736323-790a-47ee-9989-ba7285c7a39c",
+          "lease_epoch": 1
+        }
+      },
+      {
+        "ts": "2026-10-02T20:08:25.482525Z",
+        "from_state": "LEASED",
+        "to_state": "RUNNING",
+        "detail": {
+          "message": "Training started on the leaseholder.",
+          "lease_id": "74736323-790a-47ee-9989-ba7285c7a39c",
+          "lease_epoch": 1
+        }
+      },
+      {
+        "ts": "2026-10-02T20:08:55.444546Z",
+        "from_state": "RUNNING",
+        "to_state": "REASSIGNED",
+        "detail": {
+          "phi": 4.235836877124335,
+          "message": "node-126 stopped responding (\u03c6-accrual suspicion 4.2 \u2265 3.0 after 5.2s of silence (mean interval 1.31s, std 0.50s, acceptable pause 2.0s)); its lease was torn down and the job requeued for reassignment.",
+          "node_id": "407830b9-dfa9-4710-a268-cd7873025574",
+          "trigger": "phi-accrual-detector",
+          "node_name": "node-126",
+          "lease_epoch": 1,
+          "failed_ranks": [
+            0
+          ],
+          "elapsed_seconds": 5.239
+        }
+      },
+      {
+        "ts": "2026-10-02T20:08:55.486539Z",
+        "from_state": "REASSIGNED",
+        "to_state": "SCHEDULED",
+        "detail": {
+          "cohort": [
+            {
+              "rank": 0,
+              "node_id": "c55b254d-dd86-4dd8-a5a2-b0b79cca4af4",
+              "node_name": "node-127",
+              "is_rendezvous_host": true
+            }
+          ],
+          "message": "Scheduled by the adaptive scheduler as a world_size=1 cohort (epoch 2): rank 0=node-127(rendezvous). Rendezvous host: node-127.",
+          "world_size": 1,
+          "lease_epoch": 2,
+          "rendezvous_node_id": "c55b254d-dd86-4dd8-a5a2-b0b79cca4af4",
+          "rendezvous_node_name": "node-127"
+        }
+      },
+      {
+        "ts": "2026-10-02T20:08:56.025485Z",
+        "from_state": "SCHEDULED",
+        "to_state": "LEASED",
+        "detail": {
+          "rank": 0,
+          "message": "Lease granted for rank 0 (epoch 2); expires in 15s.",
+          "lease_id": "5210a169-2c93-4651-ba2b-138652cb5bfa",
+          "lease_epoch": 2
+        }
+      },
+      {
+        "ts": "2026-10-02T20:08:57.124447Z",
+        "from_state": "LEASED",
+        "to_state": "RUNNING",
+        "detail": {
+          "message": "Training started on the leaseholder.",
+          "lease_id": "5210a169-2c93-4651-ba2b-138652cb5bfa",
+          "lease_epoch": 2
+        }
+      },
+      {
+        "ts": "2026-10-02T20:09:00.567143Z",
+        "from_state": "RUNNING",
+        "to_state": "RUNNING",
+        "detail": {
+          "message": "Resumed from checkpoint at step 2900 (epoch 4).",
+          "checkpoint_key": "checkpoints/7f2cad71-4912-4484-a097-0e26dd6b2c3e/e004-s00002900-1e202637.pt",
+          "resumed_from_step": 2900,
+          "resumed_from_epoch": 4
+        }
+      },
+      {
+        "ts": "2026-10-02T20:09:13.792213Z",
+        "from_state": "RUNNING",
+        "to_state": "COMPLETED",
+        "detail": {
+          "rank": 0,
+          "message": "Training completed: final test accuracy 99.1% after 4 epochs.",
+          "lease_id": "5210a169-2c93-4651-ba2b-138652cb5bfa",
+          "lease_epoch": 2
+        }
+      }
+    ]
+  },
+  "limitations": {
+    "load_term_differentiable": false,
+    "latency_term_differentiable": false,
+    "notes": [
+      "All 2 agents ran on one physical host (1 distinct hostname). psutil.cpu_percent() and NVML utilization are host/device-wide, so every node reports the same load truthfully; RTT is loopback for all of them. The L and D terms of S_i are therefore untested here \u2014 only the reliability term R is differentiated (ADR-013)."
+    ]
+  }
+}
