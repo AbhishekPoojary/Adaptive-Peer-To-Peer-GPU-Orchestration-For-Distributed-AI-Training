@@ -72,9 +72,12 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import os
 import sys
 import time
+from collections.abc import Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -298,6 +301,158 @@ def _build_datasets(
     raise RuntimeError(f"unsupported DATASET '{dataset_name}'")
 
 
+# --- Device-resident batches for the built-in datasets -------------------------
+#
+# Measured on the benchmark laptop (bench/report/20261002T173718-gpu_utilization):
+# with a DataLoader decoding and transforming every image on the CPU, the GPU
+# averaged 36-44% busy while training -- it finished each batch and then waited
+# for the next one. MNIST and CIFAR-10 are small enough to hold on the GPU as
+# uint8 (47 MB and 150 MB), so here they are put there once and every
+# per-batch step -- shuffling, batching, CIFAR's crop and flip, normalisation
+# -- happens on the device. Custom uploads keep the DataLoader path: they can
+# be any size, and are read from files.
+
+
+def _raw_tensors(dataset: Any) -> tuple[torch.Tensor, torch.Tensor]:
+    """(uint8 images N×C×H×W, int64 labels) straight from a torchvision set."""
+    data = dataset.data
+    images = torch.as_tensor(data)
+    # MNIST arrives N×H×W, CIFAR-10 N×H×W×C; both leave as N×C×H×W.
+    images = images.unsqueeze(1) if images.dim() == 3 else images.permute(0, 3, 1, 2)
+    labels = torch.as_tensor(dataset.targets, dtype=torch.int64)
+    return images.contiguous(), labels
+
+
+def _random_crop_flip(
+    x: torch.Tensor, *, padding: int, generator: torch.Generator
+) -> torch.Tensor:
+    """torchvision's RandomCrop(padding) + RandomHorizontalFlip, batched.
+
+    Zero padding, as RandomCrop's default fill, applied in [0, 1] space before
+    normalisation -- the same order the CPU transform pipeline used. Each image
+    gets its own offset and its own coin flip.
+    """
+    n, c, h, w = x.shape
+    dev = x.device
+    padded = F.pad(x, (padding, padding, padding, padding))
+    dy = torch.randint(0, 2 * padding + 1, (n,), device=dev, generator=generator)
+    dx = torch.randint(0, 2 * padding + 1, (n,), device=dev, generator=generator)
+    rows = (dy.view(n, 1) + torch.arange(h, device=dev)).view(n, 1, h, 1).expand(n, c, h, w)
+    cols = (dx.view(n, 1) + torch.arange(w, device=dev)).view(n, 1, 1, w).expand(n, c, h, w)
+    batch_index = torch.arange(n, device=dev).view(n, 1, 1, 1).expand(n, c, h, w)
+    channel_index = torch.arange(c, device=dev).view(1, c, 1, 1).expand(n, c, h, w)
+    cropped = padded[batch_index, channel_index, rows, cols]
+    flip = torch.rand(n, device=dev, generator=generator) < 0.5
+    return torch.where(flip.view(n, 1, 1, 1), cropped.flip(3), cropped)
+
+
+class DeviceBatches:
+    """Mini-batches served from tensors already on the training device.
+
+    Iterates like the DataLoader it replaces, yielding ``(images, labels)``
+    already normalised and on the device. Under DDP each rank takes every
+    ``world_size``-th index of one shared, epoch-seeded permutation, padded to
+    a multiple of ``world_size`` exactly as ``DistributedSampler`` pads: every
+    rank must run the same number of steps, or the gradient all-reduce waits
+    forever on the rank that finished first.
+    """
+
+    def __init__(
+        self,
+        images: torch.Tensor,
+        labels: torch.Tensor,
+        *,
+        batch_size: int,
+        mean: tuple[float, ...],
+        std: tuple[float, ...],
+        augment: bool,
+        shuffle: bool,
+        rank: int = 0,
+        world_size: int = 1,
+        seed: int = 0,
+    ) -> None:
+        self.images = images
+        self.labels = labels
+        self.batch_size = batch_size
+        channels = images.shape[1]
+        self.mean = torch.tensor(mean, device=images.device).view(1, channels, 1, 1)
+        self.std = torch.tensor(std, device=images.device).view(1, channels, 1, 1)
+        self.augment = augment
+        self.shuffle = shuffle
+        self.rank = rank
+        self.world_size = world_size
+        self.seed = seed
+        self.epoch = 0
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = epoch
+
+    def _order(self, generator: torch.Generator) -> torch.Tensor:
+        n = self.images.shape[0]
+        dev = self.images.device
+        if self.shuffle:
+            order = torch.randperm(n, device=dev, generator=generator)
+        else:
+            order = torch.arange(n, device=dev)
+        if self.world_size > 1:
+            total = math.ceil(n / self.world_size) * self.world_size
+            order = torch.cat([order, order[: total - n]])[self.rank :: self.world_size]
+        return order
+
+    def __len__(self) -> int:
+        per_rank = math.ceil(self.images.shape[0] / self.world_size)
+        return math.ceil(per_rank / self.batch_size)
+
+    def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+        generator = torch.Generator(device=self.images.device)
+        generator.manual_seed(self.seed * 1_000_003 + self.epoch)
+        order = self._order(generator)
+        for start in range(0, order.numel(), self.batch_size):
+            index = order[start : start + self.batch_size]
+            x = self.images[index].float().div_(255.0)
+            if self.augment:
+                x = _random_crop_flip(x, padding=4, generator=generator)
+            yield (x - self.mean) / self.std, self.labels[index]
+
+
+def _device_batches(
+    dataset_name: str,
+    train_set: Any,
+    test_set: Any,
+    *,
+    device: torch.device,
+    batch_size: int,
+    dist_config: DistConfig,
+) -> tuple[DeviceBatches, DeviceBatches]:
+    """Train/test :class:`DeviceBatches` for a built-in dataset."""
+    mean, std = (
+        (_CIFAR10_MEAN, _CIFAR10_STD) if dataset_name == "cifar10" else (_MNIST_MEAN, _MNIST_STD)
+    )
+    train_images, train_labels = _raw_tensors(train_set)
+    test_images, test_labels = _raw_tensors(test_set)
+    train = DeviceBatches(
+        train_images.to(device),
+        train_labels.to(device),
+        batch_size=batch_size,
+        mean=mean,
+        std=std,
+        augment=dataset_name == "cifar10",
+        shuffle=True,
+        rank=dist_config.rank,
+        world_size=dist_config.world_size,
+    )
+    test = DeviceBatches(
+        test_images.to(device),
+        test_labels.to(device),
+        batch_size=max(batch_size, 256),
+        mean=mean,
+        std=std,
+        augment=False,
+        shuffle=False,
+    )
+    return train, test
+
+
 # --- Custom uploaded datasets (ADR-014) --------------------------------------
 
 #: Every custom image is resized to this square and converted to RGB. SmallCNN's
@@ -518,7 +673,7 @@ def _epoch_mean_loss(
 
 def _evaluate_accuracy(
     eval_model: nn.Module,
-    test_loader: DataLoader,
+    test_loader: DataLoader | DeviceBatches,
     device: torch.device,
     *,
     pin_memory: bool,
@@ -526,7 +681,9 @@ def _evaluate_accuracy(
     """Run one held-out eval pass; return (correct, total, accuracy). Real
     forward passes only — no fabricated metric."""
     eval_model.eval()
-    correct = 0
+    # Counted on the device and read once at the end: a .item() per batch
+    # would make the CPU wait for the GPU on every batch.
+    correct_t = torch.zeros((), dtype=torch.int64, device=device)
     total = 0
     with torch.no_grad():
         for images, labels in test_loader:
@@ -534,8 +691,9 @@ def _evaluate_accuracy(
             labels = labels.to(device, non_blocking=pin_memory)
             outputs = eval_model(images)
             predictions = outputs.argmax(dim=1)
-            correct += int((predictions == labels).sum().item())
+            correct_t += (predictions == labels).sum()
             total += labels.size(0)
+    correct = int(correct_t.item())
     accuracy = correct / total if total > 0 else 0.0
     return correct, total, accuracy
 
@@ -697,23 +855,42 @@ def main() -> None:
         if dist_config.distributed
         else None
     )
-    train_loader = DataLoader(
-        train_set,
-        batch_size=batch_size,
-        shuffle=train_sampler is None,
-        sampler=train_sampler,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        drop_last=False,
+    train_loader: DataLoader | DeviceBatches
+    test_loader: DataLoader | DeviceBatches
+    device_resident = (
+        dataset_name != "custom"
+        and device.type == "cuda"
+        and os.environ.get("DEVICE_RESIDENT_DATA", "1") != "0"
     )
-    # Only rank 0 evaluates the held-out set (single, unsharded pass) and reports.
-    test_loader = DataLoader(
-        test_set,
-        batch_size=max(batch_size, 256),
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-    )
+    if device_resident:
+        train_loader, test_loader = _device_batches(
+            dataset_name,
+            train_set,
+            test_set,
+            device=device,
+            batch_size=batch_size,
+            dist_config=dist_config,
+        )
+        train_sampler = None  # DeviceBatches shards across ranks itself
+        log("data: held on the GPU; batching and augmentation run on the device")
+    else:
+        train_loader = DataLoader(
+            train_set,
+            batch_size=batch_size,
+            shuffle=train_sampler is None,
+            sampler=train_sampler,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            drop_last=False,
+        )
+        # Only rank 0 evaluates the held-out set (single, unsharded pass) and reports.
+        test_loader = DataLoader(
+            test_set,
+            batch_size=max(batch_size, 256),
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+        )
 
     base_model = SmallCNN(in_channels=in_channels, num_classes=num_classes).to(device)
     optimizer = torch.optim.Adam(base_model.parameters(), lr=learning_rate)
@@ -763,31 +940,62 @@ def main() -> None:
     else:
         model = base_model
 
-    def save_checkpoint_now(*, epoch_to_resume: int, loss: float | None) -> None:
-        """Rank-0-only atomic checkpoint write (ADR-006 single-writer)."""
-        if not dist_config.is_main or checkpoint_store is None:
-            return
-        blob = _serialize_checkpoint(
-            base_model, optimizer, epoch=epoch_to_resume, step=global_step,
-            world_size=dist_config.world_size,
-        )
+    # Uploads run on one background thread so the GPU keeps training while a
+    # checkpoint travels to storage; measured, a synchronous upload every 100
+    # steps cost about ten points of GPU utilization. One worker keeps them in
+    # order, so ADR-006's blob-then-manifest sequence holds across checkpoints.
+    upload_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="checkpoint")
+    pending_upload: Future[None] | None = None
+
+    def _upload(blob: bytes, step: int, epoch_to_resume: int, loss: float | None) -> None:
+        assert checkpoint_store is not None  # only submitted when configured
         try:
             entry = ckpt.save_checkpoint(
                 checkpoint_store,
                 job_id=job_id,
                 blob=blob,
-                step=global_step,
+                step=step,
                 epoch=epoch_to_resume,
                 world_size=dist_config.world_size,
                 lease_epoch=int(lease_epoch) if lease_epoch.isdigit() else None,
                 loss=loss,
             )
-            log(
-                f"checkpoint: wrote {entry.key} "
-                f"(step={global_step}, resume_epoch={epoch_to_resume})"
-            )
+            log(f"checkpoint: wrote {entry.key} (step={step}, resume_epoch={epoch_to_resume})")
         except Exception as exc:  # noqa: BLE001 - a checkpoint write failure must be honest, not fatal
-            log(f"checkpoint: WRITE FAILED at step {global_step} ({exc}); training continues")
+            log(f"checkpoint: WRITE FAILED at step {step} ({exc}); training continues")
+
+    def save_checkpoint_now(
+        *, epoch_to_resume: int, loss: float | None, essential: bool = False
+    ) -> None:
+        """Rank-0-only atomic checkpoint write (ADR-006 single-writer).
+
+        The snapshot is taken here, on the training thread, so it is exactly
+        the state at this step; only the upload is handed off. If the previous
+        upload is still running, an interim checkpoint is skipped rather than
+        queued (a queue would only grow on a slow link). An ``essential`` one,
+        at the end of an epoch, waits for it instead.
+        """
+        nonlocal pending_upload
+        if not dist_config.is_main or checkpoint_store is None:
+            return
+        if pending_upload is not None and not pending_upload.done():
+            if not essential:
+                log(f"checkpoint: previous upload still running; skipping step {global_step}")
+                return
+            pending_upload.result()
+        blob = _serialize_checkpoint(
+            base_model, optimizer, epoch=epoch_to_resume, step=global_step,
+            world_size=dist_config.world_size,
+        )
+        pending_upload = upload_pool.submit(_upload, blob, global_step, epoch_to_resume, loss)
+
+    def finish_uploads() -> None:
+        """Block until the last checkpoint is stored. Called before reporting
+        completion, so a finished job's final checkpoint is never lost to the
+        container exiting under it."""
+        if pending_upload is not None:
+            pending_upload.result()
+        upload_pool.shutdown(wait=True)
 
     final_loss = float("nan")
     final_test_accuracy = 0.0
@@ -795,8 +1003,12 @@ def main() -> None:
     for epoch in range(start_epoch, epochs + 1):
         if train_sampler is not None:
             train_sampler.set_epoch(epoch)  # reshuffle shards deterministically per epoch
+        if isinstance(train_loader, DeviceBatches):
+            train_loader.set_epoch(epoch)
         model.train()
-        running_loss = 0.0
+        # Summed on the device and read once per epoch, for the same reason as
+        # in _evaluate_accuracy.
+        running_loss_t = torch.zeros((), device=device)
         n_batches = 0
         epoch_t0 = time.monotonic()
         for images, labels in train_loader:
@@ -809,7 +1021,7 @@ def main() -> None:
             loss.backward()  # DDP hooks all-reduce gradients here across ranks
             optimizer.step()
 
-            running_loss += loss.item()
+            running_loss_t += loss.detach()
             n_batches += 1
             global_step += 1
             # Fine-grained checkpoint every N steps so at most N steps of work is
@@ -818,7 +1030,7 @@ def main() -> None:
             if checkpoint_every_n_steps > 0 and global_step % checkpoint_every_n_steps == 0:
                 save_checkpoint_now(epoch_to_resume=epoch, loss=loss.item())
 
-        mean_loss = _epoch_mean_loss(running_loss, n_batches, dist_config, device)
+        mean_loss = _epoch_mean_loss(running_loss_t.item(), n_batches, dist_config, device)
 
         # Only rank 0 evaluates + reports (the model is identical on every rank
         # after gradient sync, so rank 0's eval is the cohort's true accuracy).
@@ -844,7 +1056,7 @@ def main() -> None:
             )
         # End-of-epoch checkpoint: resume position is the *next* epoch, so a
         # resume never re-runs a fully completed epoch.
-        save_checkpoint_now(epoch_to_resume=epoch + 1, loss=mean_loss)
+        save_checkpoint_now(epoch_to_resume=epoch + 1, loss=mean_loss, essential=True)
 
     # Edge case: resumed at start_epoch > epochs (the previous attempt finished
     # every epoch and checkpointed resume_epoch=epochs+1, then died before
@@ -861,6 +1073,8 @@ def main() -> None:
             f"resumed past the final epoch; evaluated the restored model: "
             f"test_accuracy={final_test_accuracy:.4f}"
         )
+
+    finish_uploads()
 
     if dist_config.distributed:
         dist.barrier()  # every rank reaches the end before the group is destroyed
