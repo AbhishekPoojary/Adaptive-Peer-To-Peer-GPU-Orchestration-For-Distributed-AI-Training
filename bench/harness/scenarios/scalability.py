@@ -60,6 +60,23 @@ _PASSES = {
 }
 
 
+def _counter(text: str, name: str) -> float:
+    """A counter's current value from a scrape (0 if not yet incremented)."""
+    for family in text_string_to_metric_families(text):
+        if family.name == name.removesuffix("_total"):
+            for sample in family.samples:
+                if sample.name == name:
+                    return float(sample.value)
+    return 0.0
+
+
+async def _scrape_text(base_url: str) -> str:
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        response = await http.get(f"{base_url}/metrics")
+        response.raise_for_status()
+        return response.text
+
+
 def _histograms(text: str) -> dict[tuple[str, tuple[tuple[str, str], ...]], dict[str, Any]]:
     """Every histogram series as {(name, labels): {count, sum, buckets}}."""
     out: dict[tuple[str, tuple[tuple[str, str], ...]], dict[str, Any]] = {}
@@ -173,6 +190,9 @@ async def run(*, client: BenchClient, fleet: Fleet, config: dict[str, Any]) -> d
         logger.info("fleet at %d agents; settling %.0fs", size, settle)
         await asyncio.sleep(settle)
 
+        declared_before = _counter(
+            await _scrape_text(base_url), "orchestrator_failure_detections_total"
+        )
         before = await _scrape(base_url)
         resources = []
         deadline = time.monotonic() + window
@@ -197,6 +217,12 @@ async def run(*, client: BenchClient, fleet: Fleet, config: dict[str, Any]) -> d
         heartbeats = (requests.get("heartbeat") or {}).get("observations", 0)
 
         timings = [await _placement(client, spec) for _ in range(placements)]
+        # Every agent stays up throughout, so any node declared dead during
+        # this size's window and placements is a false positive.
+        false_failures = int(
+            _counter(await _scrape_text(base_url), "orchestrator_failure_detections_total")
+            - declared_before
+        )
         to_scheduled = [t["submit_to_scheduled_ms"] for t in timings]
         to_leased = [t["scheduled_to_leased_ms"] for t in timings]
 
@@ -207,6 +233,7 @@ async def run(*, client: BenchClient, fleet: Fleet, config: dict[str, Any]) -> d
             "request_handling": {k: v for k, v in requests.items() if v is not None},
             "background_passes": {k: v for k, v in passes.items() if v is not None},
             "placements": placements,
+            "nodes_falsely_declared_dead": false_failures,
             "submit_to_scheduled_ms": {
                 "median": round(statistics.median(to_scheduled), 1),
                 "max": round(max(to_scheduled), 1),

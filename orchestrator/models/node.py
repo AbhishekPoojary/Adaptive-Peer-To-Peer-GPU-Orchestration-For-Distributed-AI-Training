@@ -19,6 +19,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     String,
     func,
 )
@@ -128,6 +129,9 @@ class NodeTelemetrySample(Base):
     """
 
     __tablename__ = "node_telemetry_samples"
+    # Both hot reads -- a heartbeat's previous EWMA and the detector's recent
+    # arrivals -- want one node's newest rows (migration 0013).
+    __table_args__ = (Index("ix_node_telemetry_samples_node_id_ts", "node_id", "ts", "id"),)
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     node_id: Mapped[uuid.UUID] = mapped_column(
