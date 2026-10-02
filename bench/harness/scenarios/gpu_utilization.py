@@ -36,6 +36,10 @@ logger = logging.getLogger("bench.gpu_utilization")
 
 NAME = "gpu_utilization"
 
+#: Every result here is a measurement this harness took; none is a verbatim
+#: copy of the orchestrator's record, so none may carry a null.
+VERBATIM_RESULT_KEYS: frozenset[str] = frozenset()
+
 #: The report's Appendix B target, carried into the artifact as a target.
 REPORT_TARGET_PERCENT = 80.0
 
