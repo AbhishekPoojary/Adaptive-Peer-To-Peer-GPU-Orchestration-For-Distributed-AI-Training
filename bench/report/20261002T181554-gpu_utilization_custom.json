@@ -1,0 +1,110 @@
+{
+  "timestamp_utc": "2026-10-02T18:15:54.932419+00:00",
+  "git_sha": "e0c50bded9a1612fa6518e6d3c9857ac23f9ec25",
+  "hardware": {
+    "cpu": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel (12C/16T)",
+    "gpu": "NVIDIA GeForce RTX 3050 Laptop GPU (4.0 GB)",
+    "ram_gb": 15.63,
+    "os": "Windows 11 (python 3.13.13)"
+  },
+  "scenario": "gpu_utilization_custom",
+  "results": {
+    "report_target_percent": 80.0,
+    "sample_interval_seconds": 0.5,
+    "windows": {
+      "whole_run": "orchestrator RUNNING -> COMPLETED (container start, data load, training, evaluation)",
+      "training_phase": "trainer log 'dataset ready' -> 'training complete' (every epoch and evaluation)"
+    },
+    "runs": [
+      {
+        "label": "intel-scenes-batch64",
+        "job_id": "f68eaa1c-732e-4a4e-a489-61642362c7d8",
+        "spec": {
+          "model": "cnn",
+          "epochs": 5,
+          "batch_size": 64,
+          "learning_rate": 0.001,
+          "world_size": 1,
+          "dataset_id": "aba51be6-bc44-4d00-8e7e-e2fc213c4eb3"
+        },
+        "running_seconds": 39.1,
+        "final_test_accuracy": 0.82,
+        "device": "cuda",
+        "idle_baseline": {
+          "samples": 10,
+          "mean_percent": 0.0,
+          "p10_percent": 0.0,
+          "p50_percent": 0.0,
+          "p90_percent": 0.0,
+          "share_at_or_above_target": 0.0
+        },
+        "whole_run": {
+          "samples": 74,
+          "mean_percent": 73.6,
+          "p10_percent": 0.0,
+          "p50_percent": 99.0,
+          "p90_percent": 100.0,
+          "share_at_or_above_target": 0.689
+        },
+        "training_phase_seconds": 33.6,
+        "training_phase": {
+          "samples": 63,
+          "mean_percent": 86.2,
+          "p10_percent": 47.0,
+          "p50_percent": 99.0,
+          "p90_percent": 100.0,
+          "share_at_or_above_target": 0.81
+        },
+        "training_phase_meets_report_target": true
+      },
+      {
+        "label": "intel-scenes-batch256",
+        "job_id": "e41e4c1f-8de1-455e-861a-8995fd6eb40e",
+        "spec": {
+          "model": "cnn",
+          "epochs": 5,
+          "batch_size": 256,
+          "learning_rate": 0.001,
+          "world_size": 1,
+          "dataset_id": "aba51be6-bc44-4d00-8e7e-e2fc213c4eb3"
+        },
+        "running_seconds": 37.9,
+        "final_test_accuracy": 0.7516666666666667,
+        "device": "cuda",
+        "idle_baseline": {
+          "samples": 10,
+          "mean_percent": 0.0,
+          "p10_percent": 0.0,
+          "p50_percent": 0.0,
+          "p90_percent": 0.0,
+          "share_at_or_above_target": 0.0
+        },
+        "whole_run": {
+          "samples": 72,
+          "mean_percent": 74.5,
+          "p10_percent": 0.0,
+          "p50_percent": 100.0,
+          "p90_percent": 100.0,
+          "share_at_or_above_target": 0.681
+        },
+        "training_phase_seconds": 33.2,
+        "training_phase": {
+          "samples": 63,
+          "mean_percent": 85.1,
+          "p10_percent": 37.0,
+          "p50_percent": 100.0,
+          "p90_percent": 100.0,
+          "share_at_or_above_target": 0.778
+        },
+        "training_phase_meets_report_target": true
+      }
+    ]
+  },
+  "limitations": {
+    "load_term_differentiable": false,
+    "latency_term_differentiable": false,
+    "notes": [
+      "All 1 agents ran on one physical host (1 distinct hostname). psutil.cpu_percent() and NVML utilization are host/device-wide, so every node reports the same load truthfully; RTT is loopback for all of them. The L and D terms of S_i are therefore untested here \u2014 only the reliability term R is differentiated (ADR-013)."
+    ]
+  }
+}

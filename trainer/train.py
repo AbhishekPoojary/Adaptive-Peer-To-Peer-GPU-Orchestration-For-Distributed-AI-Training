@@ -652,6 +652,250 @@ def _build_custom_datasets(
     return train_set, test_set, 3, num_classes
 
 
+# --- Custom datasets: decode once, train many times -----------------------------
+#
+# The DataLoader path decodes every JPEG, resizes it and converts it on the CPU,
+# every epoch. Measured inside the trainer image on a 14k-image upload: 4,231
+# images/s from 2 workers against 2,695 images/s the RTX 3050 can train -- enough
+# here, with 1.6x to spare, and not enough for a peer whose GPU is twice as fast.
+# A bigger dataset makes it no better: the work per epoch grows with it.
+#
+# So each image is decoded exactly once, in parallel on every core, into a
+# uint8 array file beside the extracted dataset (12 KB per 64 px image). After
+# that the CPU does nothing per image but copy bytes. The array goes to GPU
+# memory when it fits, and is otherwise streamed from the memory-mapped file by
+# a background thread, so a dataset larger than RAM still trains.
+
+#: Share of the GPU's free memory the decoded dataset may occupy. The rest is
+#: for the model, activations, and the optimizer, which SmallCNN keeps small.
+_DEVICE_DATA_BUDGET = 0.4
+
+
+def _decode_one(path: str) -> Any:
+    """One image as a 3×S×S uint8 array, matching the DataLoader transform:
+    RGB, resized to the fixed square with bilinear filtering."""
+    import numpy as np
+    from PIL import Image
+
+    with Image.open(path) as image:
+        rgb = image.convert("RGB").resize(
+            (_CUSTOM_IMAGE_SIZE, _CUSTOM_IMAGE_SIZE), Image.BILINEAR
+        )
+        return np.asarray(rgb, dtype=np.uint8).transpose(2, 0, 1)
+
+
+def _decode_split(samples: list[tuple[str, int]], destination: str) -> None:
+    """Decode ``samples`` into ``destination`` (N×3×S×S uint8) and its labels."""
+    import multiprocessing
+
+    import numpy as np
+
+    count = len(samples)
+    shape = (count, 3, _CUSTOM_IMAGE_SIZE, _CUSTOM_IMAGE_SIZE)
+    images = np.lib.format.open_memmap(destination + ".images.npy", mode="w+",
+                                       dtype=np.uint8, shape=shape)
+    labels = np.asarray([label for _path, label in samples], dtype=np.int64)
+    np.save(destination + ".labels.npy", labels)
+    paths = [path for path, _label in samples]
+    workers = max(1, min(16, (os.cpu_count() or 2) - 1))
+    report_every = max(1, count // 10)
+    t0 = time.monotonic()
+    with multiprocessing.Pool(workers) as pool:
+        for index, array in enumerate(pool.imap(_decode_one, paths, chunksize=64)):
+            images[index] = array
+            if (index + 1) % report_every == 0:
+                _log(f"decoding: {index + 1}/{count} images "
+                     f"({(index + 1) / (time.monotonic() - t0):.0f}/s)")
+    images.flush()
+    del images
+
+
+def _decoded_custom_dataset(root: str, train_set: Any, test_set: Any) -> dict[str, Any]:
+    """The decoded arrays for this extracted dataset, building them if needed.
+
+    Cached beside the extraction, which is keyed by the archive's digest, so a
+    later job on the same dataset on this node skips decoding entirely. Built in
+    a staging directory and renamed into place, like the extraction itself, so
+    a crash or a racing rank never leaves a half-written cache that a later run
+    would trust.
+    """
+    import shutil
+    import tempfile
+
+    import numpy as np
+
+    cache = os.path.join(root, f".decoded-{_CUSTOM_IMAGE_SIZE}px")
+    if not os.path.isdir(cache):
+        staging = tempfile.mkdtemp(prefix=".decoding-", dir=root)
+        try:
+            t0 = time.monotonic()
+            _log(f"decoding {len(train_set) + len(test_set)} images once for every "
+                 "later epoch and job...")
+            _decode_split(train_set.samples, os.path.join(staging, "train"))
+            _decode_split(test_set.samples, os.path.join(staging, "test"))
+            try:
+                os.rename(staging, cache)
+            except OSError:
+                if not os.path.isdir(cache):
+                    raise
+                _log("another rank decoded this dataset first; using it")
+            _log(f"decoded in {time.monotonic() - t0:.1f}s")
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+    else:
+        _log("reusing the decoded copy of this dataset")
+
+    def load(split: str) -> tuple[Any, Any]:
+        images = np.load(os.path.join(cache, f"{split}.images.npy"), mmap_mode="r")
+        labels = np.load(os.path.join(cache, f"{split}.labels.npy"))
+        return images, labels
+
+    train_images, train_labels = load("train")
+    test_images, test_labels = load("test")
+    return {
+        "train": (train_images, train_labels),
+        "test": (test_images, test_labels),
+    }
+
+
+class HostBatches(DeviceBatches):
+    """:class:`DeviceBatches` for data that stays in host memory or on disk.
+
+    Each batch is gathered from the (memory-mapped) uint8 array, pinned, copied
+    to the device without blocking, and normalised there. A background thread
+    prepares the next batches while the GPU trains on the current one, so the
+    copy overlaps the compute. Indices within a batch are sorted before the
+    gather: the same examples in a different order within one batch changes
+    nothing about the gradient, and sorted reads are far kinder to a dataset
+    that does not fit in the page cache.
+    """
+
+    _PREFETCH = 3
+
+    def __init__(
+        self,
+        images: Any,
+        labels: Any,
+        *,
+        device: torch.device,
+        batch_size: int,
+        mean: tuple[float, ...],
+        std: tuple[float, ...],
+        shuffle: bool,
+        rank: int = 0,
+        world_size: int = 1,
+        seed: int = 0,
+    ) -> None:
+        self.host_images = images
+        self.host_labels = labels
+        self.device = device
+        self.batch_size = batch_size
+        channels = images.shape[1]
+        self.mean = torch.tensor(mean, device=device).view(1, channels, 1, 1)
+        self.std = torch.tensor(std, device=device).view(1, channels, 1, 1)
+        self.augment = False
+        self.shuffle = shuffle
+        self.rank = rank
+        self.world_size = world_size
+        self.seed = seed
+        self.epoch = 0
+        # _order() and __len__ read the example count from here.
+        self.images = torch.empty((images.shape[0], 0))
+
+    def _gather(self, index: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        import numpy as np
+
+        picked = np.sort(index.numpy())
+        x = torch.from_numpy(np.ascontiguousarray(self.host_images[picked]))
+        y = torch.from_numpy(self.host_labels[picked])
+        if self.device.type == "cuda":
+            x, y = x.pin_memory(), y.pin_memory()
+        return x, y
+
+    def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+        import queue
+        import threading
+
+        generator = torch.Generator()
+        generator.manual_seed(self.seed * 1_000_003 + self.epoch)
+        order = self._order(generator)
+        batches = [order[i : i + self.batch_size] for i in range(0, order.numel(), self.batch_size)]
+        ready: queue.Queue[Any] = queue.Queue(maxsize=self._PREFETCH)
+        done = object()
+
+        def produce() -> None:
+            try:
+                for index in batches:
+                    ready.put(self._gather(index))
+                ready.put(done)
+            except BaseException as exc:  # surfaced on the training thread
+                ready.put(exc)
+
+        threading.Thread(target=produce, daemon=True, name="batch-prefetch").start()
+        while True:
+            item = ready.get()
+            if item is done:
+                return
+            if isinstance(item, BaseException):
+                raise item
+            x, y = item
+            x = x.to(self.device, non_blocking=True).float().div_(255.0)
+            yield (x - self.mean) / self.std, y.to(self.device, non_blocking=True)
+
+
+def _custom_batches(
+    root: str,
+    train_set: Any,
+    test_set: Any,
+    *,
+    device: torch.device,
+    batch_size: int,
+    dist_config: DistConfig,
+) -> tuple[DeviceBatches, DeviceBatches]:
+    """Batches for an uploaded dataset: on the GPU if it fits, else streamed."""
+    decoded = _decoded_custom_dataset(root, train_set, test_set)
+    (train_images, train_labels), (test_images, test_labels) = decoded["train"], decoded["test"]
+    total_bytes = train_images.nbytes + test_images.nbytes
+    common = {"mean": _CUSTOM_MEAN, "std": _CUSTOM_STD}
+
+    fits = False
+    if device.type == "cuda":
+        free_bytes, _total = torch.cuda.mem_get_info(device)
+        fits = total_bytes <= _DEVICE_DATA_BUDGET * free_bytes
+    if fits:
+        _log(f"data: {total_bytes / 2**20:.0f} MB decoded, held on the GPU")
+
+        def to_device(array: Any) -> torch.Tensor:
+            # np.array copies out of the read-only memory map; from_numpy on
+            # the map itself would hand torch a buffer it must not write to.
+            import numpy as np
+
+            return torch.from_numpy(np.array(array)).to(device)
+
+        train = DeviceBatches(
+            to_device(train_images), to_device(train_labels), batch_size=batch_size,
+            augment=False, shuffle=True, rank=dist_config.rank,
+            world_size=dist_config.world_size, **common,
+        )
+        test = DeviceBatches(
+            to_device(test_images), to_device(test_labels),
+            batch_size=max(batch_size, 256), augment=False, shuffle=False, **common,
+        )
+        return train, test
+
+    _log(f"data: {total_bytes / 2**20:.0f} MB decoded, streamed from disk "
+         "(larger than the GPU budget)")
+    train_host = HostBatches(
+        train_images, train_labels, device=device, batch_size=batch_size, shuffle=True,
+        rank=dist_config.rank, world_size=dist_config.world_size, **common,
+    )
+    test_host = HostBatches(
+        test_images, test_labels, device=device, batch_size=max(batch_size, 256),
+        shuffle=False, **common,
+    )
+    return train_host, test_host
+
+
 def _epoch_mean_loss(
     running_loss: float, n_batches: int, dist_config: DistConfig, device: torch.device
 ) -> float:
@@ -857,12 +1101,18 @@ def main() -> None:
     )
     train_loader: DataLoader | DeviceBatches
     test_loader: DataLoader | DeviceBatches
-    device_resident = (
-        dataset_name != "custom"
-        and device.type == "cuda"
-        and os.environ.get("DEVICE_RESIDENT_DATA", "1") != "0"
-    )
-    if device_resident:
+    fast_path = os.environ.get("DEVICE_RESIDENT_DATA", "1") != "0"
+    if fast_path and dataset_name == "custom":
+        train_loader, test_loader = _custom_batches(
+            root,
+            train_set,
+            test_set,
+            device=device,
+            batch_size=batch_size,
+            dist_config=dist_config,
+        )
+        train_sampler = None
+    elif fast_path and device.type == "cuda":
         train_loader, test_loader = _device_batches(
             dataset_name,
             train_set,
