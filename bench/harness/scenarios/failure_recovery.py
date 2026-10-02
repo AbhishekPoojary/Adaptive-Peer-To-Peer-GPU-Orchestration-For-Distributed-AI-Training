@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 from bench.harness.client import BenchClient
@@ -58,6 +59,62 @@ NAME = "failure_recovery"
 VERBATIM_RESULT_KEYS = frozenset({"event_timeline"})
 
 _TERMINAL = {"COMPLETED", "FAILED", "CANCELLED"}
+
+#: The project report's Appendix B targets, carried into the artifact so a
+#: reader compares against the stated goal rather than a remembered one. They
+#: are targets, not measurements, and the artifact keeps them apart.
+REPORT_TARGETS_SECONDS = {"detection": 5.0, "recovery": 15.0}
+
+
+def _parse_ts(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _stage_seconds(
+    events: list[dict[str, Any]], *, killed_at: datetime, clock_offset: float
+) -> dict[str, Any]:
+    """Split recovery into the stages the orchestrator itself recorded.
+
+    Event timestamps come from the orchestrator's clock and ``killed_at`` from
+    this host's, so each difference is corrected by the measured offset between
+    them. Every stage is measured from the kill, which is the moment the peer
+    was really lost -- not from the last heartbeat, which would flatter
+    detection by however long the peer had already been silent.
+    """
+
+    def since_kill(event: dict[str, Any]) -> float:
+        delta = (_parse_ts(event["ts"]) - killed_at).total_seconds() - clock_offset
+        return round(delta, 2)
+
+    after = [e for e in events if _parse_ts(e["ts"]).timestamp() - clock_offset
+             >= killed_at.timestamp()]
+    detected = next((e for e in after if e["to_state"] == "REASSIGNED"), None)
+    if detected is None:
+        raise RuntimeError("no REASSIGNED event after the kill; nothing was detected")
+    later = after[after.index(detected):]
+    leased = next((e for e in later if e["to_state"] == "LEASED"), None)
+    running = next((e for e in later if e["to_state"] == "RUNNING"), None)
+    resumed = next(
+        (e for e in later if "resumed_from_step" in (e.get("detail") or {})), None
+    )
+    if leased is None or running is None:
+        raise RuntimeError("the job was reassigned but never ran again")
+
+    stages: dict[str, Any] = {
+        # Kill -> the detector declaring the peer gone and requeueing its job.
+        "detection_seconds": since_kill(detected),
+        # Kill -> a surviving peer holding the new lease.
+        "relet_seconds": since_kill(leased),
+        # Kill -> the replacement trainer actually running.
+        "training_restarted_seconds": since_kill(running),
+        "resumed_from_checkpoint": resumed is not None,
+    }
+    if resumed is not None:
+        # Kill -> the replacement trainer having loaded the dead peer's
+        # checkpoint: the point at which the lost work is genuinely recovered.
+        stages["checkpoint_resume_seconds"] = since_kill(resumed)
+        stages["resumed_from_step"] = resumed["detail"]["resumed_from_step"]
+    return stages
 
 
 async def run(
@@ -81,7 +138,9 @@ async def run(
         agent_b.node_id: agent_b,
     }
 
+    submit_started = datetime.now(UTC)
     job = await client.submit(spec=spec, scheduler_name=scheduler)
+    submit_finished = datetime.now(UTC)
     job_id = job["id"]
     logger.info("submitted job %s under %s", job_id[:8], scheduler)
 
@@ -116,6 +175,7 @@ async def run(
         await asyncio.sleep(1.0)
 
     killed_at = time.monotonic()
+    killed_at_utc = datetime.now(UTC)
     fleet.kill_agent(victim)
     # Take the trainer down with the agent. On a real peer that vanishes — lid
     # closed, power lost — the container goes with the machine. Here only the
@@ -146,6 +206,18 @@ async def run(
             f"that loses the result is not a recovery"
         )
 
+    # The orchestrator stamped QUEUED while the submit request was in flight,
+    # so its clock minus the request's midpoint estimates the offset between
+    # the two clocks (the orchestrator runs in a container whose clock can
+    # drift from the host's). Half the round trip bounds the error.
+    queued = next(e for e in completed["events"] if e["to_state"] == "QUEUED")
+    midpoint = submit_started + (submit_finished - submit_started) / 2
+    clock_offset = (_parse_ts(queued["ts"]) - midpoint).total_seconds()
+    clock_offset_bound = (submit_finished - submit_started).total_seconds() / 2
+    stages = _stage_seconds(
+        completed["events"], killed_at=killed_at_utc, clock_offset=clock_offset
+    )
+
     final_node = completed.get("scheduled_node_id")
     survivor = by_node.get(final_node)
     return {
@@ -156,6 +228,11 @@ async def run(
         # The headline: real wall-clock from the peer vanishing to a real
         # completed job with a real accuracy.
         "recovery_seconds": round(recovery_seconds, 2),
+        # Where that time went, each measured from the kill.
+        "stages": stages,
+        "report_targets_seconds": REPORT_TARGETS_SECONDS,
+        "clock_offset_seconds": round(clock_offset, 3),
+        "clock_offset_error_bound_seconds": round(clock_offset_bound, 3),
         "killed_node_id": original_node,
         "killed_node_name": victim.node_name,
         "completed_node_id": final_node,

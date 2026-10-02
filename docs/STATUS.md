@@ -207,8 +207,8 @@ conflict on what should be a first insert.
   `time.sleep` standing in for work. `scripts/check_no_fake_data.sh` enforces
   what it mechanically can. See `CONTRIBUTING.md` for the full rules.
 - **Every ADR that turned out to be incomplete has an addendum** rather than a
-  quiet edit, so the reasoning trail stays honest. All ten:
-  `ADR-003-addendum`, `ADR-004-addendum`, `ADR-005-addendum`,
+  quiet edit, so the reasoning trail stays honest. All eleven:
+  `ADR-003-addendum`, `ADR-004-addendum`, `ADR-004-addendum-2`, `ADR-005-addendum`,
   `ADR-005-addendum-2`, `ADR-006-addendum`, `ADR-006-addendum-2`,
   `ADR-007-addendum`, `ADR-009-addendum`, `ADR-012-addendum`,
   `ADR-012-addendum-2`.

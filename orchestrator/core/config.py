@@ -254,12 +254,16 @@ class Settings(BaseSettings):
 
     # --- Failure detection (ADR-004, M6 φ-accrual detector) ---
     # How often the detector loop evaluates every ONLINE node's liveness. Kept
-    # short (1 s) so detection latency is dominated by the 5 s floor, not the
-    # tick; this is the shipped value, not a demo-only tuning.
-    failure_detector_interval_seconds: float = 1.0
+    # well under the floor so detection latency is dominated by the floor, not
+    # the tick; this is the shipped value, not a demo-only tuning.
+    failure_detector_interval_seconds: float = 0.5
     # Hard floor: no node is ever declared failed with less than this many
     # seconds of silence, regardless of what the φ math would allow (ADR-004).
-    heartbeat_floor_seconds: float = 5.0
+    # 3 s, down from 5 s, alongside the agent's 1 s heartbeat: three missed
+    # beats rather than two and a half, and detection inside the report's 5 s
+    # target. φ still raises the effective threshold for a jittery node; this
+    # only bounds how early a steady one can be declared (ADR-004 addendum 2).
+    heartbeat_floor_seconds: float = 3.0
     # φ suspicion threshold to declare a node failed. φ = -log10(P(gap this late
     # under the node's own recent interval distribution)); 3.0 ≈ "≤0.1% likely".
     phi_accrual_threshold: float = 3.0

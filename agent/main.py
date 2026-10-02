@@ -33,7 +33,7 @@ import os
 import sys
 import time
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -335,6 +335,19 @@ class ExecutingLease:
 
     held: HeldLease
     task: asyncio.Task[ExecutionResult] | None
+    #: Set by the execution task the moment the trainer is really running.
+    #: The orchestrator records LEASED -> RUNNING on a lease's first renewal,
+    #: and renewal is otherwise timer-driven (``lease_ttl - margin`` after the
+    #: claim, ~10 s with a 15 s TTL) -- so without this, "training started" was
+    #: stamped seconds after training had in fact started, and every recovery
+    #: measurement silently included that bookkeeping lag.
+    launched: asyncio.Event = field(default_factory=asyncio.Event)
+    #: Whether the launch-time renewal has been sent. One-shot: later renewals
+    #: go back to the timer.
+    start_reported: bool = False
+
+    def start_report_due(self) -> bool:
+        return self.task is not None and self.launched.is_set() and not self.start_reported
 
 
 def _node_has_gpu() -> bool:
@@ -512,6 +525,7 @@ async def _service_lease(
             has_gpu,
             job_spec,
         )
+        launched = asyncio.Event()
         task: asyncio.Task[ExecutionResult] | None = asyncio.create_task(
             run_lease_execution(
                 docker_client=docker_client,
@@ -526,9 +540,10 @@ async def _service_lease(
                 launch_config=launch_config,
                 rendezvous=rendezvous,
                 unsandboxed=docker_client is None,
+                launched=launched,
             )
         )
-        return ExecutingLease(held=held, task=task)
+        return ExecutingLease(held=held, task=task, launched=launched)
 
     held = executing.held
     task = executing.task
@@ -590,7 +605,8 @@ async def _service_lease(
         )
         return None
 
-    if held.renewal_due(margin_seconds=renew_margin_seconds):
+    start_report = executing.start_report_due()
+    if start_report or held.renewal_due(margin_seconds=renew_margin_seconds):
         try:
             renewed = await renew_lease(
                 client,
@@ -600,6 +616,8 @@ async def _service_lease(
                 access_token=access_token,
             )
             held.expires_at_ts = datetime.fromisoformat(renewed["expires_at"]).timestamp()
+            if start_report:
+                executing.start_reported = True
             logger.info(
                 "renewed lease id=%s epoch=%d (new expiry=%s)%s",
                 held.lease_id,
@@ -743,7 +761,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Directory holding this node's persisted identity",
     )
     parser.add_argument(
-        "--heartbeat-interval-seconds", type=float, default=2.0, help="Heartbeat cadence"
+        "--heartbeat-interval-seconds",
+        type=float,
+        default=1.0,
+        # 1 s rather than 2 s: the orchestrator's detector needs a few missed
+        # beats before it may act, so the cadence sets the floor on detection
+        # time (ADR-004 addendum 2). It also sets how quickly an idle node
+        # notices an offered lease, since claims ride the heartbeat loop.
+        help="Heartbeat cadence",
     )
     parser.add_argument(
         "--rtt-ewma-alpha",

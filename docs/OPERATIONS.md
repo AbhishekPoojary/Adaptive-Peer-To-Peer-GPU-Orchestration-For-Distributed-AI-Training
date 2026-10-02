@@ -218,7 +218,7 @@ Notes:
   would not describe the code that ran. `--allow-dirty` marks the artifact
   `provisional` instead of lying about it.
 - Runs take minutes, not seconds: they include real training and real failure
-  detection (which has a 5 s floor per ADR-004).
+  detection (which has a 3 s floor per ADR-004 addendum 2).
 - Agents are started as real subprocesses with temporary state directories.
   `--keep-workdir` preserves their logs for debugging.
 - A run that cannot complete its measurements writes **no artifact** and exits

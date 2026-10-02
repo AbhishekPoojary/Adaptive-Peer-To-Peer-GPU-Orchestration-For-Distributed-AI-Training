@@ -151,6 +151,7 @@ async def run_lease_execution(
     launch_config: TrainerLaunchConfig,
     rendezvous: RendezvousSpec | None = None,
     unsandboxed: bool = False,
+    launched: asyncio.Event | None = None,
 ) -> ExecutionResult:
     """Launch this lease's trainer and run it to completion, forwarding its
     real output over the WebSocket stream as it happens.
@@ -160,6 +161,10 @@ async def run_lease_execution(
     (created here if absent). ``None``/``world_size == 1`` is the M4
     single-process path. Raises :class:`DockerLaunchError` if the container
     itself never started.
+
+    ``launched`` is set once the trainer is really running, so the caller can
+    tell the orchestrator training has started at the moment it did rather
+    than at the next timer-driven lease renewal.
 
     ``unsandboxed`` (ADR-007 addendum) runs the trainer as a child process
     instead, for a peer with no Docker. Everything below the launch — log
@@ -205,6 +210,8 @@ async def run_lease_execution(
         rendezvous.rank if rendezvous is not None else 0,
         rendezvous.world_size if rendezvous is not None else 1,
     )
+    if launched is not None:
+        launched.set()
 
     ws_url = stream_url(
         http_to_ws_base(orchestrator_http_base),

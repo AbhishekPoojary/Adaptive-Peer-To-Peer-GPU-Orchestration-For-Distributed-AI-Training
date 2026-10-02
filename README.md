@@ -538,7 +538,7 @@ measurements writes **nothing** rather than publishing a report with a hole in
 it.
 
 Expect minutes per run: real training plus real failure detection, which has a
-5 s floor by design (ADR-004). See `docs/OPERATIONS.md`.
+3 s floor by design (ADR-004 addendum 2). See `docs/OPERATIONS.md`.
 
 ## Ground rules
 
