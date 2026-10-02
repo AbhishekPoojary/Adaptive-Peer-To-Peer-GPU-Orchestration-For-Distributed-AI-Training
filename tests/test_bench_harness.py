@@ -219,13 +219,16 @@ def test_shipped_scenario_configs_are_loadable_and_complete() -> None:
     for name in SCENARIOS:
         config = load_scenario(name)
         # One job_spec, or a list of labelled configs each carrying one.
-        specs = (
-            [config["job_spec"]]
+        entries = (
+            [{"job_spec": config["job_spec"]}]
             if "job_spec" in config
-            else [entry["job_spec"] for entry in config.get("configs", [])]
+            else list(config.get("configs", []))
         )
-        assert specs, f"{name} has no job_spec"
-        required = ("dataset", "model", "epochs", "batch_size", "learning_rate", "world_size")
-        for spec in specs:
+        assert entries, f"{name} has no job_spec"
+        required = ("model", "epochs", "batch_size", "learning_rate", "world_size")
+        for entry in entries:
+            spec = entry["job_spec"]
             for key in required:
                 assert key in spec, f"{name}.job_spec is missing {key}"
+            # A built-in dataset by name, or an uploaded one resolved at run time.
+            assert "dataset" in spec or "dataset_name" in entry, f"{name} names no dataset"

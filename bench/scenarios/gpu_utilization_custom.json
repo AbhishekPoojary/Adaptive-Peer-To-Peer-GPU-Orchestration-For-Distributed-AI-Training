@@ -1,0 +1,23 @@
+{
+  "_description": [
+    "GPU utilization while training an uploaded (custom) dataset -- the main",
+    "use case. Same method as gpu_utilization. The dataset is referenced by its",
+    "upload name, resolved at run time; this deployment's is the Intel scenes",
+    "set (6 classes, ~17k images, shrunk to 64 px in the browser on upload)."
+  ],
+  "configs": [
+    {
+      "label": "intel-scenes-batch64",
+      "dataset_name": "test1",
+      "job_spec": {"model": "cnn", "epochs": 5, "batch_size": 64,
+                   "learning_rate": 0.001, "world_size": 1}
+    },
+    {
+      "label": "intel-scenes-batch256",
+      "dataset_name": "test1",
+      "job_spec": {"model": "cnn", "epochs": 5, "batch_size": 256,
+                   "learning_rate": 0.001, "world_size": 1}
+    }
+  ],
+  "job_timeout_seconds": 3600
+}

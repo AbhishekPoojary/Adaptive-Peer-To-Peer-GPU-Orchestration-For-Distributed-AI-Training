@@ -49,6 +49,8 @@ SCENARIOS = {
     reliability_placement.NAME: reliability_placement,
     failure_recovery.NAME: failure_recovery,
     gpu_utilization.NAME: gpu_utilization,
+    # Same measurement over an uploaded dataset; only the config differs.
+    "gpu_utilization_custom": gpu_utilization,
 }
 
 logger = logging.getLogger("bench")

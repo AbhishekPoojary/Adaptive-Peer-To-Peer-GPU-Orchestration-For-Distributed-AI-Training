@@ -174,11 +174,13 @@ async def run(
 
     runs = []
     for entry in config["configs"]:
-        runs.append(
-            await _measure_one(
-                client, label=str(entry["label"]), spec=dict(entry["job_spec"]), timeout=timeout
-            )
-        )
+        spec = dict(entry["job_spec"])
+        # An uploaded dataset is named in the config and resolved here, since
+        # its id is specific to this deployment.
+        if "dataset_name" in entry:
+            spec["dataset_id"] = await client.dataset_id(str(entry["dataset_name"]))
+        label = str(entry["label"])
+        runs.append(await _measure_one(client, label=label, spec=spec, timeout=timeout))
     return {
         "report_target_percent": REPORT_TARGET_PERCENT,
         "sample_interval_seconds": _SAMPLE_SECONDS,

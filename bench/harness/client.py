@@ -101,6 +101,21 @@ class BenchClient:
         jobs = (await self._get("/jobs"))["jobs"]
         return [j for j in jobs if j["state"] not in ("COMPLETED", "FAILED", "CANCELLED")]
 
+    async def dataset_id(self, name: str) -> str:
+        """The id of the uploaded dataset called ``name``.
+
+        Scenarios name datasets rather than embedding ids, which differ per
+        deployment. A missing name is an error, not a skip: a run that
+        silently measured a different dataset would be worse than none.
+        """
+        body = await self._get("/datasets")
+        for dataset in body["datasets"]:
+            if dataset["name"] == name:
+                return str(dataset["id"])
+        raise OrchestratorError(
+            f"no uploaded dataset named {name!r}; upload it on the Datasets page first"
+        )
+
     async def job(self, job_id: str) -> dict[str, Any]:
         return dict(await self._get(f"/jobs/{job_id}"))
 
