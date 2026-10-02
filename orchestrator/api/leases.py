@@ -328,10 +328,30 @@ def _bearer_token(authorization: str | None, settings: Settings) -> tuple[str, s
         ) from exc
 
 
+def _byte_range(header: str | None, size: int | None) -> tuple[int, int] | None:
+    """An inclusive (first, last) from ``Range: bytes=a-b`` / ``bytes=a-``.
+
+    Only the single-range forms a downloader sends; anything else, or a range
+    that cannot be satisfied, is answered with the whole object (a 200 is
+    always a correct reply to a Range request).
+    """
+    if not header or size is None or not header.startswith("bytes="):
+        return None
+    first_text, _, last_text = header[6:].partition("-")
+    if not first_text.isdigit() or (last_text and not last_text.isdigit()):
+        return None
+    first = int(first_text)
+    last = min(int(last_text), size - 1) if last_text else size - 1
+    if first > last:
+        return None
+    return first, last
+
+
 @router.get("/leases/{lease_id}/dataset")
 async def read_lease_dataset(
     lease_id: uuid.UUID,
     authorization: str | None = Header(default=None),
+    range_header: str | None = Header(default=None, alias="Range"),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings_dep),
 ) -> StreamingResponse:
@@ -373,9 +393,19 @@ async def read_lease_dataset(
 
     store = DatasetObjectStore(settings)
     size = await asyncio.to_thread(store.head_size_bytes, key=object_key)
-    headers = {"Content-Length": str(size)} if size is not None else {}
+    # Byte ranges let the trainer download a large archive as many short
+    # requests: a tunnel cuts any single request after a minute or two (the
+    # same limit that made uploads chunked), and a failed piece is retried
+    # alone instead of restarting a multi-gigabyte download.
+    span = _byte_range(range_header, size)
+    headers: dict[str, str] = {"Accept-Ranges": "bytes"}
+    if span is not None:
+        headers["Content-Length"] = str(span[1] - span[0] + 1)
+        headers["Content-Range"] = f"bytes {span[0]}-{span[1]}/{size}"
+    elif size is not None:
+        headers["Content-Length"] = str(size)
     try:
-        chunks = store.iter_object(key=object_key)
+        chunks = store.iter_object(key=object_key, byte_range=span)
         first = await asyncio.to_thread(next, chunks, b"")
     except ObjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail="the dataset archive is missing") from exc
@@ -386,7 +416,12 @@ async def read_lease_dataset(
         yield first
         yield from chunks
 
-    return StreamingResponse(body(), media_type="application/zip", headers=headers)
+    return StreamingResponse(
+        body(),
+        status_code=206 if span is not None else 200,
+        media_type="application/zip",
+        headers=headers,
+    )
 
 
 async def _checkpoint_grant(

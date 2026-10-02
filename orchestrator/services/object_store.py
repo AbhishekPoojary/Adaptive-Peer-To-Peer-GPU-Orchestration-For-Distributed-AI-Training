@@ -191,17 +191,26 @@ class _BucketStore:
         size = head.get("ContentLength")
         return int(size) if size is not None else None
 
-    def iter_object(self, *, key: str, chunk_bytes: int = 1024 * 1024):  # type: ignore[no-untyped-def]
+    def iter_object(  # type: ignore[no-untyped-def]
+        self,
+        *,
+        key: str,
+        chunk_bytes: int = 1024 * 1024,
+        byte_range: tuple[int, int] | None = None,
+    ):
         """Yield an object's bytes in chunks, for streaming to a client.
 
         A synchronous generator: Starlette runs it in a threadpool, so a large
         download does not block the event loop even though boto3 is blocking.
+        ``byte_range`` is an inclusive ``(first, last)`` pair, read straight
+        from storage rather than skipped past.
         """
         import botocore.exceptions
 
         client = self._get_client()
+        extra = {"Range": f"bytes={byte_range[0]}-{byte_range[1]}"} if byte_range else {}
         try:
-            response = client.get_object(Bucket=self._bucket, Key=key)
+            response = client.get_object(Bucket=self._bucket, Key=key, **extra)
         except botocore.exceptions.ClientError as exc:
             code = exc.response.get("Error", {}).get("Code", "")
             if code in ("NoSuchKey", "404", "NoSuchBucket"):

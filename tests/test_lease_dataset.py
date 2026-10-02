@@ -44,10 +44,14 @@ class StubDatasetBucket:
         blob = type(self).objects.get(key)
         return len(blob) if blob is not None else None
 
-    def iter_object(self, *, key: str, chunk_bytes: int = 1024 * 1024):  # type: ignore[no-untyped-def]
+    def iter_object(  # type: ignore[no-untyped-def]
+        self, *, key: str, chunk_bytes: int = 1024 * 1024, byte_range=None
+    ):
         blob = type(self).objects.get(key)
         if blob is None:
             raise ObjectNotFoundError(key)
+        if byte_range is not None:
+            blob = blob[byte_range[0] : byte_range[1] + 1]
         for i in range(0, len(blob), 1000):
             yield blob[i : i + 1000]
 
@@ -149,3 +153,20 @@ async def test_a_deleted_dataset_is_404(api_client: AsyncClient, session: AsyncS
         headers=auth_headers(claim["checkpoint_token"]),
     )
     assert resp.status_code == 404
+
+
+async def test_byte_ranges_are_served(api_client: AsyncClient, session: AsyncSession) -> None:
+    _reg, claim, _dataset = await _claim_custom_job(api_client, session)
+    url = f"/leases/{claim['lease']['id']}/dataset"
+    headers = auth_headers(claim["checkpoint_token"])
+
+    piece = await api_client.get(url, headers={**headers, "Range": "bytes=100-2099"})
+    assert piece.status_code == 206
+    assert piece.content == ARCHIVE[100:2100]
+    assert piece.headers["content-range"] == f"bytes 100-2099/{len(ARCHIVE)}"
+
+    tail = await api_client.get(url, headers={**headers, "Range": f"bytes={len(ARCHIVE) - 10}-"})
+    assert tail.status_code == 206 and tail.content == ARCHIVE[-10:]
+
+    beyond = await api_client.get(url, headers={**headers, "Range": "bytes=999999999-"})
+    assert beyond.status_code == 200 and beyond.content == ARCHIVE  # unsatisfiable: whole object

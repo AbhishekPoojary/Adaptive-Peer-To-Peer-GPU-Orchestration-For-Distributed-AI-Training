@@ -485,8 +485,11 @@ def _to_rgb(image: Any) -> Any:
     return image.convert("RGB")
 
 
-#: Read size when streaming the archive down and hashing it.
-_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+#: One ranged request's worth. Small enough that a slow tunnel (340 KB/s was
+#: measured) finishes a piece in well under the minute it allows a request.
+_DOWNLOAD_PIECE_BYTES = 8 * 1024 * 1024
+#: Tries per piece before the download, and so the job, is given up on.
+_DOWNLOAD_ATTEMPTS = 5
 
 
 def _download_and_verify(url: str, *, expected_sha256: str, destination: str) -> None:
@@ -503,18 +506,61 @@ def _download_and_verify(url: str, *, expected_sha256: str, destination: str) ->
 
     digest = hashlib.sha256()
     downloaded = 0
-    request = urllib.request.Request(url)
     # The lease token goes only to the orchestrator's own address; a presigned
     # storage URL needs none, and must never be handed a credential.
     api = os.environ.get("CHECKPOINT_API_URL", "").rstrip("/")
     token = os.environ.get("CHECKPOINT_TOKEN", "")
-    if api and token and url.startswith(api + "/"):
-        request.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(request) as response, open(destination, "wb") as sink:
-        while chunk := response.read(_DOWNLOAD_CHUNK_BYTES):
-            digest.update(chunk)
-            sink.write(chunk)
-            downloaded += len(chunk)
+    headers = (
+        {"Authorization": f"Bearer {token}"}
+        if api and token and url.startswith(api + "/")
+        else {}
+    )
+
+    # In pieces: a tunnel cuts any single request after a minute or two, and a
+    # 39 MB archive over one already took 116 s. Each piece is one short
+    # request, retried on its own if it fails; the digest is fed in order, so
+    # the integrity check below covers every byte exactly as before.
+    total: int | None = None
+    t0 = time.monotonic()
+    next_report = 0.1
+    with open(destination, "wb") as sink:
+        while total is None or downloaded < total:
+            last = downloaded + _DOWNLOAD_PIECE_BYTES - 1
+            for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
+                request = urllib.request.Request(
+                    url, headers={**headers, "Range": f"bytes={downloaded}-{last}"}
+                )
+                try:
+                    with urllib.request.urlopen(request, timeout=120) as response:
+                        if response.status == 200:
+                            # No range support (a presigned URL to old
+                            # storage, say): the whole archive is coming.
+                            piece = response.read()
+                            if downloaded:
+                                piece = piece[downloaded:]
+                            total = downloaded + len(piece)
+                        else:
+                            content_range = response.headers.get("Content-Range", "")
+                            total = int(content_range.rsplit("/", 1)[1])
+                            piece = response.read()
+                    break
+                except (OSError, ValueError) as exc:
+                    if attempt == _DOWNLOAD_ATTEMPTS:
+                        raise RuntimeError(
+                            f"dataset download failed at byte {downloaded} after "
+                            f"{attempt} attempts: {exc}"
+                        ) from exc
+                    _log(f"dataset download: piece at byte {downloaded} failed ({exc}); retrying")
+                    time.sleep(min(2**attempt, 30))
+            digest.update(piece)
+            sink.write(piece)
+            downloaded += len(piece)
+            if total and downloaded / total >= next_report:
+                rate = downloaded / max(time.monotonic() - t0, 1e-6) / 1e6
+                _log(f"downloading dataset: {downloaded / total:.0%} ({rate:.1f} MB/s)")
+                next_report += 0.1
+            if not piece:
+                break
 
     actual = digest.hexdigest()
     if actual != expected_sha256:
