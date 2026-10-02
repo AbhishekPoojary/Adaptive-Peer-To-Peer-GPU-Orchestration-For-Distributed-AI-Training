@@ -1,0 +1,13 @@
+{
+  "_description": [
+    "The latency term of S_i, tested with real delay: two agents in identical",
+    "containers, one with tc netem adding delay to every packet it sends. Equal",
+    "load and equal history, so only the adaptive scheduler can tell them apart."
+  ],
+  "delay_ms": 100,
+  "trials_per_scheduler": 10,
+  "schedulers": ["adaptive", "least_loaded", "round_robin"],
+  "settle_seconds": 20,
+  "job_spec": {"dataset": "mnist", "model": "cnn", "epochs": 1, "batch_size": 256,
+               "learning_rate": 0.01, "world_size": 1}
+}

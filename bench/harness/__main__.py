@@ -40,6 +40,7 @@ from bench.harness.inventory import (
 from bench.harness.scenarios import (
     failure_recovery,
     gpu_utilization,
+    latency_placement,
     reliability_placement,
     scalability,
 )
@@ -57,6 +58,7 @@ SCENARIOS = {
     # Same measurement over an uploaded dataset; only the config differs.
     "gpu_utilization_custom": gpu_utilization,
     scalability.NAME: scalability,
+    latency_placement.NAME: latency_placement,
 }
 
 logger = logging.getLogger("bench")
@@ -172,7 +174,13 @@ async def _run(args: argparse.Namespace) -> int:
         git_sha=sha,
         hardware=capture_hardware().as_dict(),
         results=results,
-        limitations=assess_limitations(fleet.hostnames()).as_dict(),
+        # A scenario that knows its fleet better than hostnames can tell (two
+        # containers on one VM) declares its own limitations.
+        limitations=(
+            scenario_module.limitations(fleet)
+            if hasattr(scenario_module, "limitations")
+            else assess_limitations(fleet.hostnames())
+        ).as_dict(),
         provisional=args.allow_dirty,
     )
     try:
