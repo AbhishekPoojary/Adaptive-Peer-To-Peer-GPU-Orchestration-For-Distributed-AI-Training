@@ -33,10 +33,12 @@ it is written.
 | **Google sign-in**, optional, never creating an account | ADR-012 addendum; verified against a real Google client — an account's `google_sub` bound on a genuine sign-in |
 | **Custom image datasets** uploaded, validated, trained on | ADR-014; a 3-class archive uploaded to real MinIO, fetched by the trainer over a presigned URL, digest verified, trained (see caveat below) |
 | **Adding people from the dashboard** instead of SSH | ADR-012 addendum 2; `tests/test_users_api.py` |
+| **GPU utilization above the report's 80% target**, for batch 256 | CIFAR-10 batch 256: 93.8% mean over the trainer's own training phase (p10 84%), 79.7% over the whole run including container start. `bench/report/20261002T175843-gpu_utilization.json`. Before the GPU-resident data path the same job averaged 44% |
+| Recovery still resumes with background checkpoint uploads | Detected 2.92 s, restored step 2814 at 8.39 s, job finished 22 s after the kill. `bench/report/20261002T180001-failure_recovery.json` |
 | **Peers update themselves** | The agent restarts into a newer bundle while idle and pulls a newer trainer image (ADR-015). A real agent at an old version exited for update within one check interval; the full installer loop on a real peer is not yet verified |
 | **Downloading the trained model** | ADR-006 addendum 2; a July run's checkpoint streamed byte-identical to storage (sha256 `471b73f9…` on both sides), opening as a valid torch archive |
 
-515 tests, all against a real Postgres. No mocked database, no simulated
+520 tests, all against a real Postgres. No mocked database, no simulated
 failures outside `tests/`.
 
 ---
@@ -48,6 +50,13 @@ laptop with one RTX 3050, where extra ranks contend for the same device. M5
 measured `world_size=2` at 251 s against `world_size=1`'s 171 s — distribution
 is a *cost* here. The architecture is built for many machines; the evidence for
 that benefit does not exist yet and must not be implied.
+
+**80% GPU utilization is not met at small batch sizes.** At batch 64 the
+training phase averages 70% (MNIST) and 59% (CIFAR-10), same artifact. SmallCNN
+does so little work per step that a batch of 64 cannot fill the GPU between
+kernel launches; that is the model's size, not the data path, which is no
+longer the bottleneck. Custom uploaded datasets still use the CPU DataLoader
+and have not been measured. All of it is one RTX 3050 laptop GPU.
 
 **The custom-dataset run proves the pipeline, not accuracy.** The end-to-end
 verification trained to 100% on three classes of solid colour blocks — data that
