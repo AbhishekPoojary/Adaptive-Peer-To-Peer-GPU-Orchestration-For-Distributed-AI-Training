@@ -32,7 +32,6 @@ import logging
 import os
 import sys
 import time
-from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -460,6 +459,12 @@ async def _report_result(
         )
 
 
+#: Execution tasks cancelled after their lease was lost, still stopping their
+#: container. Module-level because they outlive the call that cancelled them,
+#: and referenced so the event loop cannot collect them mid-stop.
+_draining: set[asyncio.Task[ExecutionResult]] = set()
+
+
 async def _service_lease(
     client: httpx.AsyncClient,
     *,
@@ -483,6 +488,10 @@ async def _service_lease(
     takes — renewal is timer-driven, independent of training progress.
     """
     if executing is None:
+        if _draining:
+            # An abandoned trainer is still being stopped. Taking new work now
+            # would start a second trainer on a GPU the first still holds.
+            return None
         try:
             claimed = await claim_lease(
                 client, orchestrator=orchestrator, node_id=node_id, access_token=access_token
@@ -662,9 +671,15 @@ async def _service_lease(
                 exc.response.status_code,
             )
             if task is not None and not task.done():
+                # Cancelling stops the container, which can take seconds. It
+                # is NOT awaited here: this function runs inside the heartbeat
+                # loop, and awaiting it once silenced a node for 11 s -- long
+                # enough for the failure detector to declare a healthy node
+                # dead (48 times in one scalability run). The task finishes
+                # in the background; claims wait for it (see below).
                 task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await task
+                _draining.add(task)
+                task.add_done_callback(_draining.discard)
             return None
         except httpx.HTTPError as exc:
             logger.error("lease renew failed (network): %s", exc)

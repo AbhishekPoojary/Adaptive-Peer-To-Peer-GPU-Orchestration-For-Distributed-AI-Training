@@ -284,6 +284,11 @@ def build_run_kwargs(
         "mem_limit": config.memory_limit,
         "pids_limit": config.pids_limit,
         "privileged": False,
+        # A tiny init as PID 1. Without it the trainer *is* PID 1, and Linux
+        # gives PID 1 no default signal handlers, so `docker stop`'s SIGTERM
+        # was ignored and every stop waited out Docker's full 10 s before the
+        # SIGKILL -- a cancelled or fenced job held the GPU that long.
+        "init": True,
         "stdout": True,
         "stderr": True,
     }
