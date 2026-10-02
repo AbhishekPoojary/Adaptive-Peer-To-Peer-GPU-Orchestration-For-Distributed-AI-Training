@@ -34,11 +34,12 @@ it is written.
 | **Custom image datasets** uploaded, validated, trained on | ADR-014; a 3-class archive uploaded to real MinIO, fetched by the trainer over a presigned URL, digest verified, trained (see caveat below) |
 | **Adding people from the dashboard** instead of SSH | ADR-012 addendum 2; `tests/test_users_api.py` |
 | **GPU utilization above the report's 80% target**, for batch 256 | CIFAR-10 batch 256: 93.8% mean over the trainer's own training phase (p10 84%), 79.7% over the whole run including container start. `bench/report/20261002T175843-gpu_utilization.json`. Before the GPU-resident data path the same job averaged 44% |
+| **Uploaded datasets above the 80% target** | A real 6-class, 17k-image upload (Intel scenes): 93.4% mean at batch 64 and 91.7% at batch 256 over the training phase, from 86.2% and 85.1% before decode-once. `bench/report/20261002T182653-gpu_utilization_custom.json` (baseline `20261002T181554`). The batch pipeline now delivers 68k images/s from GPU memory and 111k/s streamed from disk, against 2,695/s this GPU trains -- measured in the trainer image, not by the harness |
 | Recovery still resumes with background checkpoint uploads | Detected 2.92 s, restored step 2814 at 8.39 s, job finished 22 s after the kill. `bench/report/20261002T180001-failure_recovery.json` |
 | **Peers update themselves** | The agent restarts into a newer bundle while idle and pulls a newer trainer image (ADR-015). A real agent at an old version exited for update within one check interval; the full installer loop on a real peer is not yet verified |
 | **Downloading the trained model** | ADR-006 addendum 2; a July run's checkpoint streamed byte-identical to storage (sha256 `471b73f9…` on both sides), opening as a valid torch archive |
 
-520 tests, all against a real Postgres. No mocked database, no simulated
+524 tests, all against a real Postgres. No mocked database, no simulated
 failures outside `tests/`.
 
 ---
@@ -55,8 +56,14 @@ that benefit does not exist yet and must not be implied.
 training phase averages 70% (MNIST) and 59% (CIFAR-10), same artifact. SmallCNN
 does so little work per step that a batch of 64 cannot fill the GPU between
 kernel launches; that is the model's size, not the data path, which is no
-longer the bottleneck. Custom uploaded datasets still use the CPU DataLoader
-and have not been measured. All of it is one RTX 3050 laptop GPU.
+longer the bottleneck. All of it is one RTX 3050 laptop GPU.
+
+**Large uploads are designed for, not yet demonstrated.** Uploaded datasets are
+decoded once and streamed from disk when they exceed 40% of free GPU memory,
+which is what lets one larger than RAM train at all. That streamed path is
+exercised by tests and a direct throughput probe, but no job on a dataset
+genuinely too big for the GPU has run end to end; the largest real upload
+here is 17k images (200 MB decoded), which fits in GPU memory.
 
 **The custom-dataset run proves the pipeline, not accuracy.** The end-to-end
 verification trained to 100% on three classes of solid colour blocks — data that
