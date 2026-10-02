@@ -844,16 +844,13 @@ class HostBatches(DeviceBatches):
 
 
 def _custom_batches(
-    root: str,
-    train_set: Any,
-    test_set: Any,
+    decoded: dict[str, Any],
     *,
     device: torch.device,
     batch_size: int,
     dist_config: DistConfig,
 ) -> tuple[DeviceBatches, DeviceBatches]:
     """Batches for an uploaded dataset: on the GPU if it fits, else streamed."""
-    decoded = _decoded_custom_dataset(root, train_set, test_set)
     (train_images, train_labels), (test_images, test_labels) = decoded["train"], decoded["test"]
     total_bytes = train_images.nbytes + test_images.nbytes
     common = {"mean": _CUSTOM_MEAN, "std": _CUSTOM_STD}
@@ -1070,6 +1067,13 @@ def main() -> None:
         train_set, test_set, in_channels, num_classes = _build_custom_datasets(
             root, expected_num_classes=declared_classes
         )
+        # Part of preparing the data, so it happens before "dataset ready":
+        # a first-time decode is set-up, not training.
+        decoded = (
+            _decoded_custom_dataset(root, train_set, test_set)
+            if os.environ.get("DEVICE_RESIDENT_DATA", "1") != "0"
+            else None
+        )
         split_note = "uploaded train/test split"
     else:
         log(
@@ -1103,10 +1107,9 @@ def main() -> None:
     test_loader: DataLoader | DeviceBatches
     fast_path = os.environ.get("DEVICE_RESIDENT_DATA", "1") != "0"
     if fast_path and dataset_name == "custom":
+        assert decoded is not None
         train_loader, test_loader = _custom_batches(
-            root,
-            train_set,
-            test_set,
+            decoded,
             device=device,
             batch_size=batch_size,
             dist_config=dist_config,
