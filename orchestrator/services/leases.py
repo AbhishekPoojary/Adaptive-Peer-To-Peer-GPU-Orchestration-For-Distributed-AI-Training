@@ -116,7 +116,7 @@ async def claim_job_for_node(
             .where(Lease.node_id == node.id, Lease.state == LeaseState.PENDING)
             .order_by(Lease.lease_epoch)
             .limit(1)
-            .with_for_update(skip_locked=True)
+            .with_for_update(skip_locked=True, key_share=True)
             .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
@@ -128,7 +128,7 @@ async def claim_job_for_node(
         await session.execute(
             select(Job)
             .where(Job.id == lease.job_id)
-            .with_for_update()
+            .with_for_update(key_share=True)
             .execution_options(populate_existing=True)
         )
     ).scalar_one()
@@ -185,12 +185,21 @@ async def _load_fenced(
     Raises the appropriate typed error; returns ``(lease, job)`` only when the
     caller is the lease owner and the epoch is current. Order of checks:
     existence → ownership → epoch fence → ACTIVE.
+
+    Row locks throughout this module are ``FOR NO KEY UPDATE``
+    (``key_share=True``), not ``FOR UPDATE``. Nothing here changes a key, and
+    the stronger lock conflicts with the ``KEY SHARE`` lock Postgres takes on a
+    job and a lease for every log line and metric inserted against them. With
+    this function locking lease-then-job and an insert checking job-then-lease,
+    that conflict deadlocked: Postgres killed the stream's insert, and every
+    later log line and metric of that job was lost. ``FOR NO KEY UPDATE`` still
+    excludes every other writer, so claims and fencing behave as before.
     """
     lease = (
         await session.execute(
             select(Lease)
             .where(Lease.id == lease_id)
-            .with_for_update()
+            .with_for_update(key_share=True)
             .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
@@ -203,7 +212,7 @@ async def _load_fenced(
         await session.execute(
             select(Job)
             .where(Job.id == lease.job_id)
-            .with_for_update()
+            .with_for_update(key_share=True)
             .execution_options(populate_existing=True)
         )
     ).scalar_one()
@@ -244,7 +253,7 @@ async def _release_cohort_siblings(
                 Lease.id.not_in(exclude_lease_ids),
                 Lease.state.in_((LeaseState.PENDING, LeaseState.ACTIVE)),
             )
-            .with_for_update()
+            .with_for_update(key_share=True)
         )
     ).scalars().all()
     for sibling in siblings:
@@ -709,7 +718,7 @@ async def sweep_expired_leases(
                 Lease.state.in_((LeaseState.ACTIVE, LeaseState.PENDING)),
                 Lease.expires_at < now,
             )
-            .with_for_update(skip_locked=True)
+            .with_for_update(skip_locked=True, key_share=True)
             .execution_options(populate_existing=True)
         )
     ).scalars().all()
@@ -731,7 +740,7 @@ async def sweep_expired_leases(
             await session.execute(
                 select(Job)
                 .where(Job.id == job_id)
-                .with_for_update()
+                .with_for_update(key_share=True)
                 .execution_options(populate_existing=True)
             )
         ).scalar_one()

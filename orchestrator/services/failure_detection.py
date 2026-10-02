@@ -212,7 +212,7 @@ async def _reassign_node_jobs(
                     Lease.node_id == node.id,
                     Lease.state.in_((LeaseState.ACTIVE, LeaseState.PENDING)),
                 )
-                .with_for_update()
+                .with_for_update(key_share=True)
             )
         )
         .scalars()
@@ -228,7 +228,7 @@ async def _reassign_node_jobs(
             await session.execute(
                 select(Job)
                 .where(Job.id == job_id)
-                .with_for_update()
+                .with_for_update(key_share=True)
                 .execution_options(populate_existing=True)
             )
         ).scalar_one()
@@ -290,7 +290,7 @@ async def run_failure_detection_pass(
             await session.execute(
                 select(Node)
                 .where(Node.status == NodeStatus.ONLINE)
-                .with_for_update(skip_locked=True)
+                .with_for_update(skip_locked=True, key_share=True)
                 .execution_options(populate_existing=True)
             )
         )

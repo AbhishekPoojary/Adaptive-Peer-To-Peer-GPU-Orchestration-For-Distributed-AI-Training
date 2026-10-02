@@ -433,7 +433,7 @@ async def run_scheduler_pass(session: AsyncSession, *, settings: Settings) -> in
             select(Job)
             .where(Job.state.in_(_PLACEABLE))
             .order_by(Job.submitted_at)
-            .with_for_update(skip_locked=True)
+            .with_for_update(skip_locked=True, key_share=True)
             .execution_options(populate_existing=True)
         )
     ).scalars().all()

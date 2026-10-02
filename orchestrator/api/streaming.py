@@ -34,6 +34,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.api.deps import get_settings_dep
@@ -219,6 +220,47 @@ async def _persist_frame(
     logger.warning("dropping frame with unknown type for job=%s: %r", job_id, frame)
 
 
+#: Attempts per frame before it is dropped. A transient conflict (a deadlock
+#: victim, a serialization failure) succeeds on the next attempt; anything that
+#: fails three times is not going to succeed on a fourth.
+_FRAME_ATTEMPTS = 3
+
+
+async def _persist_frame_resiliently(
+    session: AsyncSession, *, job_id: uuid.UUID, lease_id: uuid.UUID, frame: dict[str, Any]
+) -> None:
+    """Persist one frame, surviving a database error instead of dying of it.
+
+    Before this, a single failed insert raised out of the receive loop and
+    ended the stream, so one deadlock lost every later log line and metric of
+    the job while training carried on unseen. Now the transaction is rolled
+    back and the frame retried; a frame that still cannot be stored is logged
+    and dropped, and the stream goes on.
+    """
+    for attempt in range(1, _FRAME_ATTEMPTS + 1):
+        try:
+            await _persist_frame(session, job_id=job_id, lease_id=lease_id, frame=frame)
+            return
+        except DBAPIError as exc:
+            await session.rollback()
+            if attempt == _FRAME_ATTEMPTS:
+                logger.error(
+                    "dropping a %s frame for job=%s after %d attempts: %s",
+                    frame.get("type"),
+                    job_id,
+                    attempt,
+                    exc.orig,
+                )
+                return
+            logger.warning(
+                "retrying a %s frame for job=%s (attempt %d): %s",
+                frame.get("type"),
+                job_id,
+                attempt,
+                exc.orig,
+            )
+
+
 @router.websocket("/nodes/{node_id}/leases/{lease_id}/stream")
 async def lease_stream(
     websocket: WebSocket,
@@ -260,7 +302,9 @@ async def lease_stream(
             if not isinstance(frame, dict):
                 logger.warning("dropping non-object frame for job=%s: %r", job_id, frame)
                 continue
-            await _persist_frame(session, job_id=job_id, lease_id=lease_id, frame=frame)
+            await _persist_frame_resiliently(
+                session, job_id=job_id, lease_id=lease_id, frame=frame
+            )
     except WebSocketDisconnect:
         logger.info(
             "stream disconnected: node=%s lease=%s job=%s epoch=%d",
