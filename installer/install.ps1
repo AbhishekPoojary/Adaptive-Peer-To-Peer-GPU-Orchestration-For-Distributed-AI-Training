@@ -351,7 +351,42 @@ Otherwise check network access to download.pytorch.org and free disk space
     )
     if (-not $useDocker) { $agentArgs += "--allow-unsandboxed" }
 
-    & $venvPy @agentArgs
+    # The agent exits with 75 when the orchestrator serves a newer agent than
+    # the one installed here (agent/updates.py); it only does so between jobs.
+    # Fetch, reinstall and restart it as the same node, so fixes reach this
+    # machine without anyone re-running the install command.
+    $versionFile = Join-Path $WorkDir "BUNDLE_VERSION"
+    $installedVersion = if (Test-Path $versionFile) { (Get-Content $versionFile -Raw).Trim() } else { $null }
+    while ($true) {
+        $runArgs = $agentArgs
+        if ($installedVersion) { $runArgs += @("--bundle-version", $installedVersion) }
+        & $venvPy @runArgs
+        if ($LASTEXITCODE -ne 75) { break }
+
+        Write-Host ""
+        Write-Step "a newer agent is available; updating (this window stays open)"
+        try {
+            Invoke-WebRequest -Uri "$Orchestrator/agent-bundle.tar.gz" -OutFile $bundle -TimeoutSec 180
+            # Clear the old source first, so a file the new version deleted
+            # cannot linger and be imported.
+            Remove-Item -Recurse -Force (Join-Path $WorkDir "agent"), (Join-Path $WorkDir "trainer") -ErrorAction SilentlyContinue
+            tar -xzf $bundle -C $WorkDir
+            if ($LASTEXITCODE -ne 0) { throw "could not extract the new agent" }
+            & $venvPy -m pip install --quiet "$WorkDir[agent]"
+            if ($LASTEXITCODE -ne 0) { throw "could not install the new agent's dependencies" }
+            # The package version in pyproject.toml rarely changes, and pip may
+            # treat a same-version local install as already satisfied -- which
+            # would leave the old code in place under the new version string.
+            & $venvPy -m pip install --quiet --no-deps --force-reinstall "$WorkDir"
+            if ($LASTEXITCODE -ne 0) { throw "could not install the new agent" }
+            $installedVersion = (Get-Content $versionFile -Raw).Trim()
+            Write-Step "updated to $installedVersion; restarting"
+        } catch {
+            # Keep contributing on what is installed. The version passed to the
+            # agent stays the old one, so its next idle check tries again.
+            Write-Step "update failed ($($_.Exception.Message)); carrying on with the current agent"
+        }
+    }
 
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "the agent stopped with exit code $LASTEXITCODE (scroll up for the reason)."

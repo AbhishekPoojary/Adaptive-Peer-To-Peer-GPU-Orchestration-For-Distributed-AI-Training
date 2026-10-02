@@ -473,3 +473,94 @@ def test_no_host_mapping_for_a_remote_orchestrator() -> None:
         checkpoint_token="tok",
     )
     assert "extra_hosts" not in kwargs
+
+
+# --- Trainer image refresh -----------------------------------------------------
+
+
+class FakeImage:
+    def __init__(self, image_id: str) -> None:
+        self.id = image_id
+
+
+class FakeImages:
+    def __init__(self, *, local: str | None, remote: str | None) -> None:
+        self.local = local
+        self.remote = remote
+        self.pulled: list[tuple[str, str]] = []
+
+    def get(self, _name: str) -> FakeImage:
+        if self.local is None:
+            raise docker.errors.ImageNotFound("absent")
+        return FakeImage(self.local)
+
+    def pull(self, repository: str, tag: str) -> FakeImage:
+        self.pulled.append((repository, tag))
+        if self.remote is None:
+            raise docker.errors.APIError("registry unreachable")
+        self.local = self.remote
+        return FakeImage(self.remote)
+
+
+class FakeImageClient:
+    def __init__(self, images: FakeImages) -> None:
+        self.images = images
+
+
+@pytest.mark.parametrize(
+    ("image", "published"),
+    [
+        ("abhisheks1290/gpu-orchestrator-trainer:latest", True),
+        ("registry.example.com:5000/team/trainer:v1", True),
+        ("gpu-orchestrator-trainer:latest", False),
+        ("gpu-orchestrator-trainer", False),
+    ],
+)
+def test_is_published_image(image: str, published: bool) -> None:
+    from agent.runtime.docker_launcher import is_published_image
+
+    assert is_published_image(image) is published
+
+
+def test_refresh_reports_an_update_when_the_registry_has_a_newer_image() -> None:
+    from agent.runtime.docker_launcher import refresh_trainer_image
+
+    images = FakeImages(local="sha256:old", remote="sha256:new")
+    outcome = refresh_trainer_image(
+        FakeImageClient(images), "abhisheks1290/gpu-orchestrator-trainer:latest"  # type: ignore[arg-type]
+    )
+    assert outcome == "updated"
+    assert images.pulled == [("abhisheks1290/gpu-orchestrator-trainer", "latest")]
+
+
+def test_refresh_fetches_a_missing_image_on_first_start() -> None:
+    from agent.runtime.docker_launcher import refresh_trainer_image
+
+    images = FakeImages(local=None, remote="sha256:new")
+    assert refresh_trainer_image(FakeImageClient(images), "u/t:latest") == "updated"  # type: ignore[arg-type]
+
+
+def test_refresh_is_quiet_when_already_current() -> None:
+    from agent.runtime.docker_launcher import refresh_trainer_image
+
+    images = FakeImages(local="sha256:same", remote="sha256:same")
+    assert refresh_trainer_image(FakeImageClient(images), "u/t:latest") == "current"  # type: ignore[arg-type]
+
+
+def test_a_failed_refresh_keeps_the_local_image_and_never_raises() -> None:
+    from agent.runtime.docker_launcher import refresh_trainer_image
+
+    images = FakeImages(local="sha256:old", remote=None)
+    assert refresh_trainer_image(FakeImageClient(images), "u/t:latest") == "failed"  # type: ignore[arg-type]
+    assert images.local == "sha256:old"
+
+
+def test_a_local_only_image_is_never_pulled() -> None:
+    from agent.runtime.docker_launcher import refresh_trainer_image
+
+    images = FakeImages(local="sha256:dev", remote="sha256:other")
+    outcome = refresh_trainer_image(
+        FakeImageClient(images), "gpu-orchestrator-trainer:latest"  # type: ignore[arg-type]
+    )
+    assert outcome == "skipped"
+    assert images.pulled == []

@@ -15,6 +15,8 @@ orchestrator is running, never a stale or separately-versioned copy.
 
 from __future__ import annotations
 
+import functools
+import hashlib
 import io
 import tarfile
 from pathlib import Path
@@ -108,6 +110,50 @@ def _exclude_pycache(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
     return tarinfo
 
 
+def _bundle_files() -> list[tuple[str, Path]]:
+    """Every file the bundle carries, as ``(archive name, path)``, sorted."""
+    files: list[tuple[str, Path]] = []
+    for arcname, root in (("agent", _AGENT_DIR), ("trainer", _TRAINER_DIR)):
+        for path in root.rglob("*"):
+            if path.is_file() and "__pycache__" not in path.parts and path.suffix not in (
+                ".pyc",
+                ".pyo",
+            ):
+                files.append((f"{arcname}/{path.relative_to(root).as_posix()}", path))
+    files.append(("pyproject.toml", _PYPROJECT))
+    if _README.is_file():
+        files.append(("README.md", _README))
+    return sorted(files)
+
+
+@functools.lru_cache(maxsize=1)
+def bundle_version() -> str:
+    """A fingerprint of the code this orchestrator hands to peers.
+
+    A hash of the bundle's file names and contents, not of the tarball (gzip
+    and tar both embed timestamps, so identical code would hash differently
+    per request). Cached for the life of the process: the files are baked into
+    the image and cannot change under a running orchestrator.
+    """
+    digest = hashlib.sha256()
+    for arcname, path in _bundle_files():
+        digest.update(arcname.encode() + b"\0" + path.read_bytes() + b"\0")
+    return digest.hexdigest()[:16]
+
+
+@router.get("/agent-bundle/version")
+async def get_agent_bundle_version() -> dict[str, str]:
+    """The current bundle's fingerprint, for agents deciding whether to update.
+
+    Public for the same reason the bundle is: it is the code, not a secret.
+    An agent polls this while idle and, when it differs from the version it
+    was installed with, exits for its installer to fetch the new bundle and
+    restart it. That is how a fix reaches every peer without anyone on the
+    peer re-running anything.
+    """
+    return {"version": bundle_version()}
+
+
 @router.get("/agent-bundle.tar.gz")
 async def get_agent_bundle() -> Response:
     """Package the live ``agent/`` source + ``pyproject.toml`` this process is
@@ -147,4 +193,10 @@ async def get_agent_bundle() -> Response:
         # bare `pip install .` of the extracted tarball fails to build.
         if _README.is_file():
             tar.add(_README, arcname="README.md")
+        # The installer hands this to the agent as --bundle-version, which is
+        # what the agent compares against /agent-bundle/version.
+        version = bundle_version().encode()
+        info = tarfile.TarInfo("BUNDLE_VERSION")
+        info.size = len(version)
+        tar.addfile(info, io.BytesIO(version))
     return Response(content=buf.getvalue(), media_type="application/gzip")

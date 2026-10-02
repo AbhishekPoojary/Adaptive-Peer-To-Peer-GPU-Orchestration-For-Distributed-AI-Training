@@ -59,6 +59,7 @@ from agent.metrics_server import AgentMetricsState, start_metrics_server
 from agent.runtime.docker_launcher import (
     RendezvousSpec,
     TrainerLaunchConfig,
+    refresh_trainer_image,
     trainer_image_available,
 )
 from agent.runtime.execution import DockerLaunchError, ExecutionResult, run_lease_execution
@@ -66,6 +67,7 @@ from agent.telemetry.latency import RttEwma, Stopwatch
 from agent.telemetry.nvml import GpuInventoryEntry, GpuTelemetryEntry, collect_gpu_telemetry
 from agent.telemetry.nvml import collect_gpu_inventory as _collect_gpu_inventory
 from agent.telemetry.system import collect_host_inventory, collect_system_telemetry
+from agent.updates import UPDATE_EXIT_CODE, RestartForUpdate, newer_bundle_version
 
 logger = logging.getLogger("agent")
 
@@ -348,6 +350,27 @@ class ExecutingLease:
 
     def start_report_due(self) -> bool:
         return self.task is not None and self.launched.is_set() and not self.start_reported
+
+
+async def _keep_trainer_image_fresh(
+    docker_client: docker.DockerClient, image: str, *, interval_seconds: float
+) -> None:
+    """Re-pull the trainer image periodically for as long as the agent runs.
+
+    Peers leave the agent running for days, so a check only at startup would
+    let a fixed trainer wait for a reboot. The pull runs in a worker thread so
+    heartbeats carry on during a large download, and it is safe while a job
+    is training: the running container holds the image it started with, and
+    the next job starts on the new one.
+    """
+    while True:
+        await asyncio.sleep(interval_seconds)
+        outcome = await asyncio.to_thread(refresh_trainer_image, docker_client, image)
+        if outcome == "updated":
+            logger.info("trainer image %s updated; the next job uses it", image)
+        elif outcome == "failed":
+            logger.info("trainer image refresh failed; will retry in %.0fh",
+                        interval_seconds / 3600)
 
 
 def _node_has_gpu() -> bool:
@@ -772,6 +795,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Heartbeat cadence",
     )
     parser.add_argument(
+        "--bundle-version",
+        default=os.environ.get("AGENT_BUNDLE_VERSION"),
+        help=(
+            "Version of the bundle this agent was installed from (the installer "
+            "passes it). Unset disables self-update, as for a developer checkout."
+        ),
+    )
+    parser.add_argument(
+        "--update-check-minutes",
+        type=float,
+        default=float(os.environ.get("AGENT_UPDATE_CHECK_MINUTES", "30")),
+        help="How often, while idle, to check for a newer agent (0 disables)",
+    )
+    parser.add_argument(
+        "--trainer-image-refresh-hours",
+        type=float,
+        default=float(os.environ.get("TRAINER_IMAGE_REFRESH_HOURS", "6")),
+        help="How often to pull a newer published trainer image (0 disables)",
+    )
+    parser.add_argument(
         "--rtt-ewma-alpha",
         type=float,
         default=0.3,
@@ -972,6 +1015,12 @@ async def run(args: argparse.Namespace) -> None:
                 # 404 that reads like an auth failure. Check now and say what
                 # is really wrong, rather than failing every claimed lease with
                 # "pull access denied".
+                # Fetch the newest published trainer before deciding whether
+                # this node can run jobs: on a fresh install this is what gets
+                # the image at all, and afterwards it is what delivers fixes.
+                outcome = refresh_trainer_image(docker_client, launch_config.image)
+                if outcome != "skipped":
+                    logger.info("trainer image %s: %s", launch_config.image, outcome)
                 if trainer_image_available(docker_client, launch_config.image):
                     logger.info(
                         "Docker reachable and trainer image %s present: this node "
@@ -997,12 +1046,28 @@ async def run(args: argparse.Namespace) -> None:
                     )
                 docker_client = None
 
+        # Held for the life of the process: the event loop keeps only a weak
+        # reference to a task, so an unreferenced one can be collected mid-run.
+        background_tasks: set[asyncio.Task[None]] = set()
+        if docker_client is not None and args.trainer_image_refresh_hours > 0:
+            background_tasks.add(
+                asyncio.create_task(
+                    _keep_trainer_image_fresh(
+                        docker_client,
+                        launch_config.image,
+                        interval_seconds=args.trainer_image_refresh_hours * 3600,
+                    )
+                )
+            )
+
         logger.info(
             "starting heartbeat loop: interval=%.1fs orchestrator=%s",
             args.heartbeat_interval_seconds,
             orchestrator,
         )
 
+        update_every = args.update_check_minutes * 60
+        next_update_check = time.monotonic() + update_every
         while True:
             if time.time() > expires_at - _REFRESH_MARGIN_SECONDS:
                 try:
@@ -1073,6 +1138,22 @@ async def run(args: argparse.Namespace) -> None:
                 ),
             )
 
+            # Only while idle: a job in progress is never interrupted for an
+            # update. The check is cheap (one small GET) but there is no reason
+            # to make it every second.
+            if (
+                args.bundle_version
+                and update_every > 0
+                and executing_lease is None
+                and time.monotonic() >= next_update_check
+            ):
+                next_update_check = time.monotonic() + update_every
+                available = await newer_bundle_version(
+                    client, orchestrator=orchestrator, installed=args.bundle_version
+                )
+                if available is not None:
+                    raise RestartForUpdate(args.bundle_version, available)
+
             await asyncio.sleep(args.heartbeat_interval_seconds)
 
 
@@ -1083,6 +1164,14 @@ def main() -> None:
         asyncio.run(run(args))
     except KeyboardInterrupt:
         logger.info("interrupted (Ctrl+C); shutting down cleanly")
+    except RestartForUpdate as update:
+        logger.info(
+            "a newer agent is available (%s -> %s); exiting for the installer "
+            "to fetch it and restart this node",
+            update.current,
+            update.available,
+        )
+        raise SystemExit(UPDATE_EXIT_CODE) from None
 
 
 if __name__ == "__main__":

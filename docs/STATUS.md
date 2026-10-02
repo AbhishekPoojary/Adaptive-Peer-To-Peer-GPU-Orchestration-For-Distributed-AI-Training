@@ -33,9 +33,10 @@ it is written.
 | **Google sign-in**, optional, never creating an account | ADR-012 addendum; verified against a real Google client — an account's `google_sub` bound on a genuine sign-in |
 | **Custom image datasets** uploaded, validated, trained on | ADR-014; a 3-class archive uploaded to real MinIO, fetched by the trainer over a presigned URL, digest verified, trained (see caveat below) |
 | **Adding people from the dashboard** instead of SSH | ADR-012 addendum 2; `tests/test_users_api.py` |
+| **Peers update themselves** | The agent restarts into a newer bundle while idle and pulls a newer trainer image (ADR-015). A real agent at an old version exited for update within one check interval; the full installer loop on a real peer is not yet verified |
 | **Downloading the trained model** | ADR-006 addendum 2; a July run's checkpoint streamed byte-identical to storage (sha256 `471b73f9…` on both sides), opening as a valid torch archive |
 
-497 tests, all against a real Postgres. No mocked database, no simulated
+515 tests, all against a real Postgres. No mocked database, no simulated
 failures outside `tests/`.
 
 ---

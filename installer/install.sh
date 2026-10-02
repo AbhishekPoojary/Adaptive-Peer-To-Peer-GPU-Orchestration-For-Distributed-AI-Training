@@ -30,6 +30,12 @@ ORCHESTRATOR="__ORCHESTRATOR_URL__"
 case "$ORCHESTRATOR" in
     __*) ORCHESTRATOR="http://localhost:8090" ;;
 esac
+# Substituted at serve time with the trainer image this deployment uses, as
+# install.ps1 does. The agent pulls it, so the peer needs nothing else.
+TRAINER_IMAGE="__TRAINER_IMAGE__"
+case "$TRAINER_IMAGE" in
+    __*) TRAINER_IMAGE="gpu-orchestrator-trainer:latest" ;;
+esac
 TOKEN=""
 STATE_DIR="${HOME:-$PWD}/.gpu-orchestrator-agent"
 WORKDIR="${HOME:-$PWD}/.gpu-orchestrator-agent-src"
@@ -181,7 +187,50 @@ log "starting the agent (enrolling with the supplied token, then heartbeating fo
 log "state directory: $STATE_DIR"
 log "press Ctrl+C to stop sharing this GPU."
 
-exec "$VENV_PY" -m agent \
-    --orchestrator "$ORCHESTRATOR" \
-    --enrollment-token "$TOKEN" \
-    --state-dir "$STATE_DIR"
+# The agent exits with 75 when the orchestrator serves a newer agent than the
+# one installed here (agent/updates.py), and only between jobs. Fetch,
+# reinstall and restart it as the same node, so fixes arrive without anyone
+# re-running this script. A failed update keeps the current agent running; the
+# version passed to it stays the old one, so its next idle check tries again.
+VERSION_FILE="$WORKDIR/BUNDLE_VERSION"
+INSTALLED_VERSION=""
+[ -f "$VERSION_FILE" ] && INSTALLED_VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
+
+fetch_bundle() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -sSL -f "$ORCHESTRATOR/agent-bundle.tar.gz" -o "$BUNDLE"
+    else
+        wget -q "$ORCHESTRATOR/agent-bundle.tar.gz" -O "$BUNDLE"
+    fi
+}
+
+while true; do
+    set -- --orchestrator "$ORCHESTRATOR" --enrollment-token "$TOKEN" \
+        --state-dir "$STATE_DIR" --trainer-image "$TRAINER_IMAGE"
+    if [ -n "$INSTALLED_VERSION" ]; then
+        set -- "$@" --bundle-version "$INSTALLED_VERSION"
+    fi
+    "$VENV_PY" -m agent "$@"
+    status=$?
+    [ "$status" -eq 75 ] || exit "$status"
+
+    log "a newer agent is available; updating"
+    if ! fetch_bundle; then
+        log "update failed to download; carrying on with the current agent"
+        continue
+    fi
+    # Clear the old source first, so a file the new version deleted cannot
+    # linger and be imported.
+    rm -rf "$WORKDIR/agent" "$WORKDIR/trainer"
+    # The second install forces the package itself: its version rarely
+    # changes, and pip may otherwise call a same-version local install already
+    # satisfied and leave the old code in place under the new version string.
+    if tar -xzf "$BUNDLE" -C "$WORKDIR" \
+        && "$VENV_PY" -m pip install --quiet "$WORKDIR[agent]" \
+        && "$VENV_PY" -m pip install --quiet --no-deps --force-reinstall "$WORKDIR"; then
+        INSTALLED_VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
+        log "updated to $INSTALLED_VERSION; restarting"
+    else
+        log "update failed to install; carrying on with the current agent"
+    fi
+done

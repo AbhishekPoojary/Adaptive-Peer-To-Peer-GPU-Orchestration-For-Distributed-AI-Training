@@ -158,3 +158,40 @@ async def test_install_ps1_is_served_for_windows_peers(app_client: AsyncClient) 
     # choosing it, and must not require WSL2.
     assert "--allow-unsandboxed" in body
     assert "WITHOUT container isolation" in body
+
+
+# --- Self-update (agent/updates.py) -------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bundle_carries_the_version_the_endpoint_reports(
+    app_client: AsyncClient,
+) -> None:
+    """The installer hands BUNDLE_VERSION to the agent as --bundle-version, and
+    the agent compares it with /agent-bundle/version. If the two ever disagreed
+    for the same code, every agent would restart for an update forever."""
+    version = (await app_client.get("/agent-bundle/version")).json()["version"]
+    resp = await app_client.get("/agent-bundle.tar.gz")
+    with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
+        member = tar.extractfile("BUNDLE_VERSION")
+        assert member is not None
+        assert member.read().decode() == version
+    assert len(version) == 16
+
+
+@pytest.mark.asyncio
+async def test_version_is_stable_across_requests(app_client: AsyncClient) -> None:
+    """A hash of the tarball would change per request (tar and gzip embed
+    timestamps); the version must not."""
+    first = (await app_client.get("/agent-bundle/version")).json()["version"]
+    second = (await app_client.get("/agent-bundle/version")).json()["version"]
+    assert first == second
+
+
+@pytest.mark.asyncio
+async def test_both_installers_run_the_update_loop(app_client: AsyncClient) -> None:
+    for path in ("/install.sh", "/install.ps1"):
+        body = (await app_client.get(path)).text
+        assert "--bundle-version" in body, path
+        assert "75" in body, path
+        assert "--trainer-image" in body, path

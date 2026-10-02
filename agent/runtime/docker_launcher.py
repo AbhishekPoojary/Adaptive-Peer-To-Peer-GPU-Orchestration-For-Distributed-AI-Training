@@ -345,6 +345,50 @@ def ensure_rendezvous_network(client: docker.DockerClient, *, name: str) -> None
         logger.info("rendezvous network %r already present (%s)", name, exc)
 
 
+def is_published_image(image: str) -> bool:
+    """True iff ``image`` names a registry repository a peer can pull.
+
+    A bare name like ``gpu-orchestrator-trainer:latest`` is what a developer
+    builds locally; Docker would look for it as an official Docker Hub image,
+    which does not exist, so there is nothing to refresh. Anything with a
+    namespace (``user/name``) or a registry host is published somewhere.
+    """
+    repository, _tag = docker.utils.parse_repository_tag(image)
+    return "/" in repository
+
+
+def refresh_trainer_image(client: docker.DockerClient, image: str) -> str:
+    """Pull ``image`` so this peer runs the trainer its orchestrator expects.
+
+    Returns what happened: ``"updated"`` (a newer image was fetched),
+    ``"current"`` (already up to date), ``"skipped"`` (a local-only image, see
+    :func:`is_published_image`), or ``"failed"`` (no network, registry down,
+    ...). Never raises: a failed refresh leaves the image already on disk in
+    place, which keeps running jobs exactly as before -- far better than a peer
+    that stops contributing because a registry hiccupped.
+
+    This is what makes a trainer fix reach every peer without anyone on the
+    peer doing anything. Without it, the image was pulled once at install and
+    never again, so a fixed image sat on Docker Hub while peers kept running
+    the old one.
+    """
+    if not is_published_image(image):
+        return "skipped"
+    repository, tag = docker.utils.parse_repository_tag(image)
+    try:
+        before = client.images.get(image).id
+    except docker.errors.ImageNotFound:
+        before = None
+    except docker.errors.APIError:
+        before = None
+    try:
+        after = client.images.pull(repository, tag=tag or "latest").id
+    except (docker.errors.APIError, docker.errors.DockerException) as exc:
+        logger.warning("could not refresh trainer image %s: %s", image, exc)
+        return "failed"
+    return "current" if after == before else "updated"
+
+
 def trainer_image_available(client: docker.DockerClient, image: str) -> bool:
     """True iff ``image`` is already present on this machine.
 
