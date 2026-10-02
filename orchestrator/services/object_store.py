@@ -119,6 +119,16 @@ class _BucketStore:
         except (botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError) as exc:
             raise ObjectStoreError(f"could not store the dataset: {exc}") from exc
 
+    def put_bytes(self, *, key: str, data: bytes) -> None:
+        """Store ``data`` under ``key``, replacing any existing object."""
+        import botocore.exceptions
+
+        client = self._get_client()
+        try:
+            client.put_object(Bucket=self._bucket, Key=key, Body=data)
+        except (botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError) as exc:
+            raise ObjectStoreError(f"could not write {key}: {exc}") from exc
+
     def delete_object(self, *, key: str) -> None:
         """Remove an object. A missing object is not an error.
 
@@ -224,9 +234,10 @@ class DatasetObjectStore(_BucketStore):
 class CheckpointObjectStore(_BucketStore):
     """The checkpoints bucket (ADR-006 addendum 2).
 
-    Read-only from the orchestrator's side: checkpoints are *written* by the
-    trainer on a peer, and the control plane only ever reads the manifest to
-    answer "where is this job's model?".
+    Checkpoints are written by the trainer on a peer. Since ADR-006 addendum 3
+    those writes pass through the orchestrator (``put_bytes``) so that no peer
+    holds this bucket's credentials; the orchestrator itself still never
+    decides what a checkpoint contains.
     """
 
     def __init__(self, settings: Settings) -> None:

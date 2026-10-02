@@ -20,11 +20,20 @@ Design (see ``docs/adr/ADR-006-addendum.md`` for the full schema):
 * The manifest read-modify-write is race-free by ADR-006's single-writer
   guarantee (only rank 0 writes, and a reassigned attempt's old rank 0 is dead
   before the new one starts).
+
+Two stores implement the same two-method Protocol. :class:`ApiObjectStore` is
+the normal one since ADR-006 addendum 3: it goes through the orchestrator with
+a token scoped to this lease, so a peer never holds storage credentials.
+:class:`S3ObjectStore` talks to MinIO directly and remains for a co-located
+setup that sets ``S3_*`` explicitly. :func:`store_from_env` picks.
 """
 
 from __future__ import annotations
 
 import json
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -233,3 +242,63 @@ class S3ObjectStore:
             bucket=bucket,
             region=env.get("S3_REGION", "us-east-1"),
         )
+
+
+class ApiObjectStore:
+    """:class:`ObjectStore` over the orchestrator's checkpoint endpoints.
+
+    ``PUT``/``GET /leases/{lease_id}/checkpoint-objects/{key}``, authorised by
+    the lease-scoped token the agent received at claim time (ADR-006 addendum
+    3). Uses only the standard library, so the trainer gains no dependency.
+
+    The orchestrator answers 409 once this attempt has been superseded. That
+    surfaces as an exception from ``put_bytes``, which ``train.py`` already
+    treats as a failed write -- logged, and training continues until the agent
+    stops the container.
+    """
+
+    def __init__(
+        self, *, api_url: str, lease_id: str, token: str, timeout_seconds: float = 120.0
+    ) -> None:
+        self._base = f"{api_url.rstrip('/')}/leases/{lease_id}/checkpoint-objects/"
+        self._token = token
+        self._timeout = timeout_seconds
+
+    def _request(self, method: str, key: str, data: bytes | None = None) -> bytes:
+        request = urllib.request.Request(
+            self._base + urllib.parse.quote(key, safe="/"),
+            data=data,
+            method=method,
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                "Content-Type": "application/octet-stream",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=self._timeout) as response:
+            body: bytes = response.read()
+            return body
+
+    def put_bytes(self, key: str, data: bytes) -> None:
+        self._request("PUT", key, data)
+
+    def get_bytes(self, key: str) -> bytes:
+        try:
+            return self._request("GET", key)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                raise ObjectNotFoundError(key) from exc
+            raise
+
+
+def store_from_env(env: dict[str, str]) -> ObjectStore | None:
+    """The checkpoint store this trainer should use, or ``None`` for none.
+
+    The orchestrator route wins when the agent supplied it; direct S3 is the
+    fallback for a setup that configures MinIO credentials explicitly.
+    """
+    api_url = env.get("CHECKPOINT_API_URL")
+    token = env.get("CHECKPOINT_TOKEN")
+    lease_id = env.get("LEASE_ID")
+    if api_url and token and lease_id:
+        return ApiObjectStore(api_url=api_url, lease_id=lease_id, token=token)
+    return S3ObjectStore.from_env(env)

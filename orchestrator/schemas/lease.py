@@ -68,6 +68,10 @@ class ClaimResponse(BaseModel):
     lease: LeaseOut | None
     rendezvous: RendezvousAssignment | None = None
     job_spec: dict[str, Any] | None = None
+    #: The trainer's credential for ``/leases/{id}/checkpoint-objects`` (ADR-006
+    #: addendum 3). Kept out of ``job_spec`` on purpose: the spec is logged and
+    #: stored, and this is a secret that should be neither.
+    checkpoint_token: str | None = None
 
 
 class LeaseEpochRequest(BaseModel):

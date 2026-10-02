@@ -38,6 +38,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
+from urllib.parse import urlsplit, urlunsplit
 
 import docker
 import docker.errors
@@ -150,6 +151,28 @@ def _torchrun_command(rendezvous: RendezvousSpec) -> list[str]:
     ]
 
 
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+#: How a container reaches the machine it runs on. Docker Desktop resolves it
+#: natively; Linux Docker needs the ``host-gateway`` mapping added below.
+_DOCKER_HOST_ALIAS = "host.docker.internal"
+
+
+def container_reachable_url(url: str) -> str:
+    """``url`` as seen from inside a trainer container.
+
+    An orchestrator the agent reaches at ``localhost`` is, from inside a bridged
+    container, not at ``localhost`` -- that is the container itself. Rewriting
+    loopback to the Docker host alias makes the co-located setup work. Any
+    other host (a LAN address, a tunnel, a Tailscale name) is already the same
+    from both sides and is returned unchanged.
+    """
+    parts = urlsplit(url)
+    if parts.hostname not in _LOOPBACK_HOSTS:
+        return url
+    netloc = _DOCKER_HOST_ALIAS + (f":{parts.port}" if parts.port else "")
+    return urlunsplit(parts._replace(netloc=netloc))
+
+
 def build_run_kwargs(
     *,
     config: TrainerLaunchConfig,
@@ -159,6 +182,8 @@ def build_run_kwargs(
     lease_epoch: int,
     has_gpu: bool,
     rendezvous: RendezvousSpec | None = None,
+    checkpoint_api_url: str | None = None,
+    checkpoint_token: str | None = None,
 ) -> dict[str, Any]:
     """Build the exact kwargs for ``docker_client.containers.run(**kwargs)``.
 
@@ -175,6 +200,12 @@ def build_run_kwargs(
     rendezvous host taking the agreed network name/alias so its endpoint
     resolves. ``world_size == 1`` (or ``None``) keeps the M4 single-process path
     exactly: image default entrypoint, plain bridge networking.
+
+    ``checkpoint_api_url``/``checkpoint_token`` (ADR-006 addendum 3) route the
+    trainer's checkpoints through the orchestrator. The URL must already be
+    the one the *trainer* can reach (see :func:`container_reachable_url`); it
+    differs between the container and unsandboxed paths, so the caller
+    decides.
     """
     # A custom dataset (ADR-014) carries no built-in name: the orchestrator put a
     # presigned URL and a digest in the spec at claim time instead. Sending
@@ -209,7 +240,14 @@ def build_run_kwargs(
     # exactly the pre-M6 env. In the dev co-located topology the endpoint is the
     # host's published MinIO port (e.g. http://host.docker.internal:9010), so the
     # trainer container reaches the same MinIO the orchestrator uses.
-    if config.checkpointing_enabled():
+    if checkpoint_api_url and checkpoint_token:
+        # ADR-006 addendum 3: through the orchestrator, with a credential that
+        # covers this lease and nothing else. Preferred over the S3 pass-through
+        # below, which needs the bucket's own keys on the peer.
+        environment["CHECKPOINT_API_URL"] = checkpoint_api_url
+        environment["CHECKPOINT_TOKEN"] = checkpoint_token
+        environment["CHECKPOINT_EVERY_N_STEPS"] = str(config.checkpoint_every_n_steps)
+    elif config.checkpointing_enabled():
         assert config.s3_endpoint_url is not None  # narrowed by checkpointing_enabled
         assert config.s3_access_key is not None
         assert config.s3_secret_key is not None
@@ -265,6 +303,12 @@ def build_run_kwargs(
     else:
         # M4 single-process path: image default entrypoint, plain bridge.
         kwargs["network_mode"] = "bridge"
+
+    if checkpoint_api_url and urlsplit(checkpoint_api_url).hostname == _DOCKER_HOST_ALIAS:
+        # Docker Desktop resolves the alias on its own; Linux Docker does not
+        # unless told, and this mapping is how it is told. Harmless where it
+        # is already defined.
+        kwargs["extra_hosts"] = {_DOCKER_HOST_ALIAS: "host-gateway"}
 
     if has_gpu:
         kwargs["device_requests"] = [

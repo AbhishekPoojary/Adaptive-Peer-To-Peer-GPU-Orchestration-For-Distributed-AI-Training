@@ -28,6 +28,7 @@ from agent.runtime.docker_launcher import (
     SupportsLogs,
     TrainerLaunchConfig,
     build_run_kwargs,
+    container_reachable_url,
     ensure_dataset_cache_volume,
     ensure_rendezvous_network,
     launch_trainer_container,
@@ -152,6 +153,7 @@ async def run_lease_execution(
     rendezvous: RendezvousSpec | None = None,
     unsandboxed: bool = False,
     launched: asyncio.Event | None = None,
+    checkpoint_token: str | None = None,
 ) -> ExecutionResult:
     """Launch this lease's trainer and run it to completion, forwarding its
     real output over the WebSocket stream as it happens.
@@ -161,6 +163,11 @@ async def run_lease_execution(
     (created here if absent). ``None``/``world_size == 1`` is the M4
     single-process path. Raises :class:`DockerLaunchError` if the container
     itself never started.
+
+    ``checkpoint_token`` is the lease-scoped credential from the claim
+    (ADR-006 addendum 3); with it the trainer checkpoints through the
+    orchestrator at ``orchestrator_http_base``, rewritten for a container where
+    the container would not otherwise reach it.
 
     ``launched`` is set once the trainer is really running, so the caller can
     tell the orchestrator training has started at the moment it did rather
@@ -179,6 +186,13 @@ async def run_lease_execution(
         lease_epoch=lease_epoch,
         has_gpu=has_gpu,
         rendezvous=rendezvous,
+        # A child process shares the agent's network view; a container does not.
+        checkpoint_api_url=(
+            orchestrator_http_base
+            if unsandboxed
+            else container_reachable_url(orchestrator_http_base)
+        ),
+        checkpoint_token=checkpoint_token,
     )
 
     container: SupportsLogs

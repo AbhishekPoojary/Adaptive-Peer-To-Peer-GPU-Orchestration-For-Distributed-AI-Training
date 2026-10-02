@@ -599,9 +599,10 @@ def main() -> None:
     lease_epoch = os.environ.get("LEASE_EPOCH", "unknown")
     cache_dir = os.environ.get("TORCH_DATA_CACHE", "/data-cache")
     num_workers = int(os.environ.get("NUM_WORKERS", "2"))
-    # M6 checkpointing (ADR-006): a real S3/MinIO store when configured, else
-    # None → the M4/M5 no-checkpoint path, unchanged. Cadence in optimizer steps.
-    checkpoint_store = ckpt.S3ObjectStore.from_env(dict(os.environ))
+    # M6 checkpointing (ADR-006): through the orchestrator when the agent passed
+    # a checkpoint token (addendum 3), else direct S3/MinIO when configured,
+    # else None → the M4/M5 no-checkpoint path. Cadence in optimizer steps.
+    checkpoint_store = ckpt.store_from_env(dict(os.environ))
     checkpoint_every_n_steps = int(os.environ.get("CHECKPOINT_EVERY_N_STEPS", "100"))
 
     if epochs < 1:
@@ -751,7 +752,7 @@ def main() -> None:
         else:
             log(f"checkpoint: no prior checkpoint for job={job_id}; starting fresh (first attempt)")
     else:
-        log("checkpoint: S3/MinIO not configured; running without checkpoint/resume")
+        log("checkpoint: no checkpoint storage configured; running without checkpoint/resume")
 
     model: nn.Module
     if dist_config.distributed:

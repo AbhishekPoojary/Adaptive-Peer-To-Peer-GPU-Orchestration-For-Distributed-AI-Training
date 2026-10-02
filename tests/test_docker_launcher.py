@@ -411,3 +411,65 @@ def test_ensure_rendezvous_network_is_a_noop_when_present() -> None:
     client = FakeDockerClient(existing_networks=["gpuorch-rdzv-abc123"])
     ensure_rendezvous_network(client, name="gpuorch-rdzv-abc123")  # type: ignore[arg-type]
     assert client.networks.created == []
+
+
+# --- Checkpoints through the orchestrator (ADR-006 addendum 3) ----------------
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        ("http://localhost:8090", "http://host.docker.internal:8090"),
+        ("http://127.0.0.1:8090/", "http://host.docker.internal:8090/"),
+        ("http://localhost", "http://host.docker.internal"),
+        # Anything else names a host the container resolves the same way.
+        ("http://192.168.1.10:8090", "http://192.168.1.10:8090"),
+        ("https://orchestrator.example.trycloudflare.com",
+         "https://orchestrator.example.trycloudflare.com"),
+    ],
+)
+def test_container_reachable_url(given: str, expected: str) -> None:
+    from agent.runtime.docker_launcher import container_reachable_url
+
+    assert container_reachable_url(given) == expected
+
+
+def test_checkpoint_token_reaches_the_trainer_instead_of_bucket_keys() -> None:
+    """With a token the trainer goes through the orchestrator, and the S3 keys
+    are not passed even when this agent happens to have them configured."""
+    kwargs = build_run_kwargs(
+        config=_config(
+            s3_endpoint_url="http://minio:9000",
+            s3_access_key="root",
+            s3_secret_key="root-secret",
+            s3_bucket_checkpoints="checkpoints",
+        ),
+        job_spec=_JOB_SPEC,
+        job_id="job-1",
+        lease_id="lease-1",
+        lease_epoch=1,
+        has_gpu=False,
+        checkpoint_api_url="http://host.docker.internal:8090",
+        checkpoint_token="tok",
+    )
+    env = kwargs["environment"]
+    assert env["CHECKPOINT_API_URL"] == "http://host.docker.internal:8090"
+    assert env["CHECKPOINT_TOKEN"] == "tok"
+    assert "S3_SECRET_KEY" not in env
+    assert "S3_ACCESS_KEY" not in env
+    # Linux Docker resolves the host alias only with this mapping.
+    assert kwargs["extra_hosts"] == {"host.docker.internal": "host-gateway"}
+
+
+def test_no_host_mapping_for_a_remote_orchestrator() -> None:
+    kwargs = build_run_kwargs(
+        config=_config(),
+        job_spec=_JOB_SPEC,
+        job_id="job-1",
+        lease_id="lease-1",
+        lease_epoch=1,
+        has_gpu=False,
+        checkpoint_api_url="http://192.168.1.10:8090",
+        checkpoint_token="tok",
+    )
+    assert "extra_hosts" not in kwargs

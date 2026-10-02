@@ -541,6 +541,7 @@ async def _service_lease(
                 rendezvous=rendezvous,
                 unsandboxed=docker_client is None,
                 launched=launched,
+                checkpoint_token=claimed.get("checkpoint_token"),
             )
         )
         return ExecutingLease(held=held, task=task, launched=launched)

@@ -13,16 +13,22 @@ for renew/complete/fail (a node may only act on its own lease → 403).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.api.deps import assert_node_scope, get_settings_dep, require_node_auth
 from orchestrator.core.config import Settings
 from orchestrator.core.db import get_session
+from orchestrator.core.security import (
+    JWTValidationError,
+    create_checkpoint_jwt,
+    decode_checkpoint_jwt,
+)
 from orchestrator.models.job import Job
 from orchestrator.models.lease import Lease
 from orchestrator.models.node import Node
@@ -33,6 +39,7 @@ from orchestrator.schemas.lease import (
     LeaseEpochRequest,
     LeaseFailRequest,
 )
+from orchestrator.services.checkpoint_access import CheckpointAccessDeniedError, authorize
 from orchestrator.services.datasets import get_dataset
 from orchestrator.services.jobs import IllegalTransitionError
 from orchestrator.services.leases import (
@@ -46,7 +53,12 @@ from orchestrator.services.leases import (
     rendezvous_assignment,
     renew_lease,
 )
-from orchestrator.services.object_store import DatasetObjectStore, ObjectStoreError
+from orchestrator.services.object_store import (
+    CheckpointObjectStore,
+    DatasetObjectStore,
+    ObjectNotFoundError,
+    ObjectStoreError,
+)
 
 logger = logging.getLogger("orchestrator.leases")
 
@@ -162,9 +174,18 @@ async def claim_lease(
     rendezvous = rendezvous_assignment(job, lease, settings=settings)
     job_spec = dict(job.spec)
     await _attach_dataset_fetch(job_spec, session=session, settings=settings)
+    checkpoint_token = create_checkpoint_jwt(
+        lease_id=str(lease.id),
+        job_id=str(job.id),
+        signing_key=settings.jwt_signing_key,
+        ttl_seconds=settings.checkpoint_token_ttl_seconds,
+    )
     await session.commit()
     return ClaimResponse(
-        lease=_lease_out(lease), rendezvous=rendezvous, job_spec=job_spec
+        lease=_lease_out(lease),
+        rendezvous=rendezvous,
+        job_spec=job_spec,
+        checkpoint_token=checkpoint_token,
     )
 
 
@@ -277,3 +298,129 @@ async def fail(
         raise _NOT_ACTIVE from exc
     await session.commit()
     return _lease_out(lease)
+
+
+# --- Checkpoint objects (ADR-006 addendum 3) ----------------------------------
+
+
+async def _checkpoint_grant(
+    *,
+    lease_id: uuid.UUID,
+    key: str,
+    write: bool,
+    authorization: str | None,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    """Authenticate the trainer's checkpoint token and apply the access rules."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing checkpoint token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        token_lease, token_job = decode_checkpoint_jwt(
+            authorization[7:].strip(), signing_key=settings.jwt_signing_key
+        )
+    except JWTValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid checkpoint token",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    try:
+        await authorize(
+            session,
+            token_lease_id=token_lease,
+            token_job_id=token_job,
+            path_lease_id=lease_id,
+            key=key,
+            write=write,
+        )
+    except CheckpointAccessDeniedError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+
+
+@router.get("/leases/{lease_id}/checkpoint-objects/{key:path}")
+async def read_checkpoint_object(
+    lease_id: uuid.UUID,
+    key: str,
+    authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings_dep),
+) -> Response:
+    """A trainer reads its job's manifest or a checkpoint blob.
+
+    404 when the object does not exist, which on the manifest is the ordinary
+    answer for a first attempt ("nothing to resume from"). 503 when storage is
+    unreachable, kept distinct so the trainer's log says which of the two
+    happened rather than reporting an outage as "no prior checkpoint".
+    """
+    await _checkpoint_grant(
+        lease_id=lease_id,
+        key=key,
+        write=False,
+        authorization=authorization,
+        session=session,
+        settings=settings,
+    )
+    await session.rollback()  # read-only; release the connection before I/O
+    store = CheckpointObjectStore(settings)
+    try:
+        data = await asyncio.to_thread(store.get_bytes, key=key)
+    except ObjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="no such checkpoint object") from exc
+    except ObjectStoreError as exc:
+        logger.warning("checkpoint read of %s failed: %s", key, exc)
+        raise HTTPException(status_code=503, detail="checkpoint storage is unreachable") from exc
+    return Response(content=data, media_type="application/octet-stream")
+
+
+@router.put(
+    "/leases/{lease_id}/checkpoint-objects/{key:path}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def write_checkpoint_object(
+    lease_id: uuid.UUID,
+    key: str,
+    request: Request,
+    authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings_dep),
+) -> Response:
+    """Rank 0 of the live attempt stores a checkpoint blob or its manifest.
+
+    The size is checked against the declared length before the body is read
+    and again after, so an oversized upload is refused without buffering it
+    when the client is honest about its length and still refused when not.
+    """
+    await _checkpoint_grant(
+        lease_id=lease_id,
+        key=key,
+        write=True,
+        authorization=authorization,
+        session=session,
+        settings=settings,
+    )
+    await session.rollback()
+    too_large = HTTPException(
+        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        detail=f"checkpoint objects are limited to {settings.checkpoint_max_bytes} bytes",
+    )
+    declared = request.headers.get("content-length")
+    limit = settings.checkpoint_max_bytes
+    if declared is not None and declared.isdigit() and int(declared) > limit:
+        raise too_large
+    data = await request.body()
+    if len(data) > limit:
+        raise too_large
+
+    store = CheckpointObjectStore(settings)
+    try:
+        await asyncio.to_thread(store.ensure_bucket)
+        await asyncio.to_thread(store.put_bytes, key=key, data=data)
+    except ObjectStoreError as exc:
+        logger.warning("checkpoint write of %s failed: %s", key, exc)
+        raise HTTPException(status_code=503, detail="checkpoint storage is unreachable") from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

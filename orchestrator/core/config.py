@@ -96,6 +96,16 @@ class Settings(BaseSettings):
     # It is minted per claim, so a retry on another node gets a fresh one rather
     # than reusing this window.
     dataset_url_ttl_seconds: int = 3600
+    # Outer bound on a trainer's checkpoint credential (ADR-006 addendum 3).
+    # Generous because a run can last many hours and the token is not what
+    # limits access: every request re-checks that the lease is still the job's
+    # live attempt, so a superseded trainer is shut out regardless.
+    checkpoint_token_ttl_seconds: int = 86400
+    # Largest checkpoint object a trainer may store through the API. The body is
+    # buffered in the orchestrator's memory before it goes to MinIO, so this is
+    # a memory bound as much as a storage one. SmallCNN's checkpoints are a few
+    # MB; this leaves two orders of magnitude of room.
+    checkpoint_max_bytes: int = 512 * 1024 * 1024
 
 
     # --- Auth (ADR-008) ---

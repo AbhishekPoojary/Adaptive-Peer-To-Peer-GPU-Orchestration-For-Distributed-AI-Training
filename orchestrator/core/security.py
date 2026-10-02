@@ -27,6 +27,11 @@ NODE_AUDIENCE = "node"
 # the only thing preventing a node's own token from acting as an operator
 # (ADR-012 §3). Verified in both directions, never merely present.
 USER_AUDIENCE = "user"
+# JWT audience for a trainer's checkpoint credential (ADR-006 addendum 3). The
+# narrowest of the three: it names one lease, and is honoured only while that
+# lease is the job's live attempt. Distinct so neither a node nor a user token
+# can stand in for it, and it can stand in for neither of them.
+CHECKPOINT_AUDIENCE = "checkpoint"
 
 _JWT_ALGORITHM = "HS256"
 
@@ -231,6 +236,54 @@ def decode_user_jwt(token: str, *, signing_key: str) -> tuple[str, str, str]:
     if not isinstance(role, str) or not role:
         raise JWTValidationError("token missing role")
     return subject, username, role
+
+
+def create_checkpoint_jwt(
+    *,
+    lease_id: str,
+    job_id: str,
+    signing_key: str,
+    ttl_seconds: int,
+    now: datetime | None = None,
+) -> str:
+    """Issue the credential a trainer uses to read and write its checkpoints.
+
+    Claims: ``sub`` = lease id, ``job`` = job id, ``aud`` = ``"checkpoint"``.
+    The expiry is only an outer bound. What actually limits the token is the
+    per-request check that its lease is still the job's active, current-epoch
+    attempt, so a fenced-out trainer loses access the moment it is superseded
+    however long its token has left.
+    """
+    issued = now or datetime.now(UTC)
+    payload: dict[str, Any] = {
+        "sub": lease_id,
+        "job": job_id,
+        "aud": CHECKPOINT_AUDIENCE,
+        "iat": int(issued.timestamp()),
+        "exp": int((issued + timedelta(seconds=ttl_seconds)).timestamp()),
+    }
+    return jwt.encode(payload, signing_key, algorithm=_JWT_ALGORITHM)
+
+
+def decode_checkpoint_jwt(token: str, *, signing_key: str) -> tuple[str, str]:
+    """Verify a checkpoint token; return ``(lease_id, job_id)``."""
+    try:
+        payload = jwt.decode(
+            token,
+            signing_key,
+            algorithms=[_JWT_ALGORITHM],
+            audience=CHECKPOINT_AUDIENCE,
+            options={"require": ["exp", "sub", "aud"]},
+        )
+    except jwt.PyJWTError as exc:  # expired, bad signature, wrong audience, ...
+        raise JWTValidationError(str(exc)) from exc
+    lease_id = payload.get("sub")
+    job_id = payload.get("job")
+    if not isinstance(lease_id, str) or not lease_id:
+        raise JWTValidationError("token missing subject")
+    if not isinstance(job_id, str) or not job_id:
+        raise JWTValidationError("token missing job")
+    return lease_id, job_id
 
 
 # --- Ed25519 ------------------------------------------------------------------
