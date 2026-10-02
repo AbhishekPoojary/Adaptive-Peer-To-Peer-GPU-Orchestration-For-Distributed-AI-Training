@@ -37,7 +37,12 @@ from bench.harness.inventory import (
     capture_hardware,
     git_sha,
 )
-from bench.harness.scenarios import failure_recovery, gpu_utilization, reliability_placement
+from bench.harness.scenarios import (
+    failure_recovery,
+    gpu_utilization,
+    reliability_placement,
+    scalability,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 SCENARIO_DIR = _REPO_ROOT / "bench" / "scenarios"
@@ -51,6 +56,7 @@ SCENARIOS = {
     gpu_utilization.NAME: gpu_utilization,
     # Same measurement over an uploaded dataset; only the config differs.
     "gpu_utilization_custom": gpu_utilization,
+    scalability.NAME: scalability,
 }
 
 logger = logging.getLogger("bench")

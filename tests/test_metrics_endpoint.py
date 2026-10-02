@@ -83,3 +83,14 @@ async def test_metrics_jobs_gauge_has_zero_for_unused_states(api_client: AsyncCl
     assert _metric_value(body, 'orchestrator_jobs{state="CANCELLED"}') == 0.0
     # Sanity: an unrelated random uuid never appears anywhere in the exposition.
     assert str(uuid.uuid4()) not in body
+
+
+@pytest.mark.asyncio
+async def test_request_durations_are_labelled_by_route_template(api_client: AsyncClient) -> None:
+    """Labelled by template, so a thousand nodes are one series, not a thousand."""
+    node_id = "00000000-0000-0000-0000-000000000000"
+    await api_client.get(f"/nodes/{node_id}")
+    body = (await api_client.get("/metrics")).text
+    assert 'route="/nodes/{node_id}"' in body
+    assert node_id not in body
+    assert "orchestrator_scheduler_pass_seconds_count" in body

@@ -1,0 +1,15 @@
+{
+  "_description": [
+    "Control-plane cost as the fleet grows: real agent processes added one size",
+    "at a time; request-handling and background-pass durations from the",
+    "orchestrator's own histograms; real adaptive-scheduler placements, each",
+    "cancelled once leased so trainers never contend for the one GPU."
+  ],
+  "fleet_sizes": [1, 2, 4, 8, 16],
+  "window_seconds": 30,
+  "settle_seconds": 10,
+  "placements_per_size": 10,
+  "orchestrator_container": "deploy-orchestrator-1",
+  "job_spec": {"dataset": "mnist", "model": "cnn", "epochs": 1, "batch_size": 256,
+               "learning_rate": 0.01, "world_size": 1}
+}

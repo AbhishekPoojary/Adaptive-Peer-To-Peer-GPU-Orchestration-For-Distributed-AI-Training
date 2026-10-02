@@ -18,6 +18,7 @@ import logging
 
 from orchestrator.core.config import Settings
 from orchestrator.core.db import session_scope
+from orchestrator.core.metrics import failure_detector_pass_seconds, scheduler_pass_seconds
 from orchestrator.services.failure_detection import run_failure_detection_pass
 from orchestrator.services.leases import sweep_expired_leases
 from orchestrator.services.scheduling import run_scheduler_pass
@@ -31,8 +32,9 @@ _scheduler_lock = asyncio.Lock()
 async def trigger_scheduler_pass(settings: Settings) -> int:
     """Run one scheduler pass under the process-wide lock and commit."""
     async with _scheduler_lock, session_scope() as session:
-        placed = await run_scheduler_pass(session, settings=settings)
-        await session.commit()
+        with scheduler_pass_seconds.time():
+            placed = await run_scheduler_pass(session, settings=settings)
+            await session.commit()
         return placed
 
 
@@ -79,8 +81,9 @@ async def _failure_detector_loop(settings: Settings) -> None:
         await asyncio.sleep(interval)
         try:
             async with session_scope() as session:
-                declared = await run_failure_detection_pass(session, settings=settings)
-                await session.commit()
+                with failure_detector_pass_seconds.time():
+                    declared = await run_failure_detection_pass(session, settings=settings)
+                    await session.commit()
             if declared:
                 for d in declared:
                     logger.warning(

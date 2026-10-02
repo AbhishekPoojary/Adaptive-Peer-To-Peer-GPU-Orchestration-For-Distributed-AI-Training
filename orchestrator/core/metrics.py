@@ -19,7 +19,7 @@ straight from the same tables the REST read API serves from.
 
 from __future__ import annotations
 
-from prometheus_client import CollectorRegistry, Counter, Gauge
+from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -75,6 +75,39 @@ lease_offers_unclaimed_total = Counter(
     "a scheduling-efficiency signal (offers going to agents that cannot take "
     "them), not a node-reliability signal — no failure is attributed for it "
     "(ADR-003 addendum).",
+    registry=REGISTRY,
+)
+
+# --- Histograms: real durations measured around the real work ---------------
+#
+# How the control plane's cost grows with the fleet (bench scenario
+# "scalability"). Seconds, timed with a monotonic clock around the call itself.
+
+#: Spans sub-millisecond reads to multi-second outliers.
+_DURATION_BUCKETS = (
+    0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0,
+)
+
+http_request_seconds = Histogram(
+    "orchestrator_http_request_seconds",
+    "Time to handle an HTTP request, by method and route template (not the "
+    "concrete path, so ids do not multiply the series).",
+    ["method", "route"],
+    buckets=_DURATION_BUCKETS,
+    registry=REGISTRY,
+)
+
+scheduler_pass_seconds = Histogram(
+    "orchestrator_scheduler_pass_seconds",
+    "Time for one scheduler pass, including its commit.",
+    buckets=_DURATION_BUCKETS,
+    registry=REGISTRY,
+)
+
+failure_detector_pass_seconds = Histogram(
+    "orchestrator_failure_detector_pass_seconds",
+    "Time for one failure-detection pass over every ONLINE node, with its commit.",
+    buckets=_DURATION_BUCKETS,
     registry=REGISTRY,
 )
 

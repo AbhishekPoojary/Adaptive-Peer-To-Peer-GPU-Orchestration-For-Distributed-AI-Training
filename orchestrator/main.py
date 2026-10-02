@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+import time
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 
 from orchestrator.api.auth import router as auth_router
 from orchestrator.api.datasets import router as datasets_router
@@ -20,6 +21,7 @@ from orchestrator.api.users import router as users_router
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.db import dispose_engine, get_engine
 from orchestrator.core.logging import configure_logging
+from orchestrator.core.metrics import http_request_seconds
 from orchestrator.services.loops import start_background_loops, stop_background_loops
 
 # APP_ENV values treated as development/test, where dev-only defaults are
@@ -78,6 +80,22 @@ def create_app() -> FastAPI:
     app.include_router(jobs_router)
     app.include_router(leases_router)
     app.include_router(streaming_router)
+
+    @app.middleware("http")
+    async def time_requests(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        started = time.perf_counter()
+        response = await call_next(request)
+        # The route template (/nodes/{node_id}/heartbeat), known only after
+        # routing; unmatched requests share one label rather than one each.
+        route = request.scope.get("route")
+        template = getattr(route, "path", "unmatched")
+        http_request_seconds.labels(request.method, template).observe(
+            time.perf_counter() - started
+        )
+        return response
+
     return app
 
 
