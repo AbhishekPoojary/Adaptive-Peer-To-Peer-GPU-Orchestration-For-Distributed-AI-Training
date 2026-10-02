@@ -503,7 +503,14 @@ def _download_and_verify(url: str, *, expected_sha256: str, destination: str) ->
 
     digest = hashlib.sha256()
     downloaded = 0
-    with urllib.request.urlopen(url) as response, open(destination, "wb") as sink:
+    request = urllib.request.Request(url)
+    # The lease token goes only to the orchestrator's own address; a presigned
+    # storage URL needs none, and must never be handed a credential.
+    api = os.environ.get("CHECKPOINT_API_URL", "").rstrip("/")
+    token = os.environ.get("CHECKPOINT_TOKEN", "")
+    if api and token and url.startswith(api + "/"):
+        request.add_header("Authorization", f"Bearer {token}")
+    with urllib.request.urlopen(request) as response, open(destination, "wb") as sink:
         while chunk := response.read(_DOWNLOAD_CHUNK_BYTES):
             digest.update(chunk)
             sink.write(chunk)

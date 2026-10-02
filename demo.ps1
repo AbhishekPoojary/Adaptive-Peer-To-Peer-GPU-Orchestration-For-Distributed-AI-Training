@@ -251,25 +251,42 @@ if ($Public) {
         Say "      winget install --id Cloudflare.cloudflared" "Yellow"
         exit 1
     }
-    Say "  Opening a public tunnel..." "Gray"
-    $cfLog = Join-Path $env:TEMP "gpu-orch-tunnel.log"
-    Remove-Item $cfLog -ErrorAction SilentlyContinue
-    Start-Process $cf -ArgumentList "tunnel", "--url", "http://localhost:5173" `
-        -RedirectStandardError $cfLog -RedirectStandardOutput "$cfLog.out" -WindowStyle Hidden
+    # One quick tunnel per local port; returns its https:// address or $null.
+    function Open-Tunnel([int]$port, [string]$name) {
+        $log = Join-Path $env:TEMP "gpu-orch-tunnel-$name.log"
+        Remove-Item $log, "$log.out" -ErrorAction SilentlyContinue
+        Start-Process $cf -ArgumentList "tunnel", "--no-autoupdate", "--url", "http://localhost:$port" `
+            -RedirectStandardError $log -RedirectStandardOutput "$log.out" -WindowStyle Hidden
+        $deadline = (Get-Date).AddMinutes(2)
+        do {
+            Start-Sleep -Seconds 2
+            $found = Select-String -Path $log, "$log.out" -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' `
+                -ErrorAction SilentlyContinue | Select-Object -First 1
+        } while (-not $found -and (Get-Date) -lt $deadline)
+        if ($found) { return $found.Matches[0].Value }
+        return $null
+    }
 
-    $deadline = (Get-Date).AddMinutes(2)
-    do {
-        Start-Sleep -Seconds 2
-        $found = Select-String -Path $cfLog, "$cfLog.out" -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' `
-            -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($found) { $publicUrl = $found.Matches[0].Value }
-    } while (-not $publicUrl -and (Get-Date) -lt $deadline)
+    Say "  Opening public tunnels..." "Gray"
+    $publicUrl = Open-Tunnel 5173 "dashboard"
+    # The orchestrator gets a tunnel of its own, for peers' agents. Cloudflare
+    # terminates TLS with a certificate every machine already trusts, so a
+    # peer's tokens, heartbeats, logs and checkpoints travel encrypted with
+    # nothing to install or configure -- unlike the LAN address, which is
+    # plain HTTP. The installer served through it names the https:// address
+    # itself (X-Forwarded-Proto), so the agent dials that and nothing else.
+    $apiUrl = Open-Tunnel $orchPort "orchestrator"
 
     if (-not $publicUrl) {
-        Say "  ! The tunnel did not come up. Continuing with the LAN link only." "Yellow"
+        Say "  ! The dashboard tunnel did not come up. Continuing with the LAN link only." "Yellow"
     } else {
         $tunnelHost = ([Uri]$publicUrl).Host
         Say "  Public link    $publicUrl" "Green"
+    }
+    if ($apiUrl) {
+        Say "  Peers join at  $apiUrl  (HTTPS)" "Green"
+    } else {
+        Say "  ! The orchestrator tunnel did not come up; peers would join over plain HTTP." "Yellow"
     }
 }
 
@@ -291,8 +308,11 @@ Start-Sleep -Seconds 3
 $allowed = @($lanIp, "localhost")
 if ($tunnelHost) { $allowed = @($tunnelHost) + $allowed }
 $allowedList = $allowed -join ","
+# With a public orchestrator address, the dashboard's "Add a node" command
+# hands peers that HTTPS address rather than this machine's LAN one.
+$orchEnv = if ($apiUrl) { "`$env:VITE_ORCHESTRATOR_URL='$apiUrl'; " } else { "" }
 Start-Process powershell -WorkingDirectory $dash -ArgumentList "-NoExit", "-Command", `
-    "`$env:VITE_ALLOWED_HOSTS='$allowedList'; npm run dev -- --host 0.0.0.0 --strictPort"
+    "$orchEnv`$env:VITE_ALLOWED_HOSTS='$allowedList'; npm run dev -- --host 0.0.0.0 --strictPort"
 
 $dashUrl = if ($publicUrl) { $publicUrl } else { "http://${lanIp}:5173" }
 $deadline = (Get-Date).AddMinutes(2)

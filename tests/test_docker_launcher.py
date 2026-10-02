@@ -564,3 +564,24 @@ def test_a_local_only_image_is_never_pulled() -> None:
     )
     assert outcome == "skipped"
     assert images.pulled == []
+
+
+def test_custom_dataset_is_fetched_through_the_orchestrator() -> None:
+    """Not the presigned MinIO URL, which names a LAN address a remote peer
+    cannot reach and which is unencrypted on the LAN."""
+    spec = dict(_JOB_SPEC, dataset=None, dataset_url="http://192.168.1.10:9010/datasets/x",
+                dataset_sha256="ab" * 32)
+    kwargs = build_run_kwargs(
+        config=_config(),
+        job_spec=spec,
+        job_id="job-1",
+        lease_id="lease-9",
+        lease_epoch=1,
+        has_gpu=False,
+        checkpoint_api_url="https://orch.example.trycloudflare.com",
+        checkpoint_token="tok",
+    )
+    env = kwargs["environment"]
+    assert env["DATASET"] == "custom"
+    assert env["DATASET_URL"] == "https://orch.example.trycloudflare.com/leases/lease-9/dataset"
+    assert env["DATASET_SHA256"] == "ab" * 32

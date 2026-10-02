@@ -37,6 +37,12 @@ function guessPeerFacingUrl(): string {
     "http://localhost:8090";
   try {
     const api = new URL(configured);
+    // A configured public address (demo.ps1 -Public sets the orchestrator's
+    // own HTTPS tunnel) is exactly what peers should dial: keep it as is.
+    // Only a loopback default needs this machine's reachable hostname swapped
+    // in -- and swapping a tunnel's hostname into http://…:8090 produced an
+    // address that did not exist.
+    if (!isLoopback(api.origin)) return api.origin;
     const here = window.location.hostname;
     if (here && here !== api.hostname) {
       api.hostname = here;

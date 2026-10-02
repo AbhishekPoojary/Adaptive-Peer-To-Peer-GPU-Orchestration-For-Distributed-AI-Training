@@ -923,8 +923,43 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def plaintext_warning(orchestrator: str) -> str | None:
+    """Why this connection is unencrypted, or None when it is fine.
+
+    Plain HTTP is fine to this machine itself and over Tailscale, which
+    encrypts every packet on its own (100.64.0.0/10 addresses, *.ts.net names).
+    Anywhere else -- a LAN address, a public IP -- this node's token, its
+    heartbeats, the job's logs and its checkpoints cross the network readable
+    by anyone on the path.
+    """
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(orchestrator)
+    host = parts.hostname or ""
+    if parts.scheme == "https" or host in ("localhost", "host.docker.internal"):
+        return None
+    if host.endswith(".ts.net"):
+        return None
+    try:
+        address = ipaddress.ip_address(host)
+        if address.is_loopback or address in ipaddress.ip_network("100.64.0.0/10"):
+            return None
+    except ValueError:
+        pass
+    return (
+        f"{orchestrator} is plain HTTP to another machine: this node's access token, "
+        "telemetry, training logs and checkpoints are sent unencrypted. Ask the "
+        "operator for the https:// address (demo.ps1 -Public prints one) or join "
+        "over Tailscale."
+    )
+
+
 async def run(args: argparse.Namespace) -> None:
     orchestrator = args.orchestrator.rstrip("/")
+    warning = plaintext_warning(orchestrator)
+    if warning:
+        logger.warning("UNENCRYPTED CONNECTION: %s", warning)
     state_dir = Path(args.state_dir)
     state = load_state(state_dir)
 

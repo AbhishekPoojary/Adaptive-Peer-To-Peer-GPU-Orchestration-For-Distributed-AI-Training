@@ -19,6 +19,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.api.deps import assert_node_scope, get_settings_dep, require_node_auth
@@ -39,7 +40,11 @@ from orchestrator.schemas.lease import (
     LeaseEpochRequest,
     LeaseFailRequest,
 )
-from orchestrator.services.checkpoint_access import CheckpointAccessDeniedError, authorize
+from orchestrator.services.checkpoint_access import (
+    CheckpointAccessDeniedError,
+    authorize,
+    authorize_live_lease,
+)
 from orchestrator.services.datasets import get_dataset
 from orchestrator.services.jobs import IllegalTransitionError
 from orchestrator.services.leases import (
@@ -303,6 +308,87 @@ async def fail(
 # --- Checkpoint objects (ADR-006 addendum 3) ----------------------------------
 
 
+def _bearer_token(authorization: str | None, settings: Settings) -> tuple[str, str]:
+    """The (lease id, job id) a trainer's lease token names, or 401."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing lease token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        return decode_checkpoint_jwt(
+            authorization[7:].strip(), signing_key=settings.jwt_signing_key
+        )
+    except JWTValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid lease token",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+
+@router.get("/leases/{lease_id}/dataset")
+async def read_lease_dataset(
+    lease_id: uuid.UUID,
+    authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings_dep),
+) -> StreamingResponse:
+    """Stream the uploaded dataset of the job this lease is running.
+
+    The trainer used to fetch it straight from MinIO by a presigned URL. That
+    URL names this host's LAN address, so a peer joining over the internet --
+    through a tunnel, which is how a friend's laptop joins -- could not reach
+    it at all, and on the LAN it travelled as plain HTTP. Through here it
+    takes the same route and the same encryption as everything else the peer
+    does. It is streamed, never buffered: datasets are the one thing here
+    that is reliably large.
+
+    Authorised by the lease token, under the same fence as checkpoints: only
+    while this lease is the job's live attempt. The trainer still checks the
+    archive's SHA-256 before extracting it.
+    """
+    token_lease, token_job = _bearer_token(authorization, settings)
+    try:
+        grant = await authorize_live_lease(
+            session,
+            token_lease_id=token_lease,
+            token_job_id=token_job,
+            path_lease_id=lease_id,
+        )
+    except CheckpointAccessDeniedError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raw_id = grant.job.spec.get("dataset_id")
+    if not raw_id:
+        raise HTTPException(status_code=404, detail="this job trains on a built-in dataset")
+    dataset = await get_dataset(session, dataset_id=uuid.UUID(str(raw_id)))
+    # Read before the rollback: it expires loaded rows, and touching one after
+    # would attempt a lazy load outside the async context.
+    object_key = dataset.object_key if dataset is not None else None
+    # Release the connection before a download that may run for minutes.
+    await session.rollback()
+    if object_key is None:
+        raise HTTPException(status_code=404, detail="the job's dataset has been deleted")
+
+    store = DatasetObjectStore(settings)
+    size = await asyncio.to_thread(store.head_size_bytes, key=object_key)
+    headers = {"Content-Length": str(size)} if size is not None else {}
+    try:
+        chunks = store.iter_object(key=object_key)
+        first = await asyncio.to_thread(next, chunks, b"")
+    except ObjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="the dataset archive is missing") from exc
+    except ObjectStoreError as exc:
+        raise HTTPException(status_code=503, detail="dataset storage is unreachable") from exc
+
+    def body():  # type: ignore[no-untyped-def]
+        yield first
+        yield from chunks
+
+    return StreamingResponse(body(), media_type="application/zip", headers=headers)
+
+
 async def _checkpoint_grant(
     *,
     lease_id: uuid.UUID,
@@ -312,23 +398,8 @@ async def _checkpoint_grant(
     session: AsyncSession,
     settings: Settings,
 ) -> None:
-    """Authenticate the trainer's checkpoint token and apply the access rules."""
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="missing checkpoint token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    try:
-        token_lease, token_job = decode_checkpoint_jwt(
-            authorization[7:].strip(), signing_key=settings.jwt_signing_key
-        )
-    except JWTValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid checkpoint token",
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
+    """Authenticate the trainer's lease token and apply the checkpoint rules."""
+    token_lease, token_job = _bearer_token(authorization, settings)
     try:
         await authorize(
             session,

@@ -240,6 +240,13 @@ def build_run_kwargs(
     # exactly the pre-M6 env. In the dev co-located topology the endpoint is the
     # host's published MinIO port (e.g. http://host.docker.internal:9010), so the
     # trainer container reaches the same MinIO the orchestrator uses.
+    if dataset_url and checkpoint_api_url and checkpoint_token:
+        # Fetch the upload through the orchestrator rather than by the
+        # presigned MinIO URL in the spec: that URL names the operator's LAN
+        # address, unreachable from a peer on another network and unencrypted
+        # on the same one. The lease token authorises it (CHECKPOINT_TOKEN,
+        # below); the digest check in the trainer is unchanged.
+        environment["DATASET_URL"] = f"{checkpoint_api_url}/leases/{lease_id}/dataset"
     if checkpoint_api_url and checkpoint_token:
         # ADR-006 addendum 3: through the orchestrator, with a credential that
         # covers this lease and nothing else. Preferred over the S3 pass-through

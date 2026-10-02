@@ -74,22 +74,20 @@ def key_belongs_to_job(key: str, job_id: str) -> bool:
     return key.startswith(prefix) and "/" not in key[len(prefix) :]
 
 
-async def authorize(
+async def authorize_live_lease(
     session: AsyncSession,
     *,
     token_lease_id: str,
     token_job_id: str,
     path_lease_id: uuid.UUID,
-    key: str,
-    write: bool,
 ) -> CheckpointGrant:
-    """Decide one checkpoint request. Raises :class:`CheckpointAccessDeniedError`.
+    """The lease-token check shared by every trainer-facing route.
 
     The order gives the most useful answer first: a token for a different
-    lease is 403 before anything is looked up, a missing lease is 404, a
+    lease is 403 before anything is looked up, a missing lease is 404, and a
     superseded or finished one is 409 (the same code the lease endpoints use
     for a fenced-out holder, which the trainer treats as "stop, you have been
-    replaced"), and a key outside the job is 403.
+    replaced").
     """
     if token_lease_id != str(path_lease_id):
         raise CheckpointAccessDeniedError(403, "token was issued for a different lease")
@@ -110,6 +108,30 @@ async def authorize(
         )
     if lease.state is not LeaseState.ACTIVE:
         raise CheckpointAccessDeniedError(409, "lease is not active")
+    return CheckpointGrant(lease=lease, job=job)
+
+
+async def authorize(
+    session: AsyncSession,
+    *,
+    token_lease_id: str,
+    token_job_id: str,
+    path_lease_id: uuid.UUID,
+    key: str,
+    write: bool,
+) -> CheckpointGrant:
+    """Decide one checkpoint request. Raises :class:`CheckpointAccessDeniedError`.
+
+    The live-lease check first (:func:`authorize_live_lease`), then the
+    checkpoint rules: only rank 0 writes, and a key outside the job is 403.
+    """
+    grant = await authorize_live_lease(
+        session,
+        token_lease_id=token_lease_id,
+        token_job_id=token_job_id,
+        path_lease_id=path_lease_id,
+    )
+    lease, job = grant.lease, grant.job
     if write and lease.rank != 0:
         raise CheckpointAccessDeniedError(
             403, "only rank 0 writes checkpoints (ADR-006 single writer)"
