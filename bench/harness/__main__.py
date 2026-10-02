@@ -37,7 +37,7 @@ from bench.harness.inventory import (
     capture_hardware,
     git_sha,
 )
-from bench.harness.scenarios import failure_recovery, reliability_placement
+from bench.harness.scenarios import failure_recovery, gpu_utilization, reliability_placement
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 SCENARIO_DIR = _REPO_ROOT / "bench" / "scenarios"
@@ -48,6 +48,7 @@ SCENARIO_DIR = _REPO_ROOT / "bench" / "scenarios"
 SCENARIOS = {
     reliability_placement.NAME: reliability_placement,
     failure_recovery.NAME: failure_recovery,
+    gpu_utilization.NAME: gpu_utilization,
 }
 
 logger = logging.getLogger("bench")

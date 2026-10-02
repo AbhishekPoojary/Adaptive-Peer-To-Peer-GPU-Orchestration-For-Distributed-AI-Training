@@ -1,0 +1,26 @@
+{
+  "_description": [
+    "Real GPU utilization on one peer while it trains real jobs, sampled through",
+    "NVML twice a second from RUNNING to COMPLETED, against the report's 80%",
+    "target. Several configurations, because utilization depends mostly on how",
+    "much work each optimizer step hands the GPU."
+  ],
+  "configs": [
+    {
+      "label": "mnist-batch64",
+      "job_spec": {"dataset": "mnist", "model": "cnn", "epochs": 3, "batch_size": 64,
+                   "learning_rate": 0.01, "world_size": 1, "min_gpu_mem_bytes": null}
+    },
+    {
+      "label": "cifar10-batch64",
+      "job_spec": {"dataset": "cifar10", "model": "cnn", "epochs": 3, "batch_size": 64,
+                   "learning_rate": 0.01, "world_size": 1, "min_gpu_mem_bytes": null}
+    },
+    {
+      "label": "cifar10-batch256",
+      "job_spec": {"dataset": "cifar10", "model": "cnn", "epochs": 3, "batch_size": 256,
+                   "learning_rate": 0.01, "world_size": 1, "min_gpu_mem_bytes": null}
+    }
+  ],
+  "job_timeout_seconds": 1800
+}
