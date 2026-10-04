@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy — GPU Orchestrator</title>
+<style>
+  :root { color-scheme: light dark; --fg: #1c1c1e; --muted: #5c5c63; --bg: #fbfbfa; --line: #e3e3e0; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #ececee; --muted: #a3a3aa; --bg: #141416; --line: #2c2c30; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 680px; margin: 0 auto; padding: 48px 16px 64px; }
+  h1 { font-size: 1.75rem; margin: 0 0 4px; }
+  h2 { font-size: 1.1rem; margin: 32px 0 8px; }
+  p, li { color: var(--fg); }
+  .lede { color: var(--muted); margin-top: 0; }
+  ul { padding-left: 1.25rem; }
+  a { color: inherit; }
+  footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: .9rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Privacy</h1>
+  <p class="lede">What this site keeps about you, who can see it, and how to remove it.</p>
+
+  <p>This site is run by one person for a group of friends or classmates. It
+  trains image-recognition models on computers that members of the group lend.
+  It has no ads, sells nothing, and shares nothing with anyone outside what is
+  described here.</p>
+
+  <h2>What is kept</h2>
+  <ul>
+    <li><strong>Your account:</strong> your username, and either a scrambled
+      (hashed) form of your password or, if you sign in with Google, your email
+      address and Google's account ID. Nothing else from Google — not your
+      contacts, files or profile.</li>
+    <li><strong>What you upload and train:</strong> your picture datasets, your
+      training jobs with their logs and progress charts, and your trained
+      models.</li>
+    <li><strong>In your browser:</strong> a sign-in token, kept only until you
+      close the tab. No cookies, and no tracking or advertising of any kind.</li>
+  </ul>
+
+  <h2>Who can see it</h2>
+  <ul>
+    <li><strong>You</strong> see everything of yours.</li>
+    <li><strong>Other users</strong> see nothing of yours.</li>
+    <li><strong>The person running the site</strong> can see that your jobs exist
+      and whether they are running, but not your pictures, logs or models. They
+      can delete a dataset to free up space.</li>
+    <li><strong>The computer that trains your job</strong> receives your pictures
+      while it trains and sends back the model. Those computers belong to members
+      of the group, so only use this site within a group you trust.</li>
+  </ul>
+
+  <h2>Where it is stored</h2>
+  <p>On the server that runs this site. It is not copied anywhere else.</p>
+
+  <h2>Removing it</h2>
+  <p>You can delete your datasets yourself on the <strong>Datasets</strong> page.
+  To have your account and everything in it removed, ask the person who runs the
+  site — whoever sent you the link.</p>
+
+  <footer><a href="/">Back to the site</a></footer>
+</main>
+</body>
+</html>
