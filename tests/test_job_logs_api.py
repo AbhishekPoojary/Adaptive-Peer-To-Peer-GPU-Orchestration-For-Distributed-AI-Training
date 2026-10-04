@@ -17,7 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.models.lease import Lease
 from orchestrator.services.training import record_log_line
-from tests.helpers import register_new_node, schedule_single_rank_job
+from tests.helpers import (
+    TEST_OPERATOR_USERNAME,
+    register_new_node,
+    schedule_single_rank_job,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -27,7 +31,7 @@ async def _job_and_lease_id(
 ) -> tuple[uuid.UUID, uuid.UUID]:
     reg, _key = await register_new_node(api_client, with_gpu=True)
     node_id = uuid.UUID(reg["node_id"])
-    job = schedule_single_rank_job(session, node_id=node_id, submitted_by="logs-test")
+    job = schedule_single_rank_job(session, node_id=node_id, submitted_by=TEST_OPERATOR_USERNAME)
     await session.commit()
     lease_id = (
         await session.execute(select(Lease.id).where(Lease.job_id == job.id))

@@ -487,7 +487,10 @@ export interface paths {
         };
         /**
          * List Datasets Endpoint
-         * @description List datasets available to train on, newest first.
+         * @description The caller's own datasets, newest first: the ones they can train on.
+         *
+         *     Another user's uploads are not listed, admins included
+         *     (services/ownership.py).
          */
         get: operations["list_datasets_endpoint_datasets_get"];
         put?: never;
@@ -654,7 +657,7 @@ export interface paths {
         };
         /**
          * Get Dataset Endpoint
-         * @description Return one dataset's detail.
+         * @description Return one of the caller's datasets.
          */
         get: operations["get_dataset_endpoint_datasets__dataset_id__get"];
         put?: never;
@@ -662,6 +665,9 @@ export interface paths {
         /**
          * Delete Dataset Endpoint
          * @description Retire a dataset: hide it from new jobs and remove the stored archive.
+         *
+         *     Its uploader may, and so may an admin, to clean up -- deleting reveals
+         *     nothing of the contents (services/ownership.py).
          *
          *     The row is kept. A finished job records which dataset it trained on, and
          *     dropping the row would turn that record into an unanswerable question.
@@ -681,7 +687,7 @@ export interface paths {
         };
         /**
          * List Jobs Endpoint
-         * @description List every job, newest first.
+         * @description The caller's own jobs, newest first; every job's summary for an admin.
          */
         get: operations["list_jobs_endpoint_jobs_get"];
         put?: never;
@@ -714,6 +720,9 @@ export interface paths {
         /**
          * Get Job Endpoint
          * @description One job with its full event timeline and leases.
+         *
+         *     Visible to its submitter and to admins. ``contents_visible`` tells the
+         *     dashboard whether this caller may also read the logs, metrics and model.
          */
         get: operations["get_job_endpoint_jobs__job_id__get"];
         put?: never;
@@ -765,9 +774,8 @@ export interface paths {
          *     credentials. A job page that shows 99% accuracy and cannot hand you the
          *     thing that achieved it is a demo of training, not a tool.
          *
-         *     Any authenticated user may fetch it, matching the rest of this router — a
-         *     person who can read a job's loss curve is not meaningfully restrained by
-         *     being denied its weights.
+         *     Only the job's submitter may fetch it (services/ownership.py) -- not other
+         *     operators, and not admins, who run the fleet rather than read its output.
          *
          *     404 means the job never checkpointed. That is ordinary: checkpointing needs
          *     S3 configured on the peer (ADR-006), so a fleet running without it trains
@@ -871,7 +879,7 @@ export interface paths {
         put?: never;
         /**
          * Cancel Job Endpoint
-         * @description Cancel a non-terminal job, releasing any ACTIVE lease.
+         * @description Cancel a non-terminal job, releasing any ACTIVE lease (owner or admin).
          */
         post: operations["cancel_job_endpoint_jobs__job_id__cancel_post"];
         delete?: never;
@@ -1471,6 +1479,11 @@ export interface components {
             events: components["schemas"]["JobEventOut"][];
             /** Leases */
             leases: components["schemas"]["LeaseOut"][];
+            /**
+             * Contents Visible
+             * @default true
+             */
+            contents_visible: boolean;
         };
         /**
          * JobEventOut

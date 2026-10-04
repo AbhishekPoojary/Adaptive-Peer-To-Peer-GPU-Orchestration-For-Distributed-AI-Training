@@ -17,7 +17,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, Integer, String, func
+from sqlalchemy import BigInteger, DateTime, Index, Integer, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -28,13 +28,16 @@ class Dataset(Base):
     """A validated, uploaded image-classification dataset."""
 
     __tablename__ = "datasets"
+    # Unique per uploader, not globally (migration 0015): a global rule meant a
+    # "name taken" error told one user what another had named their data.
+    __table_args__ = (Index("ix_datasets_owner_name", "created_by", "name", unique=True),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     # Human-chosen, unique, and used in the job spec's audit trail. Unique so a
     # job that says it trained on "flowers" cannot be ambiguous a month later.
-    name: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
     description: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
     # Where the archive lives in the datasets bucket. Assigned by the server, so

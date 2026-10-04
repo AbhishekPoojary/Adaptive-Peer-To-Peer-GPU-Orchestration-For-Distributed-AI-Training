@@ -354,21 +354,12 @@ function NothingYet() {
         way — common layouts are rearranged for you.
       </p>
       <div className="mt-6 flex flex-wrap gap-2.5">
-        {isAdmin() ? (
-          <Button asChild>
-            <Link to="/datasets">
-              Upload a dataset
-              <ArrowRight aria-hidden="true" />
-            </Link>
-          </Button>
-        ) : (
-          <Button asChild>
-            <Link to="/submit">
-              Train on a built-in dataset
-              <ArrowRight aria-hidden="true" />
-            </Link>
-          </Button>
-        )}
+        <Button asChild>
+          <Link to="/datasets">
+            Upload a dataset
+            <ArrowRight aria-hidden="true" />
+          </Link>
+        </Button>
       </div>
       {!isAdmin() && (
         <p className="mt-4 text-xs text-muted">

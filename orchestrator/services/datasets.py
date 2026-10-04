@@ -51,7 +51,7 @@ def object_key_for(dataset_id: uuid.UUID) -> str:
     return f"datasets/{dataset_id}/archive.zip"
 
 
-async def name_conflict(session: AsyncSession, name: str) -> str | None:
+async def name_conflict(session: AsyncSession, name: str, *, owner: str) -> str | None:
     """Explain why ``name`` is unavailable, or ``None`` if it is free.
 
     Exposed so a chunked upload can refuse a taken name *before* the archive is
@@ -62,11 +62,11 @@ async def name_conflict(session: AsyncSession, name: str) -> str | None:
     could both pass it. The unique index still decides, which is why
     :func:`create_dataset` keeps its own handling rather than trusting this.
     """
-    return await _name_taken_message(session, name, only_if_taken=True)
+    return await _name_taken_message(session, name, owner=owner, only_if_taken=True)
 
 
 async def _name_taken_message(
-    session: AsyncSession, name: str, *, only_if_taken: bool = False
+    session: AsyncSession, name: str, *, owner: str, only_if_taken: bool = False
 ) -> str | None:
     """Say *which* dataset holds ``name`` — including one that was deleted.
 
@@ -80,7 +80,11 @@ async def _name_taken_message(
     Called after the rollback, so the session is usable again.
     """
     existing = (
-        await session.execute(select(Dataset).where(Dataset.name == name))
+        # Names are unique per uploader (migration 0015), so only the
+        # caller's own datasets can hold one -- and only theirs are named back.
+        await session.execute(
+            select(Dataset).where(Dataset.name == name, Dataset.created_by == owner)
+        )
     ).scalar_one_or_none()
     if existing is None:
         # Only reachable from the advisory check; an IntegrityError means the
@@ -135,7 +139,7 @@ async def create_dataset(
         await session.flush()
     except IntegrityError as exc:
         await session.rollback()
-        message = await _name_taken_message(session, name)
+        message = await _name_taken_message(session, name, owner=created_by)
         raise DatasetNameTakenError(message or f"a dataset named {name!r} already exists") from exc
     await session.refresh(dataset)
     return dataset
@@ -154,10 +158,12 @@ async def get_dataset(
 
 
 async def list_datasets(
-    session: AsyncSession, *, include_deleted: bool = False
+    session: AsyncSession, *, owner: str | None = None, include_deleted: bool = False
 ) -> list[Dataset]:
-    """Return datasets, newest first."""
+    """Return datasets, newest first; only ``owner``'s when given."""
     statement = select(Dataset).order_by(Dataset.created_at.desc())
+    if owner is not None:
+        statement = statement.where(Dataset.created_by == owner)
     if not include_deleted:
         statement = statement.where(Dataset.deleted_at.is_(None))
     result = await session.execute(statement)

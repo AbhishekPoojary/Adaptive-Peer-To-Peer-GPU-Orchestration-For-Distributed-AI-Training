@@ -53,6 +53,14 @@ from orchestrator.services.jobs import (
 )
 from orchestrator.services.loops import trigger_scheduler_pass
 from orchestrator.services.object_store import ObjectStoreError
+from orchestrator.services.ownership import (
+    is_admin,
+    job_contents_for,
+    job_visible_to,
+    owns_dataset,
+    owns_job,
+    redacted_for,
+)
 from orchestrator.services.scheduling import list_scheduling_decisions
 from orchestrator.services.training import (
     LOG_LINES_DEFAULT_LIMIT,
@@ -101,7 +109,8 @@ async def submit_job(
     # nobody is watching.
     if body.spec.dataset_id is not None:
         dataset = await get_dataset(session, dataset_id=body.spec.dataset_id)
-        if dataset is None:
+        # Someone else's dataset reads as unknown: it is theirs to train on.
+        if dataset is None or not owns_dataset(user, dataset):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=(
@@ -129,22 +138,33 @@ async def submit_job(
 
 @router.get("", response_model=JobListResponse)
 async def list_jobs_endpoint(
+    user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ) -> JobListResponse:
-    """List every job, newest first."""
-    return JobListResponse(jobs=await list_jobs(session))
+    """The caller's own jobs, newest first; every job's summary for an admin."""
+    owner = None if is_admin(user) else user.username
+    jobs = await list_jobs(session, submitted_by=owner)
+    return JobListResponse(jobs=[redacted_for(job, user) for job in jobs])
 
 
 @router.get("/{job_id}", response_model=JobDetailResponse)
 async def get_job_endpoint(
     job_id: uuid.UUID,
+    user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ) -> JobDetailResponse:
-    """One job with its full event timeline and leases."""
+    """One job with its full event timeline and leases.
+
+    Visible to its submitter and to admins. ``contents_visible`` tells the
+    dashboard whether this caller may also read the logs, metrics and model.
+    """
+    job = await job_visible_to(session, job_id, user)
     detail = await get_job_detail(session, job_id=job_id)
-    if detail is None:
+    if detail is None:  # pragma: no cover - just found
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown job")
-    return detail
+    return redacted_for(detail, user).model_copy(
+        update={"contents_visible": owns_job(user, job)}
+    )
 
 
 @router.get(
@@ -153,6 +173,7 @@ async def get_job_endpoint(
 )
 async def get_job_scheduling_decisions(
     job_id: uuid.UUID,
+    user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ) -> SchedulingDecisionListResponse:
     """The adaptive scheduler's audit trail for this job (ADR-009).
@@ -162,8 +183,7 @@ async def get_job_scheduling_decisions(
     the pick. Empty for a job placed by a baseline scheduler (only ``adaptive``
     records decisions) or never scheduled. 404 only if the job itself is unknown.
     """
-    if await get_job_detail(session, job_id=job_id) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown job")
+    await job_visible_to(session, job_id, user)
     decisions = await list_scheduling_decisions(session, job_id=job_id)
     return SchedulingDecisionListResponse(decisions=decisions)
 
@@ -171,6 +191,7 @@ async def get_job_scheduling_decisions(
 @router.get("/{job_id}/checkpoint", response_model=CheckpointOut)
 async def get_job_checkpoint(
     job_id: uuid.UUID,
+    user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings_dep),
 ) -> CheckpointOut:
@@ -181,16 +202,14 @@ async def get_job_checkpoint(
     credentials. A job page that shows 99% accuracy and cannot hand you the
     thing that achieved it is a demo of training, not a tool.
 
-    Any authenticated user may fetch it, matching the rest of this router — a
-    person who can read a job's loss curve is not meaningfully restrained by
-    being denied its weights.
+    Only the job's submitter may fetch it (services/ownership.py) -- not other
+    operators, and not admins, who run the fleet rather than read its output.
 
     404 means the job never checkpointed. That is ordinary: checkpointing needs
     S3 configured on the peer (ADR-006), so a fleet running without it trains
     perfectly well and saves nothing.
     """
-    if await get_job_detail(session, job_id=job_id) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown job")
+    await job_contents_for(session, job_id, user)
 
     try:
         found = latest_checkpoint_for(str(job_id), settings=settings)
@@ -231,6 +250,7 @@ async def get_job_checkpoint(
 @router.get("/{job_id}/checkpoint/download")
 async def download_job_checkpoint(
     job_id: uuid.UUID,
+    user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings_dep),
 ) -> StreamingResponse:
@@ -245,8 +265,7 @@ async def download_job_checkpoint(
     orchestrator's memory. boto3 is blocking, but Starlette iterates a sync
     generator in a threadpool, so the event loop keeps serving.
     """
-    if await get_job_detail(session, job_id=job_id) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown job")
+    await job_contents_for(session, job_id, user)
 
     try:
         found = latest_checkpoint_for(str(job_id), settings=settings)
@@ -280,6 +299,7 @@ async def download_job_checkpoint(
 @router.get("/{job_id}/metrics", response_model=TrainingMetricListResponse)
 async def get_job_metrics(
     job_id: uuid.UUID,
+    user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ) -> TrainingMetricListResponse:
     """This job's real per-epoch metrics (M4), oldest first — the loss curve.
@@ -288,8 +308,7 @@ async def get_job_metrics(
     reports them; empty for a job that hasn't trained yet. 404 only if the job
     itself is unknown.
     """
-    if await get_job_detail(session, job_id=job_id) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown job")
+    await job_contents_for(session, job_id, user)
     rows = await list_metrics(session, job_id=job_id)
     return TrainingMetricListResponse(
         metrics=[
@@ -311,6 +330,7 @@ async def get_job_metrics(
 @router.get("/{job_id}/logs", response_model=TrainingLogLineListResponse)
 async def get_job_logs(
     job_id: uuid.UUID,
+    user: User = Depends(require_user),
     after: int | None = Query(
         default=None,
         ge=0,
@@ -327,8 +347,7 @@ async def get_job_logs(
     executing. Poll with ``after=<last id you saw>`` to fetch only new lines.
     404 only if the job itself is unknown.
     """
-    if await get_job_detail(session, job_id=job_id) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown job")
+    await job_contents_for(session, job_id, user)
     rows = await list_log_lines(session, job_id=job_id, after=after, limit=limit)
     next_after = rows[-1].id if rows else after
     return TrainingLogLineListResponse(
@@ -343,9 +362,11 @@ async def get_job_logs(
 @router.post("/{job_id}/cancel", response_model=JobDetailResponse)
 async def cancel_job_endpoint(
     job_id: uuid.UUID,
+    user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ) -> JobDetailResponse:
-    """Cancel a non-terminal job, releasing any ACTIVE lease."""
+    """Cancel a non-terminal job, releasing any ACTIVE lease (owner or admin)."""
+    await job_visible_to(session, job_id, user)
     try:
         await cancel_job(session, job_id=job_id)
     except JobNotFoundError as exc:

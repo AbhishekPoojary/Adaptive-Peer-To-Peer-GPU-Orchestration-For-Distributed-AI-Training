@@ -36,7 +36,7 @@ from fastapi import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.api.deps import get_settings_dep, require_admin_user, require_user
+from orchestrator.api.deps import get_settings_dep, require_user
 from orchestrator.core.config import Settings
 from orchestrator.core.db import get_session
 from orchestrator.models.dataset import Dataset
@@ -67,6 +67,7 @@ from orchestrator.services.datasets import (
     soft_delete_dataset,
 )
 from orchestrator.services.object_store import DatasetObjectStore, ObjectStoreError
+from orchestrator.services.ownership import dataset_owned_by, is_admin, owns_dataset
 from orchestrator.services.upload_sessions import (
     UploadSession,
     UploadSessionError,
@@ -338,13 +339,13 @@ async def _validate_and_store(
     "",
     status_code=status.HTTP_201_CREATED,
     response_model=DatasetUploadAccepted,
-    dependencies=[Depends(require_admin_user)],
+    dependencies=[Depends(require_user)],
 )
 async def upload_dataset(
     name: str = Form(pattern=DATASET_NAME_PATTERN),
     description: str | None = Form(default=None, max_length=1024),
     file: UploadFile = File(...),
-    user: User = Depends(require_admin_user),
+    user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings_dep),
 ) -> DatasetUploadAccepted:
@@ -445,7 +446,7 @@ async def upload_limits(
 )
 async def open_upload_session(
     body: UploadSessionCreate,
-    user: User = Depends(require_admin_user),
+    user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings_dep),
 ) -> UploadSessionStatus:
@@ -468,7 +469,7 @@ async def open_upload_session(
     if swept:
         logger.info("swept %d expired upload session(s)", swept)
 
-    conflict = await name_conflict(session, body.name)
+    conflict = await name_conflict(session, body.name, owner=user.username)
     if conflict is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=conflict)
 
@@ -501,7 +502,7 @@ async def open_upload_session(
 @router.get("/uploads/{upload_id}", response_model=UploadSessionStatus)
 async def upload_session_status(
     upload_id: uuid.UUID,
-    user: User = Depends(require_admin_user),
+    user: User = Depends(require_user),
     settings: Settings = Depends(get_settings_dep),
 ) -> UploadSessionStatus:
     """What has arrived so far -- the basis for resuming an interrupted upload."""
@@ -518,7 +519,7 @@ async def put_upload_chunk(
     upload_id: uuid.UUID,
     index: int,
     request: Request,
-    user: User = Depends(require_admin_user),
+    user: User = Depends(require_user),
     settings: Settings = Depends(get_settings_dep),
 ) -> None:
     """Store one chunk. Sending the same index again replaces it.
@@ -555,7 +556,7 @@ async def put_upload_chunk(
 )
 async def complete_upload_session(
     upload_id: uuid.UUID,
-    user: User = Depends(require_admin_user),
+    user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings_dep),
 ) -> DatasetUploadAccepted:
@@ -610,7 +611,7 @@ async def complete_upload_session(
 )
 async def abandon_upload_session(
     upload_id: uuid.UUID,
-    user: User = Depends(require_admin_user),
+    user: User = Depends(require_user),
     settings: Settings = Depends(get_settings_dep),
 ) -> None:
     """Give up on an upload and release its chunks straight away.
@@ -623,26 +624,26 @@ async def abandon_upload_session(
 
 @router.get("", response_model=DatasetListResponse)
 async def list_datasets_endpoint(
-    _user: User = Depends(require_user),
+    user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ) -> DatasetListResponse:
-    """List datasets available to train on, newest first."""
-    datasets = await list_datasets(session)
+    """The caller's own datasets, newest first: the ones they can train on.
+
+    Another user's uploads are not listed, admins included
+    (services/ownership.py).
+    """
+    datasets = await list_datasets(session, owner=user.username)
     return DatasetListResponse(datasets=[_dataset_out(d) for d in datasets])
 
 
 @router.get("/{dataset_id}", response_model=DatasetOut)
 async def get_dataset_endpoint(
     dataset_id: uuid.UUID,
-    _user: User = Depends(require_user),
+    user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ) -> DatasetOut:
-    """Return one dataset's detail."""
-    dataset = await get_dataset(session, dataset_id=dataset_id)
-    if dataset is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="unknown dataset"
-        )
+    """Return one of the caller's datasets."""
+    dataset = dataset_owned_by(await get_dataset(session, dataset_id=dataset_id), user)
     return _dataset_out(dataset)
 
 
@@ -658,17 +659,20 @@ async def get_dataset_endpoint(
 )
 async def delete_dataset_endpoint(
     dataset_id: uuid.UUID,
-    _admin: User = Depends(require_admin_user),
+    user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings_dep),
 ) -> None:
     """Retire a dataset: hide it from new jobs and remove the stored archive.
 
+    Its uploader may, and so may an admin, to clean up -- deleting reveals
+    nothing of the contents (services/ownership.py).
+
     The row is kept. A finished job records which dataset it trained on, and
     dropping the row would turn that record into an unanswerable question.
     """
     dataset = await get_dataset(session, dataset_id=dataset_id)
-    if dataset is None:
+    if dataset is None or not (owns_dataset(user, dataset) or is_admin(user)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="unknown dataset"
         )

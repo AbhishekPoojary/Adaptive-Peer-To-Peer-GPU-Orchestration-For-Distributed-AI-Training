@@ -59,8 +59,13 @@ export function JobDetail() {
   // once terminal, the transcript/curve is final and polling would just be
   // wasted requests against a page someone left open.
   const pollWhileLive = query.data ? !isTerminalJobState(query.data.state) : true;
-  const metricsQuery = useJobMetricsQuery(jobId, pollWhileLive);
-  const logs = useJobLogs(jobId, pollWhileLive);
+  // Logs, metrics and the model belong to the job's submitter; for anyone
+  // else (an admin managing the fleet) the server answers 403, so they are
+  // not requested at all.
+  const contentsVisible = query.data?.contents_visible ?? false;
+  const contentsJobId = contentsVisible ? jobId : undefined;
+  const metricsQuery = useJobMetricsQuery(contentsJobId, pollWhileLive);
+  const logs = useJobLogs(contentsJobId, pollWhileLive);
   const nodesQuery = useNodesQuery();
   const cancelMutation = useCancelJobMutation(jobId ?? "");
 
@@ -187,7 +192,7 @@ export function JobDetail() {
         </section>
       )}
 
-      <TrainedModelCard jobId={job.id} />
+      {contentsVisible && <TrainedModelCard jobId={job.id} />}
 
       {/* Rank strip: which peer holds which rank right now, plain-language. */}
       <section className="rounded-[var(--radius-panel)] bg-surface shadow-panel p-5">
@@ -195,40 +200,55 @@ export function JobDetail() {
         <RankStrip leases={currentLeases} nodeNames={nodeNames} />
       </section>
 
-      {/* The viva demo surface: live logs + live loss/accuracy curves. */}
-      <section className="rounded-[var(--radius-panel)] bg-surface shadow-panel p-5">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">Live training log</h2>
-          {!pollWhileLive && (
-            <span className="text-xs text-tertiary">Job finished — no longer polling</span>
-          )}
-        </div>
-        <LogViewer
-          lines={logs.lines}
-          isLoading={logs.isLoading}
-          isReconnecting={logs.isReconnecting}
-        />
-      </section>
+      {contentsVisible ? (
+        <>
+        {/* The viva demo surface: live logs + live loss/accuracy curves. */}
+        <section className="rounded-[var(--radius-panel)] bg-surface shadow-panel p-5">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">Live training log</h2>
+            {!pollWhileLive && (
+              <span className="text-xs text-tertiary">Job finished — no longer polling</span>
+            )}
+          </div>
+          <LogViewer
+            lines={logs.lines}
+            isLoading={logs.isLoading}
+            isReconnecting={logs.isReconnecting}
+          />
+        </section>
 
-      {metricsQuery.isError && (
-        <div className="flex items-center gap-1.5 rounded-[var(--radius-control)] bg-caution-wash px-3 py-2 text-xs text-warn">
-          Reconnecting to fetch the latest metrics… showing the last known values.
+        {metricsQuery.isError && (
+          <div className="flex items-center gap-1.5 rounded-[var(--radius-control)] bg-caution-wash px-3 py-2 text-xs text-warn">
+            Reconnecting to fetch the latest metrics… showing the last known values.
+          </div>
+        )}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <MetricLineChart
+            title="Training loss"
+            points={lossPoints}
+            formatY={(y) => y.toFixed(3)}
+            formatX={(x) => `epoch ${x}`}
+          />
+          <MetricLineChart
+            title="Test accuracy"
+            points={accuracyPoints}
+            formatY={(y) => `${y.toFixed(1)}%`}
+            formatX={(x) => `epoch ${x}`}
+          />
         </div>
+        </>
+      ) : (
+        <section className="rounded-[var(--radius-panel)] bg-surface shadow-panel p-5">
+          <h2 className="text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">
+            Private to {job.submitted_by}
+          </h2>
+          <p className="mt-1.5 max-w-[60ch] text-sm text-muted">
+            This job&apos;s training log, accuracy and loss curves, results and trained
+            model can be seen only by the person who submitted it. You can still see
+            where it runs and cancel it.
+          </p>
+        </section>
       )}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <MetricLineChart
-          title="Training loss"
-          points={lossPoints}
-          formatY={(y) => y.toFixed(3)}
-          formatX={(x) => `epoch ${x}`}
-        />
-        <MetricLineChart
-          title="Test accuracy"
-          points={accuracyPoints}
-          formatY={(y) => `${y.toFixed(1)}%`}
-          formatX={(x) => `epoch ${x}`}
-        />
-      </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <section className="rounded-[var(--radius-panel)] bg-surface shadow-panel p-5">

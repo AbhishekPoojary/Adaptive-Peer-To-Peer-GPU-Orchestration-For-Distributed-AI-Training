@@ -40,10 +40,11 @@ it is written.
 | **Adaptive placement prefers the closer node** (the `γ·D_i` term) | Two identical containerised agents, one with 100 ms of real `tc netem` egress delay (RTT EWMA 26 vs 124 ms): adaptive 10/10 on the near node, least_loaded 8/10, round_robin 5/10. The audit row shows L and R equal and D 0 vs 1. `bench/report/20261002T192259-latency_placement.json` |
 | **Control-plane overhead stays flat from 1 to 16 nodes** | Real agents at 1/2/4/8/16: scheduling a job 12.8-15.5 ms after submit at every size (report target < 500 ms), scheduler pass 5-7 ms, detector pass about 8 ms, orchestrator memory 80-84 MB; its CPU grows with heartbeat rate (4% at 1 node, 24% at 16 on this laptop). No healthy node declared dead at any size. `bench/report/20261002T191552-scalability.json` |
 | Gradient sync adds **2.9%** to a distributed step (report target < 20%) -- **on one host only** | A real world_size=2 job: the trainer timed identical steps with and without the all-reduce (114.4 vs 111.1 ms). Both ranks ran in containers on one Docker bridge, gloo on CPU, so the all-reduce crossed no network. `bench/report/20261004T154118-sync_overhead.json` |
+| **Your data and model are yours alone** | Any user uploads datasets (no admin needed); datasets, job logs, metrics, results and trained models are readable only by their owner -- admins see jobs' state and placement and can cancel or clean up, not read (ADR-012 addendum 3). `tests/test_job_privacy.py`, `tests/test_datasets.py` |
 | **Peers update themselves** | The agent restarts into a newer bundle while idle and pulls a newer trainer image (ADR-015). A real agent at an old version exited for update within one check interval; the full installer loop on a real peer is not yet verified |
 | **Downloading the trained model** | ADR-006 addendum 2; a July run's checkpoint streamed byte-identical to storage (sha256 `471b73f9…` on both sides), opening as a valid torch archive |
 
-555 tests, all against a real Postgres. No mocked database, no simulated
+560 tests, all against a real Postgres. No mocked database, no simulated
 failures outside `tests/`.
 
 ---
@@ -258,11 +259,11 @@ conflict on what should be a first insert.
   `time.sleep` standing in for work. `scripts/check_no_fake_data.sh` enforces
   what it mechanically can. See `CONTRIBUTING.md` for the full rules.
 - **Every ADR that turned out to be incomplete has an addendum** rather than a
-  quiet edit, so the reasoning trail stays honest. All thirteen:
+  quiet edit, so the reasoning trail stays honest. All fourteen:
   `ADR-003-addendum`, `ADR-004-addendum`, `ADR-004-addendum-2`, `ADR-004-addendum-3`, `ADR-005-addendum`,
   `ADR-005-addendum-2`, `ADR-006-addendum`, `ADR-006-addendum-2`, `ADR-006-addendum-3`,
   `ADR-007-addendum`, `ADR-009-addendum`, `ADR-012-addendum`,
-  `ADR-012-addendum-2`.
+  `ADR-012-addendum-2`, `ADR-012-addendum-3`.
 
   `ADR-012-addendum` is the one that reverses a decision outright: ADR-012 ruled
   external IdPs out, and the addendum records why that reasoning stopped holding

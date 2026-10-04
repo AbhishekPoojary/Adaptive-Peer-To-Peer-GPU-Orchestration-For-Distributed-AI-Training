@@ -14,7 +14,6 @@ import { CodeBlock } from "@/components/ui/code-block";
 import { accentHex } from "@/lib/accent";
 import { Switch } from "@/components/ui/switch";
 import { ApiError } from "@/api/client";
-import { isAdmin } from "@/api/session";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
 import { Button } from "@/components/ui/button";
@@ -37,9 +36,9 @@ const TUNNEL_SLOW_BYTES = 25 * 1024 * 1024;
 /**
  * Datasets page (ADR-014).
  *
- * Uploading is ADMIN-only server-side; a non-admin sees the list without the
- * form. The button being hidden is a convenience, not the control — the server
- * re-checks the role, so a tampered client can reveal the form but not use it.
+ * Anyone signed in uploads their own datasets, and sees only their own: an
+ * upload is private to its uploader, admins included (the server enforces it;
+ * services/ownership.py).
  */
 export function Datasets() {
   const { data, isPending, error, refetch } = useDatasetsQuery();
@@ -47,7 +46,6 @@ export function Datasets() {
   const remove = useDeleteDatasetMutation();
   const limits = useUploadLimitsQuery();
   const maxUploadBytes = limits.data?.max_upload_bytes ?? 2 * 1024 * 1024 * 1024;
-  const admin = isAdmin();
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -132,168 +130,166 @@ export function Datasets() {
         </p>
       </div>
 
-      {admin && (
-        <form
-          onSubmit={(e) => void handleUpload(e)}
-          className="flex flex-col gap-4 rounded-[var(--radius-panel)] bg-surface shadow-panel p-5"
-        >
-          <div>
-            <h2 className="text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">Upload a dataset</h2>
-            <p className="max-w-[70ch] mt-1 text-xs text-secondary">
-              A <code className="font-data">.zip</code> of class folders.
-            </p>
-            {/* Rare UI's CodeBlock, themed from our own accent. The sample is
-                something people copy into a terminal to check their folders,
-                so a copy button is the point rather than decoration. */}
-            <div className="mt-3">
-              <CodeBlock
-                code={`train/cat/anything.png
+      <form
+        onSubmit={(e) => void handleUpload(e)}
+        className="flex flex-col gap-4 rounded-[var(--radius-panel)] bg-surface shadow-panel p-5"
+      >
+        <div>
+          <h2 className="text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">Upload a dataset</h2>
+          <p className="max-w-[70ch] mt-1 text-xs text-secondary">
+            A <code className="font-data">.zip</code> of class folders.
+          </p>
+          {/* Rare UI's CodeBlock, themed from our own accent. The sample is
+              something people copy into a terminal to check their folders,
+              so a copy button is the point rather than decoration. */}
+          <div className="mt-3">
+            <CodeBlock
+              code={`train/cat/anything.png
 train/dog/anything.jpg
 test/cat/held-out.png
 test/dog/held-out.png`}
-                language="text"
-                filename="the layout it is stored in"
-                accent={accentHex()}
-                mode="light"
-                showLineNumbers={false}
-              />
-            </div>
-            <p className="max-w-[70ch] mt-2 text-xs text-tertiary">
-              Your archive does not have to look like that. Common layouts —{" "}
-              <code className="font-data">seg_train/</code>,{" "}
-              <code className="font-data">training/</code> and{" "}
-              <code className="font-data">valid/</code>, a wrapping folder, or
-              labels in the filenames — are rearranged into it for you, and you
-              are told exactly what changed.
-            </p>
-            <p className="max-w-[70ch] mt-2 text-xs text-tertiary">
-              Supply a test split if you can: it is what the reported accuracy
-              is measured on, so it is worth choosing deliberately. If there
-              isn&rsquo;t one, a portion of <code className="font-data">train/</code>{" "}
-              is held out — and that is written onto the dataset, so anyone
-              reading a result later can see the split was picked for you.
-            </p>
+              language="text"
+              filename="the layout it is stored in"
+              accent={accentHex()}
+              mode="light"
+              showLineNumbers={false}
+            />
+          </div>
+          <p className="max-w-[70ch] mt-2 text-xs text-tertiary">
+            Your archive does not have to look like that. Common layouts —{" "}
+            <code className="font-data">seg_train/</code>,{" "}
+            <code className="font-data">training/</code> and{" "}
+            <code className="font-data">valid/</code>, a wrapping folder, or
+            labels in the filenames — are rearranged into it for you, and you
+            are told exactly what changed.
+          </p>
+          <p className="max-w-[70ch] mt-2 text-xs text-tertiary">
+            Supply a test split if you can: it is what the reported accuracy
+            is measured on, so it is worth choosing deliberately. If there
+            isn&rsquo;t one, a portion of <code className="font-data">train/</code>{" "}
+            is held out — and that is written onto the dataset, so anyone
+            reading a result later can see the split was picked for you.
+          </p>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="dataset-name">Name</Label>
+            <Input
+              id="dataset-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="flowers"
+              pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,127}"
+              title="Letters, digits, dot, dash, underscore. At least 3 characters."
+              required
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="dataset-description">Description (optional)</Label>
+            <Input
+              id="dataset-description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="102 flower species, 64px"
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="dataset-file">Archive</Label>
+            <ArchiveDropzone
+              id="dataset-file"
+              file={file}
+              onFile={setFile}
+              maxBytes={maxUploadBytes}
+              disabled={upload.isPending}
+              error={dropError}
+              onError={setDropError}
+            />
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="dataset-name">Name</Label>
-              <Input
-                id="dataset-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="flowers"
-                pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,127}"
-                title="Letters, digits, dot, dash, underscore. At least 3 characters."
-                required
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="dataset-description">Description (optional)</Label>
-              <Input
-                id="dataset-description"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="102 flower species, 64px"
-              />
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="dataset-file">Archive</Label>
-              <ArchiveDropzone
-                id="dataset-file"
-                file={file}
-                onFile={setFile}
-                maxBytes={maxUploadBytes}
+          {canShrinkArchives() && (
+            <div className="flex items-start gap-3">
+              <Switch
+                id="shrink-images"
+                checked={shrinkImages}
+                onCheckedChange={setShrinkImages}
                 disabled={upload.isPending}
-                error={dropError}
-                onError={setDropError}
+                className="mt-0.5"
               />
+              <Label
+                htmlFor="shrink-images"
+                className="max-w-[72ch] cursor-pointer text-xs leading-relaxed font-normal text-muted"
+              >
+                <span className="font-medium text-ink">
+                  Shrink images before uploading.
+                </span>{" "}
+                Training resizes every image to a small fixed size anyway, so
+                doing it here sends far less over the network and changes
+                nothing the model sees. It is recorded on the dataset. Turn
+                this off to upload the archive exactly as it is.
+              </Label>
             </div>
+          )}
 
-            {canShrinkArchives() && (
-              <div className="flex items-start gap-3">
-                <Switch
-                  id="shrink-images"
-                  checked={shrinkImages}
-                  onCheckedChange={setShrinkImages}
-                  disabled={upload.isPending}
-                  className="mt-0.5"
-                />
-                <Label
-                  htmlFor="shrink-images"
-                  className="max-w-[72ch] cursor-pointer text-xs leading-relaxed font-normal text-muted"
-                >
-                  <span className="font-medium text-ink">
-                    Shrink images before uploading.
-                  </span>{" "}
-                  Training resizes every image to a small fixed size anyway, so
-                  doing it here sends far less over the network and changes
-                  nothing the model sees. It is recorded on the dataset. Turn
-                  this off to upload the archive exactly as it is.
-                </Label>
-              </div>
+          {/*
+            Not a warning that it will fail — it will not, since the upload is
+            sent in pieces small enough that the tunnel's cut-off never
+            applies. A warning about the clock, and only when shrinking is not
+            going to deal with it anyway.
+          */}
+          {file &&
+            !shrinkImages &&
+            servedThroughQuickTunnel() &&
+            file.size > TUNNEL_SLOW_BYTES && (
+              <p className="text-xs text-warn">
+                {formatBytes(file.size)} over the public link will take a
+                while — it is sent in pieces so it will not be cut off, but
+                the link is only as fast as the host&rsquo;s upload speed.
+                Leaving the box above ticked is usually the better answer.
+              </p>
             )}
+        </div>
 
-            {/*
-              Not a warning that it will fail — it will not, since the upload is
-              sent in pieces small enough that the tunnel's cut-off never
-              applies. A warning about the clock, and only when shrinking is not
-              going to deal with it anyway.
-            */}
-            {file &&
-              !shrinkImages &&
-              servedThroughQuickTunnel() &&
-              file.size > TUNNEL_SLOW_BYTES && (
-                <p className="text-xs text-warn">
-                  {formatBytes(file.size)} over the public link will take a
-                  while — it is sent in pieces so it will not be cut off, but
-                  the link is only as fast as the host&rsquo;s upload speed.
-                  Leaving the box above ticked is usually the better answer.
-                </p>
-              )}
+        {formError && (
+          <div
+            role="alert"
+            className="rounded-[var(--radius-control)] bg-fault-wash px-3 py-2 text-sm text-primary"
+          >
+            {formError}
           </div>
+        )}
 
-          {formError && (
-            <div
-              role="alert"
-              className="rounded-[var(--radius-control)] bg-fault-wash px-3 py-2 text-sm text-primary"
-            >
-              {formError}
-            </div>
-          )}
-
-          {layoutNotes.length > 0 && (
-            <div
-              role="status"
-              className="rounded-[var(--radius-control)] border border-hairline bg-base px-3 py-2 text-sm text-primary"
-            >
-              <p className="font-semibold">
-                Your archive was rearranged to fit the required layout
-              </p>
-              <ul className="mt-1.5 list-disc space-y-1 pl-5 text-xs text-secondary">
-                {layoutNotes.map((note) => (
-                  <li key={note}>{note}</li>
-                ))}
-              </ul>
-              <p className="max-w-[70ch] mt-2 text-xs text-tertiary">
-                This is recorded on the dataset&rsquo;s description as well, so it
-                stays visible next to any accuracy measured against it.
-              </p>
-            </div>
-          )}
-
-          {upload.isPending && <UploadProgressBar progress={progress} />}
-
-          <div className="flex items-center gap-3">
-            <Button type="submit" disabled={upload.isPending}>
-              {upload.isPending ? "Uploading…" : "Upload dataset"}
-            </Button>
+        {layoutNotes.length > 0 && (
+          <div
+            role="status"
+            className="rounded-[var(--radius-control)] border border-hairline bg-base px-3 py-2 text-sm text-primary"
+          >
+            <p className="font-semibold">
+              Your archive was rearranged to fit the required layout
+            </p>
+            <ul className="mt-1.5 list-disc space-y-1 pl-5 text-xs text-secondary">
+              {layoutNotes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+            <p className="max-w-[70ch] mt-2 text-xs text-tertiary">
+              This is recorded on the dataset&rsquo;s description as well, so it
+              stays visible next to any accuracy measured against it.
+            </p>
           </div>
-        </form>
-      )}
+        )}
+
+        {upload.isPending && <UploadProgressBar progress={progress} />}
+
+        <div className="flex items-center gap-3">
+          <Button type="submit" disabled={upload.isPending}>
+            {upload.isPending ? "Uploading…" : "Upload dataset"}
+          </Button>
+        </div>
+      </form>
 
       {isPending && <Skeleton className="h-32 w-full" />}
 
@@ -305,9 +301,7 @@ test/dog/held-out.png`}
         <EmptyState
           title="No datasets yet"
           description={
-            admin
-              ? "Upload one above to train on your own images."
-              : "Ask an admin to upload one. Jobs can still use the built-in CIFAR-10 and MNIST."
+            "Upload one above to train on your own images. Only you can see it or train on it."
           }
         />
       )}
@@ -342,16 +336,14 @@ test/dog/held-out.png`}
                     </span>
                   </p>
                 </div>
-                {admin && (
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    onClick={() => void handleDelete(dataset)}
-                    disabled={remove.isPending}
-                  >
-                    Delete
-                  </Button>
-                )}
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => void handleDelete(dataset)}
+                  disabled={remove.isPending}
+                >
+                  Delete
+                </Button>
               </div>
 
               <div className="mt-3 flex flex-wrap gap-1.5">

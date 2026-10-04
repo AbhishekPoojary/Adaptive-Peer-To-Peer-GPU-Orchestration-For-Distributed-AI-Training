@@ -254,11 +254,18 @@ def _summary(job: Job) -> JobSummary:
     )
 
 
-async def list_jobs(session: AsyncSession) -> list[JobSummary]:
-    """Every job, newest submission first, each naming the dataset it used."""
-    rows = (
-        await session.execute(select(Job).order_by(Job.submitted_at.desc()))
-    ).scalars().all()
+async def list_jobs(
+    session: AsyncSession, *, submitted_by: str | None = None
+) -> list[JobSummary]:
+    """Jobs, newest submission first, each naming the dataset it used.
+
+    ``submitted_by`` limits the list to one user's jobs; None lists every job
+    (for an admin, see services/ownership.py).
+    """
+    statement = select(Job).order_by(Job.submitted_at.desc())
+    if submitted_by is not None:
+        statement = statement.where(Job.submitted_by == submitted_by)
+    rows = (await session.execute(statement)).scalars().all()
 
     # One query for every dataset the page references, rather than one per job.
     # Deleted datasets are included deliberately: a finished run must still be

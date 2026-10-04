@@ -174,6 +174,9 @@ class JobDetailResponse(JobSummary):
 
     events: list[JobEventOut]
     leases: list[LeaseOut]
+    #: Whether the caller may read this job's logs, metrics and trained model
+    #: (its submitter only). False for an admin viewing another user's job.
+    contents_visible: bool = True
 
 
 class CheckpointOut(BaseModel):

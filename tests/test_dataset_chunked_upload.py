@@ -377,12 +377,12 @@ async def test_another_admin_cannot_touch_someone_elses_upload(
     assert response.json()["detail"] == "unknown upload"
 
 
-async def test_an_operator_cannot_open_an_upload(api_client: AsyncClient) -> None:
-    """Chunking is a transport detail; who may upload is unchanged by it."""
+async def test_an_operator_can_open_an_upload(api_client: AsyncClient) -> None:
+    """Chunking is a transport detail; any signed-in user may upload."""
     response = await api_client.post(
-        "/datasets/uploads", json={"name": "nope", "total_bytes": 1024}
+        "/datasets/uploads", json={"name": "mine", "total_bytes": 1024}
     )
-    assert response.status_code == 403
+    assert response.status_code == 201, response.text
 
 
 async def test_abandoning_an_upload_releases_it(anon_client: AsyncClient) -> None:

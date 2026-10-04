@@ -155,11 +155,12 @@ async def test_admin_can_upload_a_dataset(anon_client: AsyncClient) -> None:
     assert dataset["id"] in key
 
 
-async def test_operator_cannot_upload(api_client: AsyncClient) -> None:
-    """Uploading is ADMIN-only: a dataset runs on other people's machines."""
+async def test_operator_can_upload_their_own_dataset(api_client: AsyncClient) -> None:
+    """Any signed-in user may upload. It used to be ADMIN-only, so everyone who
+    wanted to train on their own data had to be made an admin."""
     response = await upload(api_client)
-    assert response.status_code == 403
-    assert StubObjectStore.uploaded == []
+    assert response.status_code == 201, response.text
+    assert len(StubObjectStore.uploaded) == 1
 
 
 async def test_anonymous_cannot_upload(anon_client: AsyncClient) -> None:
@@ -226,19 +227,45 @@ async def test_rejects_unusable_names(anon_client: AsyncClient, bad_name: str) -
 # --- Listing, detail, delete -------------------------------------------------
 
 
-async def test_operator_can_list_and_read(api_client: AsyncClient) -> None:
-    """An OPERATOR must see datasets — otherwise they cannot submit a job."""
+async def test_datasets_are_private_to_their_uploader(api_client: AsyncClient) -> None:
+    """Another user's dataset is neither listed nor readable -- admins included,
+    in both directions."""
     admin = api_client.admin_token  # type: ignore[attr-defined]
-    created = await upload(api_client, token=admin)
-    dataset_id = created.json()["dataset"]["id"]
+    admins = (await upload(api_client, name="admin-data", token=admin)).json()["dataset"]
 
+    listing = await api_client.get("/datasets")  # as the operator
+    assert listing.json()["datasets"] == []
+    assert (await api_client.get(f"/datasets/{admins['id']}")).status_code == 404
+
+    mine = (await upload(api_client, name="my-data")).json()["dataset"]
     listing = await api_client.get("/datasets")
-    assert listing.status_code == 200
-    assert [d["name"] for d in listing.json()["datasets"]] == ["pets"]
-
-    detail = await api_client.get(f"/datasets/{dataset_id}")
+    assert [d["name"] for d in listing.json()["datasets"]] == ["my-data"]
+    detail = await api_client.get(f"/datasets/{mine['id']}")
     assert detail.status_code == 200
     assert detail.json()["per_class_counts"]["train"] == {"cat": 2, "dog": 1}
+
+    as_admin = await api_client.get("/datasets", headers=auth_headers(admin))
+    assert [d["name"] for d in as_admin.json()["datasets"]] == ["admin-data"]
+    mine_as_admin = await api_client.get(f"/datasets/{mine['id']}", headers=auth_headers(admin))
+    assert mine_as_admin.status_code == 404
+
+
+async def test_names_are_unique_per_uploader_not_globally(api_client: AsyncClient) -> None:
+    """Two people may both call their upload "pets"; a global rule would also
+    have told one of them what the other had named their data."""
+    admin = api_client.admin_token  # type: ignore[attr-defined]
+    assert (await upload(api_client, name="pets", token=admin)).status_code == 201
+    assert (await upload(api_client, name="pets")).status_code == 201
+    again = await upload(api_client, name="pets")
+    assert again.status_code == 409
+
+
+async def test_cannot_train_on_someone_elses_dataset(api_client: AsyncClient) -> None:
+    admin = api_client.admin_token  # type: ignore[attr-defined]
+    theirs = (await upload(api_client, token=admin)).json()["dataset"]["id"]
+    spec = {**_SPEC, "dataset": None, "dataset_id": theirs}
+    response = await api_client.post("/jobs", json={"spec": spec})
+    assert response.status_code == 422
 
 
 async def test_response_never_exposes_the_object_key(api_client: AsyncClient) -> None:
@@ -266,11 +293,17 @@ async def test_delete_hides_it_and_removes_the_object(api_client: AsyncClient) -
     assert (await api_client.get(f"/datasets/{dataset_id}")).status_code == 404
 
 
-async def test_operator_cannot_delete(api_client: AsyncClient) -> None:
+async def test_only_the_uploader_or_an_admin_deletes(api_client: AsyncClient) -> None:
+    """An admin may retire anyone's dataset (cleanup reveals nothing of it); an
+    operator may retire only their own, and someone else's reads as unknown."""
     admin = api_client.admin_token  # type: ignore[attr-defined]
-    created = await upload(api_client, token=admin)
-    response = await api_client.delete(f"/datasets/{created.json()['dataset']['id']}")
-    assert response.status_code == 403
+    admins = (await upload(api_client, name="admin-data", token=admin)).json()["dataset"]
+    response = await api_client.delete(f"/datasets/{admins['id']}")
+    assert response.status_code == 404
+
+    mine = (await upload(api_client, name="my-data")).json()["dataset"]
+    response = await api_client.delete(f"/datasets/{mine['id']}", headers=auth_headers(admin))
+    assert response.status_code == 204
 
 
 # --- Job submission ----------------------------------------------------------
@@ -290,8 +323,9 @@ async def test_builtin_dataset_submission_is_unchanged(
 
 
 async def test_can_submit_against_an_uploaded_dataset(api_client: AsyncClient) -> None:
-    admin = api_client.admin_token  # type: ignore[attr-defined]
-    dataset_id = (await upload(api_client, token=admin)).json()["dataset"]["id"]
+    # The submitter must own the dataset (services/ownership.py).
+    owner = api_client.operator_token  # type: ignore[attr-defined]
+    dataset_id = (await upload(api_client, token=owner)).json()["dataset"]["id"]
 
     spec = {**_SPEC, "dataset": None, "dataset_id": dataset_id}
     response = await api_client.post("/jobs", json={"spec": spec})
@@ -308,9 +342,10 @@ async def test_unknown_dataset_is_refused_at_submit(api_client: AsyncClient) -> 
 
 
 async def test_deleted_dataset_cannot_start_new_jobs(api_client: AsyncClient) -> None:
-    admin = api_client.admin_token  # type: ignore[attr-defined]
-    dataset_id = (await upload(api_client, token=admin)).json()["dataset"]["id"]
-    await api_client.delete(f"/datasets/{dataset_id}", headers=auth_headers(admin))
+    # The submitter must own the dataset (services/ownership.py).
+    owner = api_client.operator_token  # type: ignore[attr-defined]
+    dataset_id = (await upload(api_client, token=owner)).json()["dataset"]["id"]
+    await api_client.delete(f"/datasets/{dataset_id}", headers=auth_headers(owner))
 
     spec = {**_SPEC, "dataset": None, "dataset_id": dataset_id}
     response = await api_client.post("/jobs", json={"spec": spec})
@@ -324,8 +359,9 @@ async def test_requires_exactly_one_dataset_source(api_client: AsyncClient) -> N
     assert response.status_code == 422
     assert "a job needs a dataset" in response.text
 
-    admin = api_client.admin_token  # type: ignore[attr-defined]
-    dataset_id = (await upload(api_client, token=admin)).json()["dataset"]["id"]
+    # The submitter must own the dataset (services/ownership.py).
+    owner = api_client.operator_token  # type: ignore[attr-defined]
+    dataset_id = (await upload(api_client, token=owner)).json()["dataset"]["id"]
     both = {**_SPEC, "dataset": "mnist", "dataset_id": dataset_id}
     response = await api_client.post("/jobs", json={"spec": both})
     assert response.status_code == 422
@@ -339,8 +375,9 @@ async def test_claim_hands_the_peer_a_signed_url_and_digest(
     api_client: AsyncClient,
 ) -> None:
     """The peer needs both: the URL to fetch, the digest to trust what it got."""
-    admin = api_client.admin_token  # type: ignore[attr-defined]
-    dataset = (await upload(api_client, token=admin)).json()["dataset"]
+    # The submitter must own the dataset (services/ownership.py).
+    owner = api_client.operator_token  # type: ignore[attr-defined]
+    dataset = (await upload(api_client, token=owner)).json()["dataset"]
 
     node_id, node_token = await online_node(api_client)
 
@@ -388,8 +425,9 @@ async def test_signed_url_is_minted_per_claim(api_client: AsyncClient) -> None:
     A spec is kept forever; a signed URL in it would be a long-lived credential
     sitting in the jobs table. Minting per claim is what keeps it expiring.
     """
-    admin = api_client.admin_token  # type: ignore[attr-defined]
-    dataset_id = (await upload(api_client, token=admin)).json()["dataset"]["id"]
+    # The submitter must own the dataset (services/ownership.py).
+    owner = api_client.operator_token  # type: ignore[attr-defined]
+    dataset_id = (await upload(api_client, token=owner)).json()["dataset"]["id"]
 
     node_id, node_token = await online_node(api_client)
 
@@ -563,8 +601,9 @@ async def test_job_detail_names_the_dataset_it_trained_on(
     dataset names unique precisely so a job that says it trained on "flowers"
     cannot be ambiguous later — a job that says nothing is worse than ambiguous.
     """
-    admin = api_client.admin_token  # type: ignore[attr-defined]
-    dataset_id = (await upload(api_client, name="named", token=admin)).json()[
+    # The submitter must own the dataset (services/ownership.py).
+    owner = api_client.operator_token  # type: ignore[attr-defined]
+    dataset_id = (await upload(api_client, name="named", token=owner)).json()[
         "dataset"
     ]["id"]
     job = await api_client.post(
@@ -589,8 +628,9 @@ async def test_a_retired_dataset_still_names_itself_on_past_jobs(
     hardest to recover. ADR-014 keeps the deleted row so a finished job still
     points at something; this is what makes that row visible.
     """
-    admin = api_client.admin_token  # type: ignore[attr-defined]
-    dataset_id = (await upload(api_client, name="retired-ds", token=admin)).json()[
+    # The submitter must own the dataset (services/ownership.py).
+    owner = api_client.operator_token  # type: ignore[attr-defined]
+    dataset_id = (await upload(api_client, name="retired-ds", token=owner)).json()[
         "dataset"
     ]["id"]
     job = await api_client.post(
@@ -599,7 +639,7 @@ async def test_a_retired_dataset_still_names_itself_on_past_jobs(
     job_id = job.json()["id"]
 
     gone = await api_client.delete(
-        f"/datasets/{dataset_id}", headers=auth_headers(admin)
+        f"/datasets/{dataset_id}", headers=auth_headers(owner)
     )
     assert gone.status_code == 204
     # Gone from the picker, as ADR-014 intends.
@@ -633,8 +673,9 @@ async def test_job_list_names_the_dataset_without_a_query_per_job(
     a job list is unbounded, and the obvious per-row lookup turns a single
     page render into N round trips.
     """
-    admin = api_client.admin_token  # type: ignore[attr-defined]
-    dataset_id = (await upload(api_client, name="listed", token=admin)).json()[
+    # The submitter must own the dataset (services/ownership.py).
+    owner = api_client.operator_token  # type: ignore[attr-defined]
+    dataset_id = (await upload(api_client, name="listed", token=owner)).json()[
         "dataset"
     ]["id"]
 
