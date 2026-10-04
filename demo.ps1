@@ -94,10 +94,16 @@ $adminKey = (Select-String -Path $envFile -Pattern '^ADMIN_API_KEY=(.+)$').Match
 $orchPort = (Select-String -Path $envFile -Pattern '^ORCHESTRATOR_PORT=(\d+)').Matches.Groups[1].Value
 if (-not $orchPort) { $orchPort = "8090" }
 
-$wantEndpoint = "S3_ENDPOINT_URL=http://${lanIp}:${minioPort}"
-$envLines = Get-Content $envFile
-if ($envLines -match '^S3_ENDPOINT_URL=') {
-    $envLines = $envLines -replace '^S3_ENDPOINT_URL=.*', $wantEndpoint
+# This machine's LAN address is what peers on the same network reach storage
+# by, so it signs their dataset links -- S3_PUBLIC_ENDPOINT_URL. It must NOT go
+# in S3_ENDPOINT_URL, which is the orchestrator's own route to MinIO: pinned
+# to a LAN address, every checkpoint failed with 503 the day the address
+# changed (ADR-006 addendum 3). Any such line from older runs is removed, so
+# compose's internal default (http://minio:9000) applies.
+$wantEndpoint = "S3_PUBLIC_ENDPOINT_URL=http://${lanIp}:${minioPort}"
+$envLines = @(Get-Content $envFile | Where-Object { $_ -notmatch '^S3_ENDPOINT_URL=' })
+if ($envLines -match '^S3_PUBLIC_ENDPOINT_URL=') {
+    $envLines = $envLines -replace '^S3_PUBLIC_ENDPOINT_URL=.*', $wantEndpoint
 } else {
     $envLines += $wantEndpoint
 }
@@ -181,25 +187,22 @@ if ($needsBuild) {
 }
 
 # --- 6. Share this machine's GPU --------------------------------------------
-# The agent runs here rather than being installed by hand. The S3_* variables
-# are what make the trained model retrievable afterwards: without them the
-# trainer runs perfectly and saves nothing, and the job page has no model to
-# hand back -- a silent failure that looks like success.
+# The agent runs here rather than being installed by hand. Checkpoints (and so
+# the downloadable model) go through the orchestrator under a lease token
+# (ADR-006 addendum 3), so the agent needs no storage credentials of its own.
 $token = (Invoke-RestMethod -Uri "http://localhost:${orchPort}/auth/enrollment-tokens" `
     -Method Post -Headers @{ "X-Admin-Key" = $adminKey } `
     -ContentType "application/json" `
     -Body (@{ created_by = "demo.ps1"; ttl_seconds = 3600 } | ConvertTo-Json)).token
 
-$s3User = (Select-String -Path $envFile -Pattern '^MINIO_ROOT_USER=(.+)$').Matches.Groups[1].Value
-$s3Pass = (Select-String -Path $envFile -Pattern '^MINIO_ROOT_PASSWORD=(.+)$').Matches.Groups[1].Value
 $agentPy = Join-Path $env:USERPROFILE ".gpu-orchestrator-agent-src\.venv\Scripts\python.exe"
 
-# A stale identity here is why enrolment fails after the database is reset: the
-# agent finds saved state, tries to resume as a node the orchestrator no longer
-# knows, and never uses the fresh token at all. Starting clean each run costs
-# one extra row in the node list and removes that whole failure mode.
-$stateDir = Join-Path $env:USERPROFILE ".gpu-orchestrator-agent"
-if (Test-Path $stateDir) { Remove-Item -Recurse -Force $stateDir }
+# The saved identity is kept, so this laptop stays one machine across runs and
+# keeps its reliability history. It used to be wiped every run -- after a
+# database reset the agent would resume as a node the orchestrator no longer
+# knew -- which added a duplicate machine to the list on every start. The agent
+# now handles that itself: if its saved identity is refused, it enrolls afresh
+# with the token passed below.
 
 if (Test-Path $agentPy) {
     # The trainer image is built locally and published nowhere, so Docker cannot
@@ -211,11 +214,7 @@ if (Test-Path $agentPy) {
         "-m", "agent",
         "--orchestrator", "http://${lanIp}:${orchPort}",
         "--enrollment-token", $token,
-        "--allow-unsandboxed",
-        "--s3-endpoint-url", "http://${lanIp}:${minioPort}",
-        "--s3-access-key", $s3User,
-        "--s3-secret-key", $s3Pass,
-        "--s3-bucket-checkpoints", "checkpoints"
+        "--allow-unsandboxed"
     ) -join " "
     Start-Process powershell -WorkingDirectory (Join-Path $env:USERPROFILE ".gpu-orchestrator-agent-src") `
         -ArgumentList "-NoExit", "-Command", "& '$agentPy' $agentArgs"
@@ -226,11 +225,7 @@ if (Test-Path $agentPy) {
     Say "                 It will ask two questions: answer 1, then yes" "Yellow"
     $envAssignments = @(
         "`$env:ORCH_TOKEN='$token'",
-        "`$env:ORCH_URL='http://${lanIp}:${orchPort}'",
-        "`$env:S3_ENDPOINT_URL='http://${lanIp}:${minioPort}'",
-        "`$env:S3_ACCESS_KEY='$s3User'",
-        "`$env:S3_SECRET_KEY='$s3Pass'",
-        "`$env:S3_BUCKET_CHECKPOINTS='checkpoints'"
+        "`$env:ORCH_URL='http://${lanIp}:${orchPort}'"
     ) -join "; "
     Start-Process powershell -ArgumentList "-NoExit", "-Command", `
         "$envAssignments; irm http://${lanIp}:${orchPort}/install.ps1 | iex"

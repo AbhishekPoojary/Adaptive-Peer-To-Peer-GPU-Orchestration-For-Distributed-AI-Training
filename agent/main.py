@@ -270,7 +270,17 @@ def _describe(exc: BaseException) -> str:
 
 
 class TokenRefreshError(Exception):
-    """Challenge-response JWT refresh failed."""
+    """Challenge-response JWT refresh failed.
+
+    ``rejected`` is True only when the orchestrator answered and refused this
+    identity (an unknown or removed node: 404 on the challenge, 401 on the
+    refresh). A network failure or a server error is not a rejection, and must
+    never cost a machine its identity and history.
+    """
+
+    def __init__(self, message: str, *, rejected: bool = False) -> None:
+        super().__init__(message)
+        self.rejected = rejected
 
 
 async def refresh_token(
@@ -283,7 +293,10 @@ async def refresh_token(
     """Prove key possession via challenge-response. Returns (access_token, expires_in)."""
     chal_resp = await client.post(f"{orchestrator}/auth/challenge", json={"node_id": node_id})
     if chal_resp.status_code != 200:
-        raise TokenRefreshError(f"challenge request failed ({chal_resp.status_code})")
+        raise TokenRefreshError(
+            f"challenge request failed ({chal_resp.status_code})",
+            rejected=chal_resp.status_code == 404,
+        )
     nonce = chal_resp.json()["nonce"]
     signature = base64.b64encode(private_key.sign(nonce.encode("utf-8"))).decode("ascii")
 
@@ -292,7 +305,10 @@ async def refresh_token(
         json={"node_id": node_id, "nonce": nonce, "signature": signature},
     )
     if refresh_resp.status_code != 200:
-        raise TokenRefreshError(f"token refresh failed ({refresh_resp.status_code})")
+        raise TokenRefreshError(
+            f"token refresh failed ({refresh_resp.status_code})",
+            rejected=refresh_resp.status_code == 401,
+        )
     data = refresh_resp.json()
     return data["access_token"], int(data["expires_in"])
 
@@ -955,74 +971,120 @@ def plaintext_warning(orchestrator: str) -> str | None:
     )
 
 
-async def run(args: argparse.Namespace) -> None:
-    orchestrator = args.orchestrator.rstrip("/")
-    warning = plaintext_warning(orchestrator)
-    if warning:
-        logger.warning("UNENCRYPTED CONNECTION: %s", warning)
-    state_dir = Path(args.state_dir)
-    state = load_state(state_dir)
+async def _establish_identity(
+    client: httpx.AsyncClient,
+    *,
+    orchestrator: str,
+    state_dir: Path,
+    enrollment_token: str | None,
+) -> tuple[AgentState, Ed25519PrivateKey, str, float]:
+    """Resume as the saved node, or enrol; returns (state, key, token, expiry).
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        if state is None:
-            if not args.enrollment_token:
-                logger.error(
-                    "no persisted identity in %s and no --enrollment-token given; "
-                    "cannot enroll",
-                    state_dir,
-                )
-                raise SystemExit(1)
-            private_key, public_pem = _generate_keypair()
-            hardware = build_hardware_inventory()
-            logger.info(
-                "enrolling: hostname=%s cpu=%s gpus=%d",
-                hardware["hostname"],
-                hardware["cpu_model"],
-                len(hardware["gpus"]),
+    The saved identity is tried first. Only if the orchestrator answers and
+    refuses it -- the node was removed, or the database reset -- and a fresh
+    enrollment token was supplied, is it replaced by a new enrolment. A network
+    error never discards it: losing an identity costs the machine its history
+    and leaves a duplicate in the fleet.
+    """
+    state = load_state(state_dir)
+    if state is not None:
+        private_key = _load_private_key(state.private_key_pem)
+        try:
+            access_token, expires_in = await refresh_token(
+                client,
+                orchestrator=orchestrator,
+                node_id=state.node_id,
+                private_key=private_key,
             )
-            try:
-                new_state, access_token, expires_in = await register(
-                    client,
-                    orchestrator=orchestrator,
-                    enrollment_token=args.enrollment_token,
-                    public_key_pem=public_pem,
-                    hardware=hardware,
-                )
-            except (EnrollmentError, httpx.HTTPError) as exc:
-                logger.error(
-                    "enrollment failed (orchestrator=%s): %s",
-                    orchestrator,
-                    _describe(exc),
-                )
-                raise SystemExit(1) from exc
-            state = AgentState(
-                node_id=new_state.node_id,
-                name=new_state.name,
-                private_key_pem=_private_key_to_pem(private_key),
-            )
-            save_state(state_dir, state)
-            expires_at = time.time() + expires_in
-            logger.info("enrolled as %s (node_id=%s)", state.name, state.node_id)
-        else:
-            private_key = _load_private_key(state.private_key_pem)
-            try:
-                access_token, expires_in = await refresh_token(
-                    client,
-                    orchestrator=orchestrator,
-                    node_id=state.node_id,
-                    private_key=private_key,
-                )
-            except (TokenRefreshError, httpx.HTTPError) as exc:
+        except TokenRefreshError as exc:
+            if not (exc.rejected and enrollment_token):
                 logger.error(
                     "initial token refresh failed (orchestrator=%s): %s",
                     orchestrator,
                     _describe(exc),
                 )
                 raise SystemExit(1) from exc
+            # The orchestrator no longer knows this identity: it was
+            # removed from the fleet, or the database was reset. With a
+            # fresh token in hand, enrol again rather than fail -- which
+            # is what lets the launcher keep the identity between runs
+            # instead of wiping it and adding a duplicate machine each time.
+            logger.warning(
+                "saved identity %s is no longer recognised (%s); enrolling "
+                "afresh with the supplied token",
+                state.name,
+                _describe(exc),
+            )
+            state = None
+        except httpx.HTTPError as exc:
+            logger.error(
+                "initial token refresh failed (orchestrator=%s): %s",
+                orchestrator,
+                _describe(exc),
+            )
+            raise SystemExit(1) from exc
+        else:
             expires_at = time.time() + expires_in
             logger.info(
                 "resuming as %s (node_id=%s) from %s", state.name, state.node_id, state_dir
             )
+    if state is None:
+        if not enrollment_token:
+            logger.error(
+                "no persisted identity in %s and no --enrollment-token given; "
+                "cannot enroll",
+                state_dir,
+            )
+            raise SystemExit(1)
+        private_key, public_pem = _generate_keypair()
+        hardware = build_hardware_inventory()
+        logger.info(
+            "enrolling: hostname=%s cpu=%s gpus=%d",
+            hardware["hostname"],
+            hardware["cpu_model"],
+            len(hardware["gpus"]),
+        )
+        try:
+            new_state, access_token, expires_in = await register(
+                client,
+                orchestrator=orchestrator,
+                enrollment_token=enrollment_token,
+                public_key_pem=public_pem,
+                hardware=hardware,
+            )
+        except (EnrollmentError, httpx.HTTPError) as exc:
+            logger.error(
+                "enrollment failed (orchestrator=%s): %s",
+                orchestrator,
+                _describe(exc),
+            )
+            raise SystemExit(1) from exc
+        state = AgentState(
+            node_id=new_state.node_id,
+            name=new_state.name,
+            private_key_pem=_private_key_to_pem(private_key),
+        )
+        save_state(state_dir, state)
+        expires_at = time.time() + expires_in
+        logger.info("enrolled as %s (node_id=%s)", state.name, state.node_id)
+    return state, private_key, access_token, expires_at
+
+
+async def run(args: argparse.Namespace) -> None:
+    orchestrator = args.orchestrator.rstrip("/")
+    warning = plaintext_warning(orchestrator)
+    if warning:
+        logger.warning("UNENCRYPTED CONNECTION: %s", warning)
+    state_dir = Path(args.state_dir)
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        state, private_key, access_token, expires_at = await _establish_identity(
+            client,
+            orchestrator=orchestrator,
+            state_dir=state_dir,
+            enrollment_token=args.enrollment_token,
+        )
+
 
         rtt_tracker = RttEwma(alpha=args.rtt_ewma_alpha)
         executing_lease: ExecutingLease | None = None
