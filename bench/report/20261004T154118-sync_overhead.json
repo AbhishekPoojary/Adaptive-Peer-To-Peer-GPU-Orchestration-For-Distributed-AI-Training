@@ -1,0 +1,34 @@
+{
+  "timestamp_utc": "2026-10-04T15:41:18.929158+00:00",
+  "git_sha": "6230bbea294f3f01ff5c847ba6aef4bad143f44c",
+  "hardware": {
+    "cpu": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel (12C/16T)",
+    "gpu": "NVIDIA GeForce RTX 3050 Laptop GPU (4.0 GB)",
+    "ram_gb": 15.63,
+    "os": "Windows 11 (python 3.13.13)"
+  },
+  "scenario": "sync_overhead",
+  "results": {
+    "job_id": "d3284a68-cf9b-4b40-81a0-951e882461bc",
+    "world_size": 2,
+    "measured": {
+      "step_seconds_with_sync": 0.11438,
+      "step_seconds_without_sync": 0.1111,
+      "sync_seconds_per_step": 0.00328,
+      "sync_share_of_step": 0.0286,
+      "backend": "gloo",
+      "world_size": 2
+    },
+    "report_target_share": 0.2,
+    "meets_report_target": true,
+    "final_test_accuracy": 0.981,
+    "topology": "two ranks on one host, in containers on one Docker bridge network, gloo on CPU; not two machines"
+  },
+  "limitations": {
+    "load_term_differentiable": false,
+    "latency_term_differentiable": false,
+    "notes": [
+      "All 2 agents ran on one physical host (1 distinct hostname). psutil.cpu_percent() and NVML utilization are host/device-wide, so every node reports the same load truthfully; RTT is loopback for all of them. The L and D terms of S_i are therefore untested here \u2014 only the reliability term R is differentiated (ADR-013)."
+    ]
+  }
+}

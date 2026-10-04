@@ -39,15 +39,23 @@ it is written.
 | Recovery still resumes with background checkpoint uploads | Detected 2.92 s, restored step 2814 at 8.39 s, job finished 22 s after the kill. `bench/report/20261002T180001-failure_recovery.json` |
 | **Adaptive placement prefers the closer node** (the `γ·D_i` term) | Two identical containerised agents, one with 100 ms of real `tc netem` egress delay (RTT EWMA 26 vs 124 ms): adaptive 10/10 on the near node, least_loaded 8/10, round_robin 5/10. The audit row shows L and R equal and D 0 vs 1. `bench/report/20261002T192259-latency_placement.json` |
 | **Control-plane overhead stays flat from 1 to 16 nodes** | Real agents at 1/2/4/8/16: scheduling a job 12.8-15.5 ms after submit at every size (report target < 500 ms), scheduler pass 5-7 ms, detector pass about 8 ms, orchestrator memory 80-84 MB; its CPU grows with heartbeat rate (4% at 1 node, 24% at 16 on this laptop). No healthy node declared dead at any size. `bench/report/20261002T191552-scalability.json` |
+| Gradient sync adds **2.9%** to a distributed step (report target < 20%) -- **on one host only** | A real world_size=2 job: the trainer timed identical steps with and without the all-reduce (114.4 vs 111.1 ms). Both ranks ran in containers on one Docker bridge, gloo on CPU, so the all-reduce crossed no network. `bench/report/20261004T154118-sync_overhead.json` |
 | **Peers update themselves** | The agent restarts into a newer bundle while idle and pulls a newer trainer image (ADR-015). A real agent at an old version exited for update within one check interval; the full installer loop on a real peer is not yet verified |
 | **Downloading the trained model** | ADR-006 addendum 2; a July run's checkpoint streamed byte-identical to storage (sha256 `471b73f9…` on both sides), opening as a valid torch archive |
 
-554 tests, all against a real Postgres. No mocked database, no simulated
+555 tests, all against a real Postgres. No mocked database, no simulated
 failures outside `tests/`.
 
 ---
 
 ## What is NOT claimed
+
+**Sync overhead between real machines is unmeasured, and likely large.** The
+2.9% above is two ranks on one host. Each step all-reduces 0.56 MB of SmallCNN
+gradients; at 10 Mbit/s -- a common home upload speed -- sending that alone
+takes about 0.45 s, four times a step's 0.11 s of compute. That is arithmetic,
+not a measurement, but it says the < 20% target would not hold on such a link
+without larger batches or less frequent synchronization.
 
 **No throughput speedup from distribution.** Everything was developed on one
 laptop with one RTX 3050, where extra ranks contend for the same device. M5
