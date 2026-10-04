@@ -70,6 +70,13 @@ with **$100 out of $100** of credit, you're done with this step.
 > - search for **B2ats_v2** instead. It's also in the free services (2 CPUs,
 >   1 GB memory) and works the same way.
 >
+> **"RequestDisallowedByAzure … best available regions" when you click
+> Create?** Student subscriptions may only create resources in a few regions,
+> and which ones differs per account. To see yours: search **Policy** in the
+> portal → **Assignments** → *Allowed resource deployment regions* → **View
+> assignment** → **Parameters**. Pick the nearest region on that list, and
+> check your size is offered there.
+>
 > Before clicking **Create**, check the price summary on **Review + create**:
 > a free size shouldn't show a monthly charge for the server itself.
 
