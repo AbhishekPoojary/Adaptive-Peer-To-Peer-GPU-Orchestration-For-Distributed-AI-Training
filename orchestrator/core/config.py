@@ -122,6 +122,12 @@ class Settings(BaseSettings):
     jwt_signing_key: str = "dev-only-change-me"
     jwt_access_token_ttl_seconds: int = 900
     enrollment_token_ttl_seconds: int = 3600
+    # Whether anyone can create their own account (POST /auth/register). On by
+    # default so a friend given the dashboard link can sign up without an
+    # admin. A self-registered account is an OPERATOR: it can upload its own
+    # datasets and run jobs on the fleet -- which is exactly what a leaked link
+    # would let a stranger do. Turn off to go back to admin-created accounts.
+    allow_registration: bool = True
     # Admin bootstrap key for POST /auth/enrollment-tokens. No default: absent
     # means the admin surface is disabled, and startup is refused outside dev
     # (see orchestrator.main.lifespan). Never bake a real key into an image.
@@ -154,6 +160,13 @@ class Settings(BaseSettings):
     # the dashboard renders only the password form. That default is what keeps
     # an offline deployment working, so it is not merely a convenience.
     google_oauth_client_id: str | None = None
+    # The web origins registered for that client in Google Cloud ("Authorized
+    # JavaScript origins"), comma-separated. Google refuses sign-in from any
+    # other origin, so the sign-in page shows the button only on these: a
+    # friend on a quick-tunnel link (a new random address every run, which can
+    # never be registered) otherwise saw a Google button that could only fail.
+    # Unset: shown everywhere, as before.
+    google_oauth_origins: str | None = None
     # Reject a Google ID token issued longer ago than this. Google mints them
     # with roughly an hour of validity; a stolen one is a bearer credential for
     # its whole lifetime, and nothing in the token makes it single-use. Demanding
@@ -315,7 +328,9 @@ class Settings(BaseSettings):
     node_detail_default_samples: int = 50
     node_detail_max_samples: int = 500
 
-    @field_validator("google_oauth_client_id", "s3_public_endpoint_url", mode="after")
+    @field_validator(
+        "google_oauth_client_id", "s3_public_endpoint_url", "google_oauth_origins", mode="after"
+    )
     @classmethod
     def _blank_client_id_is_absent(cls, value: str | None) -> str | None:
         """Treat an empty or whitespace-only client ID as unset.

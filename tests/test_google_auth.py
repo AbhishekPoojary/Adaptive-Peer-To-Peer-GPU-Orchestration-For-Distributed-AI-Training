@@ -176,7 +176,7 @@ async def test_providers_reports_google_disabled_by_default(
     assert response.status_code == 200
     body = response.json()
     assert body["password"] is True
-    assert body["google"] == {"enabled": False, "client_id": None}
+    assert body["google"] == {"enabled": False, "client_id": None, "origins": []}
 
 
 async def test_providers_reports_google_enabled_with_client_id(
@@ -187,6 +187,7 @@ async def test_providers_reports_google_enabled_with_client_id(
     assert response.json()["google"] == {
         "enabled": True,
         "client_id": _TEST_CLIENT_ID,
+        "origins": [],
     }
 
 

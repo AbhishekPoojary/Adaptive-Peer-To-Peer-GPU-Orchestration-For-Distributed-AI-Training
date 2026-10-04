@@ -46,7 +46,7 @@ from orchestrator.core.security import (
 )
 from orchestrator.models.enrollment import EnrollmentToken
 from orchestrator.models.node import Node
-from orchestrator.models.user import User
+from orchestrator.models.user import User, UserRole
 from orchestrator.schemas.auth import (
     AuthProvidersResponse,
     ChallengeRequest,
@@ -59,6 +59,7 @@ from orchestrator.schemas.auth import (
     GoogleProviderOut,
     LoginRequest,
     LoginResponse,
+    RegisterRequest,
     TokenRefreshRequest,
     TokenResponse,
     UserOut,
@@ -77,8 +78,11 @@ from orchestrator.services.google_oidc import (
 )
 from orchestrator.services.users import (
     GoogleAuthOutcome,
+    UserExistsError,
+    WeakPasswordError,
     authenticate_google_identity,
     authenticate_user,
+    create_user,
     record_login,
 )
 
@@ -311,6 +315,59 @@ async def login(
     )
 
 
+@router.post(
+    "/register", response_model=LoginResponse, status_code=status.HTTP_201_CREATED
+)
+async def register(
+    request: Request,
+    body: RegisterRequest,
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings_dep),
+) -> LoginResponse:
+    """Create your own account and sign in to it in one step.
+
+    Every account used to be created by an admin, so a friend sent the
+    dashboard link could not get in without one. A self-registered account is
+    an OPERATOR -- it uploads its own data and runs jobs, and sees nothing of
+    anyone else's (ADR-012 addendum 3) -- never an ADMIN. Rate-limited like
+    sign-in, so the endpoint cannot be used to mass-create accounts or to
+    enumerate taken usernames at speed. ALLOW_REGISTRATION=false closes it.
+    """
+    if not settings.allow_registration:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="registration is closed on this deployment; ask an admin for an account",
+        )
+    enforce_rate_limit(get_login_limiter(), request, bucket="register")
+    try:
+        user = await create_user(
+            session, username=body.username, password=body.password, role=UserRole.OPERATOR
+        )
+    except UserExistsError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except WeakPasswordError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    await record_login(session, user_id=user.id)
+    await session.commit()
+    await session.refresh(user)
+    logger.info("self-registered account %s", user.username)
+
+    access_token = create_user_jwt(
+        user_id=str(user.id),
+        username=user.username,
+        role=user.role.value,
+        signing_key=settings.jwt_signing_key,
+        ttl_seconds=settings.user_access_token_ttl_seconds,
+    )
+    return LoginResponse(
+        access_token=access_token,
+        expires_in=settings.user_access_token_ttl_seconds,
+        user=_user_out(user),
+    )
+
+
 @router.get("/providers", response_model=AuthProvidersResponse)
 async def providers(
     settings: Settings = Depends(get_settings_dep),
@@ -326,7 +383,16 @@ async def providers(
     client_id = settings.google_oauth_client_id
     return AuthProvidersResponse(
         password=True,
-        google=GoogleProviderOut(enabled=client_id is not None, client_id=client_id),
+        google=GoogleProviderOut(
+            enabled=client_id is not None,
+            client_id=client_id,
+            origins=[
+                origin.strip().rstrip("/")
+                for origin in (settings.google_oauth_origins or "").split(",")
+                if origin.strip()
+            ],
+        ),
+        registration=settings.allow_registration,
     )
 
 

@@ -107,6 +107,19 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=1024)
 
 
+class RegisterRequest(BaseModel):
+    """Body of POST /auth/register: a self-service account (OPERATOR).
+
+    The same username rule as an admin-created account, so the two paths
+    cannot disagree about what a valid name is.
+    """
+
+    model_config = _FORBID
+
+    username: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$")
+    password: str = Field(min_length=1, max_length=1024)
+
+
 class UserOut(BaseModel):
     """A user account as returned to clients. Never includes the hash."""
 
@@ -146,6 +159,9 @@ class GoogleProviderOut(BaseModel):
     #: ``None`` whenever ``enabled`` is false, so a client cannot render a button
     #: that could only fail.
     client_id: str | None
+    #: Origins Google will accept sign-in from; empty means "not restricted".
+    #: The dashboard hides the button on any other origin.
+    origins: list[str] = []
 
 
 class AuthProvidersResponse(BaseModel):
@@ -160,6 +176,8 @@ class AuthProvidersResponse(BaseModel):
     #: bootstrap path, so nothing can switch it off.
     password: bool = True
     google: GoogleProviderOut
+    #: Whether the sign-in page may offer "Create account" (ALLOW_REGISTRATION).
+    registration: bool = False
 
 
 class LoginResponse(BaseModel):

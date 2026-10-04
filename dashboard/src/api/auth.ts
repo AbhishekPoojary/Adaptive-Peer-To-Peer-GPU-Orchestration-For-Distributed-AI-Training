@@ -35,6 +35,24 @@ export function useLoginMutation() {
   });
 }
 
+/**
+ * Create your own account and sign straight in (POST /auth/register).
+ * Always an ordinary (OPERATOR) account; the server refuses anything else.
+ */
+export function useRegisterMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: LoginInput) => {
+      const result = unwrap(await api.POST("/auth/register", { body }));
+      setSession(result.access_token, result.user as SessionUser);
+      return result;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries();
+    },
+  });
+}
+
 export function useLogout() {
   const queryClient = useQueryClient();
   return () => {
@@ -109,7 +127,10 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 
 export interface AuthProviders {
   password: boolean;
-  google: { enabled: boolean; client_id: string | null };
+  /** Origins registered with Google; empty means "not restricted". */
+  google: { enabled: boolean; client_id: string | null; origins?: string[] };
+  /** Whether "Create account" may be offered. */
+  registration?: boolean;
 }
 
 /**

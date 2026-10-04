@@ -207,6 +207,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register
+         * @description Create your own account and sign in to it in one step.
+         *
+         *     Every account used to be created by an admin, so a friend sent the
+         *     dashboard link could not get in without one. A self-registered account is
+         *     an OPERATOR -- it uploads its own data and runs jobs, and sees nothing of
+         *     anyone else's (ADR-012 addendum 3) -- never an ADMIN. Rate-limited like
+         *     sign-in, so the endpoint cannot be used to mass-create accounts or to
+         *     enumerate taken usernames at speed. ALLOW_REGISTRATION=false closes it.
+         */
+        post: operations["register_auth_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/providers": {
         parameters: {
             query?: never;
@@ -1069,6 +1096,11 @@ export interface components {
              */
             password: boolean;
             google: components["schemas"]["GoogleProviderOut"];
+            /**
+             * Registration
+             * @default false
+             */
+            registration: boolean;
         };
         /** Body_upload_dataset_datasets_post */
         Body_upload_dataset_datasets_post: {
@@ -1333,6 +1365,11 @@ export interface components {
             enabled: boolean;
             /** Client Id */
             client_id: string | null;
+            /**
+             * Origins
+             * @default []
+             */
+            origins: string[];
         };
         /**
          * GpuInfo
@@ -1805,6 +1842,19 @@ export interface components {
             /** Lease Failure Count */
             lease_failure_count: number;
             latest_telemetry: components["schemas"]["TelemetrySampleOut"] | null;
+        };
+        /**
+         * RegisterRequest
+         * @description Body of POST /auth/register: a self-service account (OPERATOR).
+         *
+         *     The same username rule as an admin-created account, so the two paths
+         *     cannot disagree about what a valid name is.
+         */
+        RegisterRequest: {
+            /** Username */
+            username: string;
+            /** Password */
+            password: string;
         };
         /**
          * RendezvousAssignment
@@ -2477,6 +2527,39 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_auth_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
