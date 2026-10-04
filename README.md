@@ -287,9 +287,11 @@ who's connected.
 **The accuracy is low.** Usually there are too few pictures, or the categories
 look very alike. Add more pictures per category, or train for more epochs.
 
-**"Sign in with Google" doesn't work on the link.** Google only allows sign-in
-from addresses registered in advance, and the shared link changes every time.
-Use a username and password instead — **Create one** on the sign-in page.
+**There's no "Sign in with Google" button.** It only appears once the host has
+set Google sign-in up, which needs a permanent address — a cloud server
+([how](docs/DEPLOY-AZURE.md#later)). Until then, use **Create one** on the
+sign-in page to make a username and password. Once it's there, the first time
+you sign in with Google makes your account for you.
 
 **I forgot my password.** Ask the host. They can't see your password, but they
 can give you a new one with **Reset password** on the **People** page.

@@ -36,9 +36,9 @@ Reset a forgotten password on an existing account::
 
 Google sign-in (ADR-012 addendum)
 ---------------------------------
-``POST /auth/google`` never creates accounts, so a Google identity can only sign
-in to a row that already carries its address. Setting that address is this
-script's job too.
+With sign-ups closed (``ALLOW_REGISTRATION=false``), ``POST /auth/google``
+creates no accounts, so a Google identity can only sign in to a row that
+already carries its address. Setting that address is this script's job too.
 
 Give an existing password account the option of Google sign-in::
 

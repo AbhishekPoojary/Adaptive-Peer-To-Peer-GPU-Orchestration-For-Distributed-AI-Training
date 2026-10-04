@@ -82,6 +82,7 @@ from orchestrator.services.users import (
     WeakPasswordError,
     authenticate_google_identity,
     authenticate_user,
+    create_google_account,
     create_user,
     record_login,
 )
@@ -140,9 +141,9 @@ def _account_refusal(outcome: GoogleAuthOutcome, email: str) -> HTTPException:
             f"{email} is already linked to a different Google account. "
             "Ask whoever runs the fleet to re-link it."
         )
-    else:  # NO_ACCOUNT
+    else:  # NO_ACCOUNT, and sign-ups are closed (otherwise one is created)
         detail = (
-            f"No account is linked to {email}. Google sign-in cannot create one — "
+            f"No account is linked to {email}, and sign-ups are closed here — "
             "ask whoever runs the fleet to add this address to your account."
         )
     return HTTPException(
@@ -411,9 +412,11 @@ async def google_login(
     authorization path, so nothing downstream of here knows or cares which
     mechanism was used (ADR-012 addendum §3).
 
-    This never creates an account. An identity Google vouches for that matches no
-    row is refused, because on this system an account is permission to run
-    containers on other people's machines.
+    An identity Google vouches for that matches no account gets a new OPERATOR
+    account when the deployment allows self-registration -- exactly what
+    ``POST /auth/register`` would give the same person, so Google adds no new
+    way in. With ``ALLOW_REGISTRATION=false`` it is refused instead, because an
+    account is then something only an admin hands out.
     """
     # Shares the password login bucket deliberately: both are "attempts to
     # obtain a user token from this IP", and letting an attacker reset their
@@ -457,6 +460,17 @@ async def google_login(
         raise _GOOGLE_TOKEN_REFUSED from exc
 
     user, outcome = await authenticate_google_identity(session, identity=identity)
+    if outcome is GoogleAuthOutcome.NO_ACCOUNT and settings.allow_registration:
+        try:
+            user = await create_google_account(session, identity=identity)
+            outcome = GoogleAuthOutcome.OK
+            logger.info("self-registered account %s via Google", user.username)
+        except UserExistsError:
+            # The same person signing in from two tabs at once: the other
+            # request created the account, so this one signs in to it.
+            user, outcome = await authenticate_google_identity(
+                session, identity=identity
+            )
     if user is None:
         await session.rollback()
         # The address is the one fact an operator needs to act on this, since the

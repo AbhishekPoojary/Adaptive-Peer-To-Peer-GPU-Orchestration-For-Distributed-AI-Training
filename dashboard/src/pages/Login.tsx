@@ -28,8 +28,9 @@ type Mode = "sign-in" | "register";
  * Google sign-in is offered only on an origin registered for it in Google Cloud
  * (GOOGLE_OAUTH_ORIGINS). A quick-tunnel link gets a new random address every
  * run, which can never be registered, so a friend there used to see a Google
- * button that could only fail. Google also never creates an account, so it is
- * not offered in the create-account mode.
+ * button that could only fail. While registration is open, a first Google
+ * sign-in creates the same ordinary account the form does, so the button is
+ * offered in both modes.
  *
  * The password form is always rendered: an orchestrator with no internet must
  * stay usable.
@@ -201,7 +202,7 @@ export function Login() {
                 : "Sign in"}
           </Button>
 
-          {!registering && googleEnabled && google?.client_id && (
+          {googleEnabled && google?.client_id && (
             <>
               <div className="flex items-center gap-3" aria-hidden="true">
                 <span className="h-px flex-1 bg-hairline" />
@@ -214,6 +215,7 @@ export function Login() {
                   clientId={google.client_id}
                   onCredential={(credential) => void handleGoogleCredential(credential)}
                   disabled={busy}
+                  signUp={registering}
                 />
                 {googleMutation.isPending && (
                   <p className="text-xs text-muted">Signing in with Google…</p>

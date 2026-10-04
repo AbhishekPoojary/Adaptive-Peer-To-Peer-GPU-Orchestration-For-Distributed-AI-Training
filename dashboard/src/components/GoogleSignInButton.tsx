@@ -76,12 +76,15 @@ export interface GoogleSignInButtonProps {
   onCredential: (credential: string) => void;
   /** Rendered instead of the button while the parent is exchanging the token. */
   disabled?: boolean;
+  /** "Sign up with Google" on the create-account form; the same sign-in either way. */
+  signUp?: boolean;
 }
 
 export function GoogleSignInButton({
   clientId,
   onCredential,
   disabled = false,
+  signUp = false,
 }: GoogleSignInButtonProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [unavailable, setUnavailable] = useState(false);
@@ -117,7 +120,7 @@ export function GoogleSignInButton({
           type: "standard",
           theme: "outline",
           size: "large",
-          text: "signin_with",
+          text: signUp ? "signup_with" : "signin_with",
           shape: "rectangular",
           width: 320,
         });
@@ -129,7 +132,7 @@ export function GoogleSignInButton({
     return () => {
       cancelled = true;
     };
-  }, [clientId]);
+  }, [clientId, signUp]);
 
   if (unavailable) {
     return (

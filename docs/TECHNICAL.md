@@ -191,14 +191,15 @@ GOOGLE_OAUTH_CLIENT_ID=1234567890-abcdef.apps.googleusercontent.com
 
 Restart the orchestrator and a **Sign in with Google** button appears.
 
-**2. Put the address on an account.** This is the part people miss:
+**2. Accounts.** While sign-ups are open (`ALLOW_REGISTRATION=true`, the
+default), a first Google sign-in creates an ordinary account, exactly as the
+*Create one* form would: an OPERATOR, never an ADMIN, named after the mailbox
+and bound to Google's immutable account ID.
 
-> **Google sign-in cannot create an account.** It only proves you are the holder
-> of one that already exists. On this system an account is permission to run
-> containers on other people's machines — Google can vouch for who you are, but
-> it cannot grant that.
-
-The easy way is the dashboard's **People** page: *Add person*, type a username
+With sign-ups closed, Google sign-in only proves you hold an account that
+already exists — on this system an account is permission to run containers on
+other people's machines, and then only an admin grants that. Put the address
+on an account first. The easy way is the dashboard's **People** page: *Add person*, type a username
 and their Gmail address, done — they sign in with Google and you never share a
 password. A refused sign-in names the exact address it refused, so you can paste
 it straight in.
@@ -484,7 +485,7 @@ Each row links to the ADR explaining *why* — worth reading if a choice looks o
 | Isolation | `cap_drop=ALL`, no-new-privileges, read-only rootfs, memory/PID limits; opt-in subprocess path for peers without Docker | ADR-007 |
 | Machine identity | One-time token → Ed25519 challenge-response → short-lived JWT | ADR-008 |
 | Human identity | Password → scrypt → short-lived JWT with a separate audience and role | ADR-012 |
-| Google sign-in | Optional. Google ID token verified against Google's keys → the *same* user JWT. Never creates an account | ADR-012 addendum |
+| Google sign-in | Optional. Google ID token verified against Google's keys → the *same* user JWT. Creates an OPERATOR account only while sign-ups are open | ADR-012 addendum |
 | Custom datasets | Upload an ImageFolder zip; validated without decompressing, stored in MinIO, streamed to the peer through the orchestrator in ranged pieces under a lease token, SHA-256 verified, decoded once into a cached array | ADR-014, ADR-006 addendum 3 |
 | Managing people | Self-registration of OPERATOR accounts; admin-only `/users` CRUD and a **People** page; the last enabled admin cannot demote or disable themselves | ADR-012 addenda 2–3 |
 | Privacy | A user's datasets, job logs, metrics, results and models are theirs alone; admins see job state and placement, not contents | ADR-012 addendum 3 |

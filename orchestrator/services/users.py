@@ -6,12 +6,15 @@ username exists — see :func:`authenticate_user`.
 Google sign-in (ADR-012 addendum) lands here already verified: by the time
 :func:`authenticate_google_identity` is called, :mod:`google_oidc` has proved
 Google asserted the identity. This module's only job is deciding whether that
-identity corresponds to an account, and it never creates one.
+identity corresponds to an account. Creating one for a newcomer is a separate,
+explicit step (:func:`create_google_account`) that the caller takes only when
+the deployment allows self-registration.
 """
 
 from __future__ import annotations
 
 import enum
+import re
 import uuid
 from datetime import UTC, datetime
 
@@ -237,6 +240,55 @@ async def authenticate_google_identity(
         return None, GoogleAuthOutcome.DISABLED
 
     return user, GoogleAuthOutcome.OK
+
+
+def _username_from_email(email: str) -> str:
+    """A readable starting username for a new Google account: the mailbox name.
+
+    Cut down to what usernames allow (``USERNAME_PATTERN``: a letter or digit,
+    then letters, digits, ``.``, ``_`` or ``-``, 3-64 long), leaving room for a
+    ``-N`` suffix should the name already be taken.
+    """
+    local = re.sub(r"[^a-z0-9._-]", "", email.split("@", 1)[0].lower())
+    local = local.lstrip("._-")[:56]
+    if len(local) < 3:
+        local = f"user{local}"
+    return local
+
+
+async def create_google_account(
+    session: AsyncSession, *, identity: GoogleIdentity
+) -> User:
+    """Create an OPERATOR account for a Google identity seen for the first time.
+
+    The Google counterpart of self-registration: same role, same switch
+    (``ALLOW_REGISTRATION``), and the caller only calls it when that is on. The
+    account has no password; it signs in with Google, bound to the immutable
+    ``sub`` from the start. Its username is taken from the mailbox name and made
+    unique with a numeric suffix. Caller commits.
+
+    Raises :class:`UserExistsError` if the email was claimed concurrently (two
+    tabs signing in at once); the caller can then sign in to that account.
+    """
+    base = _username_from_email(identity.email)
+    username = base
+    for n in range(2, 1000):
+        if await get_user_by_username(session, username=username) is None:
+            break
+        username = f"{base}-{n}"
+    else:
+        username = f"{base}-{uuid.uuid4().hex[:8]}"
+
+    user = await create_user(
+        session,
+        username=username,
+        password=None,
+        role=UserRole.OPERATOR,
+        email=identity.email,
+    )
+    user.google_sub = identity.subject
+    await session.flush()
+    return user
 
 
 async def record_login(session: AsyncSession, *, user_id: uuid.UUID) -> None:

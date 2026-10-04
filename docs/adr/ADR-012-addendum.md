@@ -223,3 +223,28 @@ as distinct.
 - `tests/test_google_auth.py` signs real RS256 tokens with a locally generated
   key and serves them through a stubbed JWKS endpoint, so the whole verification
   path is exercised without the suite depending on the internet.
+
+## Revision: Google sign-up follows `ALLOW_REGISTRATION`
+
+§4's "no self-provisioning" rested on accounts being something only an admin
+hands out. Self-registration (`POST /auth/register`, `ALLOW_REGISTRATION`,
+default on) changed that premise: anyone with the dashboard link can already
+create an OPERATOR account with a password. Refusing the same person when they
+arrive through Google protected nothing and left them a step that the password
+form does not require.
+
+So a verified Google identity that matches no account now gets one **only while
+`ALLOW_REGISTRATION` is on** (`services.users.create_google_account`):
+
+- role OPERATOR, never ADMIN — exactly what `/auth/register` grants;
+- no password, `email` set, and `google_sub` bound at creation, so `sub`
+  remains the identity from the first sign-in onward;
+- username from the mailbox name, with `-2`, `-3`, … when taken, never signed in
+  to an existing account of that name;
+- a concurrent duplicate (two tabs) loses the unique-email race and signs in to
+  the winner's account.
+
+With `ALLOW_REGISTRATION=false` the original behaviour holds unchanged: an
+unknown identity is refused, and the refusal names the address so an admin can
+add it. Everything else in §4 — matching on `sub`, refusing a rebind to a
+different `sub` — is unaffected.

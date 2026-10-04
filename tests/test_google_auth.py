@@ -12,8 +12,10 @@ depend on the internet and on someone else's uptime.
 The security properties asserted here are the reason the addendum can add an
 external IdP without weakening ADR-012:
 
-* an identity Google vouches for that matches no account is **refused**, not
-  signed up (``test_refuses_unknown_email``);
+* an identity Google vouches for that matches no account is **refused** when
+  sign-ups are closed (``test_refuses_unknown_email``), and otherwise gets the
+  same OPERATOR account self-registration would give
+  (``test_signs_up_unknown_email_when_registration_is_open``);
 * a token minted for a *different* Google client verifies against Google's keys
   but is refused here (``test_refuses_wrong_audience``) — the single most
   important check in the flow;
@@ -301,14 +303,22 @@ async def test_matches_by_subject_after_email_changes(
 # --- Refusals ----------------------------------------------------------------
 
 
-async def test_refuses_unknown_email(
-    google_client: AsyncClient, rsa_key: rsa.RSAPrivateKey
-) -> None:
-    """The core property: Google sign-in never creates an account.
+def _close_registration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALLOW_REGISTRATION", "false")
+    get_settings.cache_clear()
 
-    An account here is permission to run containers on other people's machines,
-    so a stranger holding a valid Google identity must get nothing.
+
+async def test_refuses_unknown_email(
+    google_client: AsyncClient,
+    rsa_key: rsa.RSAPrivateKey,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With sign-ups closed, Google sign-in never creates an account.
+
+    An account is then something only an admin hands out, so a stranger holding
+    a valid Google identity must get nothing.
     """
+    _close_registration(monkeypatch)
     response = await google_client.post(
         "/auth/google",
         json={"credential": make_id_token(rsa_key, email="stranger@example.com")},
@@ -324,6 +334,67 @@ async def test_refuses_unknown_email(
             ).all()
         )
     assert count == 0, "a refused sign-in must not have created an account"
+
+
+async def test_signs_up_unknown_email_when_registration_is_open(
+    google_client: AsyncClient, rsa_key: rsa.RSAPrivateKey
+) -> None:
+    """With sign-ups open, a first Google sign-in creates an ordinary account.
+
+    The same thing ``POST /auth/register`` would give the same person: an
+    OPERATOR, never an ADMIN, with no password, bound to Google's immutable
+    subject so later sign-ins match on that rather than the email.
+    """
+    first = await google_client.post(
+        "/auth/google",
+        json={
+            "credential": make_id_token(rsa_key, email="Priya.K+ml@example.com", subject="sub-p")
+        },
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["user"]["role"] == "OPERATOR"
+    assert first.json()["user"]["username"] == "priya.kml"
+
+    again = await google_client.post(
+        "/auth/google",
+        json={
+            "credential": make_id_token(rsa_key, email="priya.k+ml@example.com", subject="sub-p")
+        },
+    )
+    assert again.status_code == 200
+    assert again.json()["user"]["id"] == first.json()["user"]["id"]
+
+    from orchestrator.core.db import get_sessionmaker
+
+    async with get_sessionmaker()() as db:
+        user = (
+            await db.execute(select(User).where(User.email == "priya.k+ml@example.com"))
+        ).scalar_one()
+    assert user.google_sub == "sub-p"
+    assert user.password_hash is None
+    assert user.role is UserRole.OPERATOR
+
+
+async def test_google_signup_picks_a_free_username(
+    google_client: AsyncClient, rsa_key: rsa.RSAPrivateKey, session: Any
+) -> None:
+    """A mailbox name that is already someone's username gets a suffix.
+
+    Silently signing a newcomer in to the existing ``sam`` would hand them
+    someone else's data; refusing would leave them stuck for a reason they
+    cannot fix.
+    """
+    async with session as db:
+        await seed_user(db, username="sam", role=UserRole.ADMIN)
+        await db.commit()
+
+    response = await google_client.post(
+        "/auth/google",
+        json={"credential": make_id_token(rsa_key, email="sam@example.com", subject="sub-sam")},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["user"]["username"] == "sam-2"
+    assert response.json()["user"]["role"] == "OPERATOR"
 
 
 async def test_refuses_wrong_audience(
@@ -547,7 +618,10 @@ async def test_token_verification_failures_are_indistinguishable(
 
 
 async def test_account_refusal_names_the_verified_address(
-    google_client: AsyncClient, rsa_key: rsa.RSAPrivateKey, session: Any
+    google_client: AsyncClient,
+    rsa_key: rsa.RSAPrivateKey,
+    session: Any,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Once Google has vouched for the caller, the refusal is specific.
 
@@ -557,6 +631,7 @@ async def test_account_refusal_names_the_verified_address(
     the operator could not learn which address to add, and the user could not
     tell a missing account from a disabled one.
     """
+    _close_registration(monkeypatch)
     async with session as db:
         disabled = await seed_user(
             db, username="off", role=UserRole.OPERATOR, email="off@example.com"
@@ -570,7 +645,7 @@ async def test_account_refusal_names_the_verified_address(
     )
     assert unknown.status_code == 401
     assert "nobody@example.com" in unknown.json()["detail"]
-    assert "cannot create one" in unknown.json()["detail"]
+    assert "sign-ups are closed" in unknown.json()["detail"]
 
     off = await google_client.post(
         "/auth/google",
