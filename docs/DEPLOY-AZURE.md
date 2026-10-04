@@ -60,8 +60,18 @@ with **$100 out of $100** of credit, you're done with this step.
 6. When it says *Your deployment is complete*, click **Go to resource** and note
    the **Public IP address**.
 
-> **"This size is not available in this region"?** Pick a different region on
-> the Basics tab and try again.
+> **B1s greyed out ("NotAvailableForSubscription")?** Student subscriptions
+> can't use every size in every region. Either:
+>
+> - click **Find deployable options** next to **B1s** to see the regions where
+>   you *can* use it, then change **Region** on the Basics tab to one of them
+>   (the nearest you can get; for India try *Central India*, *West India*, then
+>   *Southeast Asia*); or
+> - search for **B2ats_v2** instead. It's also in the free services (2 CPUs,
+>   1 GB memory) and works the same way.
+>
+> Before clicking **Create**, check the price summary on **Review + create**:
+> a free size shouldn't show a monthly charge for the server itself.
 
 ---
 
