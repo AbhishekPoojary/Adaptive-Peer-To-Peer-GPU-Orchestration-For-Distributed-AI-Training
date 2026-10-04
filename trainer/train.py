@@ -70,6 +70,7 @@ never a fake success.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import math
@@ -992,6 +993,61 @@ def _evaluate_accuracy(
     return correct, total, accuracy
 
 
+#: Steps measured each way by :func:`_profile_sync`. Few enough to cost a
+#: second or two at the start of a distributed job, enough for a stable median.
+_SYNC_PROFILE_STEPS = 12
+
+
+def _profile_sync(
+    model: DistributedDataParallel,
+    base_model: nn.Module,
+    batches: list[tuple[torch.Tensor, torch.Tensor]],
+    criterion: nn.Module,
+    device: torch.device,
+) -> dict[str, float]:
+    """How much of a training step gradient synchronization adds, measured.
+
+    The same forward and backward passes are timed twice: normally, which
+    all-reduces the gradients across ranks, and under DDP's ``no_sync()``,
+    which skips exactly that and nothing else. The difference is the
+    synchronization cost the step actually pays, after any overlap with the
+    backward pass -- which is what the report's "< 20% of training time" target
+    is about. Every rank runs the same sequence, so the collectives line up.
+
+    Nothing here trains: gradients are discarded after each step and the
+    model's state (weights and BatchNorm running statistics, which a forward
+    pass in train mode updates) is restored afterwards.
+    """
+    import statistics
+
+    saved = {k: v.detach().clone() for k, v in base_model.state_dict().items()}
+
+    def timed(sync: bool) -> list[float]:
+        times = []
+        for images, labels in batches:
+            started = time.perf_counter()
+            context = contextlib.nullcontext() if sync else model.no_sync()
+            with context:
+                criterion(model(images), labels).backward()
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            times.append(time.perf_counter() - started)
+            model.zero_grad(set_to_none=True)
+        return times
+
+    timed(True)  # warm-up: allocator, kernels, first collectives
+    with_sync = statistics.median(timed(True))
+    without_sync = statistics.median(timed(False))
+    base_model.load_state_dict(saved)
+    overhead = max(with_sync - without_sync, 0.0)
+    return {
+        "step_seconds_with_sync": round(with_sync, 5),
+        "step_seconds_without_sync": round(without_sync, 5),
+        "sync_seconds_per_step": round(overhead, 5),
+        "sync_share_of_step": round(overhead / with_sync, 4) if with_sync else 0.0,
+    }
+
+
 def _serialize_checkpoint(
     base_model: nn.Module,
     optimizer: torch.optim.Optimizer,
@@ -1243,6 +1299,21 @@ def main() -> None:
         # parallel-sync half. device_ids only for a real per-rank GPU (nccl).
         device_ids = [dist_config.local_rank] if device.type == "cuda" else None
         model = DistributedDataParallel(base_model, device_ids=device_ids)
+        batches = []
+        for images, labels in train_loader:
+            batches.append((images.to(device), labels.to(device)))
+            if len(batches) == _SYNC_PROFILE_STEPS:
+                break
+        profile = _profile_sync(model, base_model, batches, criterion, device)
+        log(
+            f"sync: gradient all-reduce adds {profile['sync_seconds_per_step'] * 1000:.1f} ms "
+            f"per step, {profile['sync_share_of_step']:.1%} of a step "
+            f"(backend={dist_config.backend}, world_size={dist_config.world_size})"
+        )
+        if dist_config.is_main:
+            print(json.dumps({"type": "sync_profile", **profile,
+                              "backend": dist_config.backend,
+                              "world_size": dist_config.world_size}), flush=True)
     else:
         model = base_model
 

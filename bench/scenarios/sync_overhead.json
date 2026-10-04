@@ -1,0 +1,10 @@
+{
+  "_description": [
+    "Gradient synchronization's share of a distributed training step, from a",
+    "real world_size=2 job: the trainer times the same steps with and without",
+    "the all-reduce. Both ranks on one host (gloo, CPU), labelled as such."
+  ],
+  "job_spec": {"dataset": "mnist", "model": "cnn", "epochs": 1, "batch_size": 64,
+               "learning_rate": 0.01, "world_size": 2},
+  "job_timeout_seconds": 1800
+}

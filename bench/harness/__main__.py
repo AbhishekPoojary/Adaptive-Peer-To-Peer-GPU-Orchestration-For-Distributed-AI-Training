@@ -43,6 +43,7 @@ from bench.harness.scenarios import (
     latency_placement,
     reliability_placement,
     scalability,
+    sync_overhead,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -59,6 +60,7 @@ SCENARIOS = {
     "gpu_utilization_custom": gpu_utilization,
     scalability.NAME: scalability,
     latency_placement.NAME: latency_placement,
+    sync_overhead.NAME: sync_overhead,
 }
 
 logger = logging.getLogger("bench")
