@@ -23,6 +23,10 @@ COPY orchestrator ./orchestrator
 COPY agent ./agent
 COPY trainer ./trainer
 COPY installer ./installer
+# The account script, so demo.ps1 can create the first admin inside this
+# container on a fresh install -- no Python environment or database URL needed
+# on the host.
+COPY scripts/create_user.py ./scripts/create_user.py
 
 RUN pip install --no-cache-dir ".[server]"
 

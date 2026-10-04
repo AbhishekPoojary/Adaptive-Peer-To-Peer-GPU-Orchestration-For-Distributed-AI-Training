@@ -134,7 +134,7 @@ services:
       NODE_DETAIL_DEFAULT_SAMPLES: ${NODE_DETAIL_DEFAULT_SAMPLES:-50}
       NODE_DETAIL_MAX_SAMPLES: ${NODE_DETAIL_MAX_SAMPLES:-500}
     ports:
-      - "${ORCHESTRATOR_PORT:-8000}:8000"
+      - "${ORCHESTRATOR_PORT:-8090}:8000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 5s

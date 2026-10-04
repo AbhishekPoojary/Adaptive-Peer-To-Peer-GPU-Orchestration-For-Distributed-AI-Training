@@ -1,550 +1,301 @@
-# gpu-orchestrator
+# GPU Orchestrator
 
-**Train AI models on a group of ordinary computers — laptops, desktops, gaming
-PCs — working together over the internet.**
+**Teach a computer to recognise your own pictures — using spare computers, yours
+or your friends', instead of renting an expensive one.**
 
-Decentralized, peer-to-peer GPU orchestration for distributed AI training.
+You give it a set of example photos sorted into categories (say, *cats* and
+*dogs*, or *healthy leaf* and *diseased leaf*). It trains an AI model on them,
+using whichever computers in your group are free, and gives you back a model
+that can tell those categories apart.
+
+![The dashboard](docs/screenshots/overview-1440.png)
 
 ---
 
-## The problem, in plain words
+## Who are you?
 
-Training an AI model needs a GPU. GPUs are expensive, and renting them from a
-cloud provider costs real money per hour.
+| You want to… | Go to | You'll need |
+| --- | --- | --- |
+| **Train a model** on your own pictures | [Part 1](#part-1--train-a-model) | A web browser and the link someone sent you |
+| **Lend your computer** so others can train on it | [Part 2](#part-2--lend-your-computer) | About 10 minutes, once |
+| **Run the whole thing** for your group | [Part 3](#part-3--run-it-for-your-group) | A Windows PC, about 30 minutes the first time |
 
-Meanwhile, plenty of ordinary machines sit idle — a gaming PC overnight, a lab
-computer at the weekend, a friend's laptop. Together they hold a lot of unused
-compute. The reason people don't pool it is that doing so is genuinely hard:
+You don't need to know anything about AI or programming for Parts 1 and 2.
 
-- **Home machines are unreachable from the internet.** They sit behind a home
-  router (NAT), so you cannot simply connect *to* them.
-- **They come and go.** Someone shuts a lid, unplugs a cable, or loses Wi-Fi
-  in the middle of your training run.
-- **They are not equal.** One has a fast GPU, one has a slow one, one has none
-  at all. Some are reliable; some crash constantly.
-- **Running someone else's code is a security risk** — for both sides.
+---
 
-`gpu-orchestrator` handles all four, so a pool of ordinary machines can be used
-for real training runs.
+## Part 1 — Train a model
 
-## How it solves it
+Nothing to install. Everything happens in your web browser.
 
-The trick is that **the machines call us; we never call them.**
+### 1. Open the link and make an account
 
-A small program called an **agent** runs on each volunteer machine. It dials
-*out* to a central **orchestrator** and asks, "got any work for me?" Because the
-connection is always outbound, the home router is happy and no port forwarding,
-public IP, or firewall change is ever needed.
+Open the link you were sent. On the sign-in page, click **Create one** (under
+*No account?*), choose a username and a password of at least 12 characters, and
+click **Create account**. You're signed in straight away.
 
-```mermaid
-flowchart LR
-    subgraph Yours
-        O["Orchestrator<br/>(decides who trains what)"]
-        DB[("Postgres<br/>jobs + nodes")]
-        S3[("MinIO<br/>checkpoints")]
-        O --- DB
-        O --- S3
-    end
+> **Your work is private.** Only you can see your pictures, your training
+> progress and your finished model — not other users, and not the person who
+> runs the system.
 
-    A1["Agent<br/>gaming PC, RTX GPU"] -->|"1. I'm alive + my stats"| O
-    A2["Agent<br/>laptop, no GPU"] -->|"1. I'm alive + my stats"| O
-    A3["Agent<br/>lab desktop, GPU"] -->|"1. I'm alive + my stats"| O
+### 2. Get your pictures ready
 
-    O -.->|"2. offers a lease"| A1
-    A1 -->|"3. trains, streams logs, saves checkpoints"| O
+Put your pictures in folders, **one folder per category**. The folder's name
+*is* the category. Then make a zip file of them.
+
+```
+my-pictures.zip
+├── cats/
+│   ├── photo1.jpg
+│   ├── photo2.jpg
+│   └── …
+└── dogs/
+    ├── photo1.jpg
+    └── …
 ```
 
-1. **Every agent reports in** every few seconds with its real hardware stats —
-   GPU memory, load, and how fast it can reach the orchestrator.
-2. **The orchestrator picks a machine** for each job and offers it a *lease* —
-   a time-limited claim on that work.
-3. **The agent trains**, streaming logs and metrics back live, and saving
-   progress (*checkpoints*) to shared storage.
+How to zip on Windows: select the folders, right-click → **Send to** →
+**Compressed (zipped) folder**. On a Mac: select them, right-click →
+**Compress**.
 
-If a machine dies mid-run, the orchestrator notices the missing heartbeats,
-declares it gone, and hands the job to another machine — which **resumes from
-the last checkpoint** instead of starting over.
+**Good to know**
 
-## Words you'll see in this repo
+- **At least 2 categories.** More pictures per category gives better results —
+  aim for a few hundred each if you can.
+- **Any common picture type** (JPG, PNG, …) and any size. They're shrunk
+  automatically, so big photos are fine.
+- **You don't need to sort them perfectly.** Downloaded datasets often come in
+  other folder layouts (like `seg_train/…` or `train/` and `test/`); those are
+  rearranged for you.
+- **Optional:** if you put some pictures aside in a separate `test/` folder
+  (with the same category folders inside), those are used to check how good the
+  model is. If you don't, a few pictures are set aside for you automatically.
 
-New to distributed systems? These are the only terms you really need.
+### 3. Upload them
 
-| Term | What it means here |
-| --- | --- |
-| **Orchestrator** | The central brain. Tracks machines, decides who trains what. One per fleet. |
-| **Agent** | The small program on each volunteer machine. Reports status, runs training. |
-| **Node / peer** | A volunteer machine running an agent. |
-| **Job** | One training run you asked for (e.g. "train a CNN on MNIST for 3 epochs"). |
-| **Lease** | A time-limited claim on a job. Must be renewed, or it expires and the job is reassigned. Stops two machines doing the same work. |
-| **Heartbeat** | The agent's periodic "I'm still alive" message. Silence means trouble. |
-| **Checkpoint** | A saved snapshot of a half-trained model, so a crash doesn't lose the work. |
-| **NAT** | Why your home PC can't be reached from the internet. Solved here by only ever dialing out. |
-| **ADR** | *Architecture Decision Record.* A short doc in `docs/adr/` explaining **why** a choice was made. |
+Go to **Datasets**, give your dataset a name, drag your zip onto the box (or
+click it to choose the file), and click **Upload dataset**.
 
-## What it looks like
+- A progress bar shows how it's going. On slow home internet a large dataset can
+  take several minutes — **keep the tab open**.
+- Short internet hiccups are retried automatically. If the upload fails
+  completely, click **Upload dataset** again.
+- If something is wrong with the zip, you'll get a plain explanation of what to
+  fix.
 
-| Fleet overview | Submitting a job |
-| --- | --- |
-| ![Fleet overview](docs/screenshots/overview-1440.png) | ![Submit a job](docs/screenshots/submit-1440.png) |
+### 4. Start training
 
-| Node detail | Live job detail |
-| --- | --- |
-| ![Nodes](docs/screenshots/nodes-1440.png) | ![Job detail](docs/screenshots/job-detail-1440.png) |
+Go to **Train**, pick your dataset, and click **Start training**. The default
+settings are sensible — you don't have to change anything. If you're curious:
+
+| Setting | What it means | Suggested |
+| --- | --- | --- |
+| **Epochs** | How many times the model looks through all your pictures. More can mean better accuracy, but takes longer. | 5–10 |
+| **Batch size** | How many pictures it looks at in one go. Bigger is faster on a good graphics card. | 32–256 |
+| **Learning rate** | How big a step it takes when it learns. | Leave at 0.01, or 0.001 for your own photos |
+| **World size** | How many computers work on *one* job together. Over home internet, more is usually *slower*. | **1** |
+| **Scheduler** | How it picks a computer for you. *Adaptive* prefers reliable, nearby, less-busy machines. | adaptive |
+
+### 5. Watch it, then download your model
+
+You're taken to your job's page. You'll see which computer is training it, a
+live log, and two charts filling in as it learns:
+
+- **Test accuracy** going up — the share of set-aside pictures it gets right.
+- **Training loss** going down — how wrong it still is.
+
+When it finishes, click **Download** on the **Trained model** card. All your
+jobs are listed under **Runs**.
+
+If the computer training your job switches off halfway, the job moves to another
+computer and **carries on from where it stopped** — you don't lose the work.
 
 ---
 
-## Quickstart
+## Part 2 — Lend your computer
 
-You'll do three things: **start the orchestrator**, **make an account**, then
-**connect a machine**.
+Your computer joins the group and trains other people's jobs while it's
+switched on. It only ever connects *out* — no router settings, no special
+network setup.
 
 ### What you need
 
-| To run the orchestrator | To volunteer a machine |
-| --- | --- |
-| Docker + Docker Compose | **Python 3.11–3.13** (that's the only hard requirement) |
-| Node.js 18+ (for the dashboard) | Docker — *optional*, but gives full isolation |
-| | An NVIDIA GPU — *optional*; a CPU-only machine enrolls honestly as a CPU node |
+- **Windows, Mac or Linux.**
+- **Python 3.11, 3.12 or 3.13** — free from [python.org](https://www.python.org/downloads/).
+  On Windows, tick **"Add python.exe to PATH"** during installation.
+- **Optional:** an NVIDIA graphics card. Without one your computer still helps,
+  just more slowly.
+- **[Docker Desktop](https://www.docker.com/products/docker-desktop/)** —
+  optional on Windows, **required on Mac and Linux**. With it, training runs
+  sealed off in a container, which is the safest option.
 
-### 1. Start the control plane
+### 1. Get your join command
 
-```bash
-git clone https://github.com/AbhishekPoojary/Adaptive-Peer-To-Peer-GPU-Orchestration-For-Distributed-AI-Training.git
-cd Adaptive-Peer-To-Peer-GPU-Orchestration-For-Distributed-AI-Training
-cp deploy/.env.example deploy/.env
-```
+Ask the person who runs the system to click **Add a node** on the
+**Machines** page. They'll send you one line of text to copy — a different one
+for Windows and for Mac/Linux.
 
-> **⚠️ Set the port before you continue.** Open `deploy/.env` and set:
->
-> ```
-> ORCHESTRATOR_PORT=8090
-> ```
->
-> The dashboard's dev server proxies to `http://localhost:8090`, and that value
-> is hardcoded in `dashboard/vite.config.ts`. `.env.example` currently ships
-> `8000`, which will leave the dashboard unable to reach the API. Everything
-> below assumes **8090**.
+### 2. Run it
 
-Now bring it up:
+- **Windows:** press the Start button, type **PowerShell**, open it, paste the
+  line (right-click pastes), and press Enter.
+- **Mac / Linux:** open **Terminal**, paste the line, press Enter.
 
-```bash
-docker compose -f deploy/compose.yaml up -d --build
-curl -f http://localhost:8090/health
-```
+It downloads what it needs and connects. On Windows without Docker, it asks
+whether to run training as an ordinary program instead and explains what that
+means — type `1`, then `yes`, if you're happy with that. On Mac and Linux, start
+Docker Desktop first; the command stops and says so if Docker isn't running.
 
-You should see `{"status":"ok","db":"ok"}`. That starts three services:
-Postgres (the database), MinIO (checkpoint storage), and the orchestrator API.
+### 3. Leave the window open
 
-<details>
-<summary><b>It didn't work?</b></summary>
+While that window is open, your computer is helping. **Closing it stops
+sharing.** To share again later, run the same line again — your computer
+rejoins as itself, with its track record intact.
 
-- **`curl` fails / connection refused** — the containers may still be building.
-  Check with `docker compose -f deploy/compose.yaml logs -f orchestrator`.
-- **`{"status":"degraded","db":"down"}` (HTTP 503)** — the API is up but can't
-  reach Postgres. Wait a few seconds and retry; the health endpoint reports the
-  database honestly rather than pretending it's fine.
-- **Port already in use** — change `ORCHESTRATOR_PORT` in `deploy/.env`, but
-  then also update the hardcoded URL in `dashboard/vite.config.ts` to match.
+**What it can and can't do on your computer**
 
-</details>
+- It only runs training jobs, and only while the window is open.
+- With Docker, each job runs in a locked-down container with no access to your
+  files.
+- It updates itself automatically when there's a newer version.
+- People's training pictures and models pass through your computer while it
+  trains their jobs, so only lend it within a group that trusts each other.
 
-### 2. Create your account
+---
 
-Every human-facing endpoint requires a real account, so a fresh stack has no way
-in until you make one. There is **no self-registration** — on this system an
-account is permission to run containers on other people's machines, so accounts
-are created by whoever has shell access to the orchestrator host.
+## Part 3 — Run it for your group
 
-```bash
-pip install -e .
-export DATABASE_URL=postgresql+asyncpg://orchestrator:orchestrator@localhost:5432/orchestrator
-python -m scripts.create_user --username <you> --role ADMIN
-```
+One person runs the central part — the website everyone signs into and the
+"brain" that hands jobs to computers. This guide is for **Windows**.
 
-It prompts for a password (or reads `ORCH_USER_PASSWORD`). It deliberately
-**never** takes a password as a command-line argument, where it would land in
-your shell history and the process table.
+### 1. Install these, once
 
-- `--role ADMIN` — can also enroll new machines into the fleet.
-- `--role OPERATOR` — can submit and watch jobs, but not enroll machines.
+| Program | What it's for | Get it |
+| --- | --- | --- |
+| **Docker Desktop** | Runs the brain, its database and its storage | [docker.com](https://www.docker.com/products/docker-desktop/) |
+| **Git** | Downloads this project | [git-scm.com](https://git-scm.com/download/win) |
+| **Python 3.13** | Lets your own PC lend its graphics card | [python.org](https://www.python.org/downloads/) (tick "Add to PATH") |
+| **Node.js (LTS)** | Runs the website | [nodejs.org](https://nodejs.org/) |
+| **cloudflared** | Gives friends on other networks a secure link | In PowerShell: `winget install --id Cloudflare.cloudflared` |
 
-> **This is the bootstrap only.** Once one admin exists, everyone else is added
-> from the dashboard's **People** page — no SSH, no `DATABASE_URL`. The script
-> stays for the first account (there is nobody to authenticate as yet) and for
-> when the dashboard is unreachable.
+Restart your PC after installing, then start **Docker Desktop** once and let it
+finish setting up.
 
-> If you changed `POSTGRES_PORT` in `deploy/.env`, use that port in
-> `DATABASE_URL` instead of `5432`.
+### 2. Download the project
 
-<details>
-<summary><b>Optional: let people sign in with Google</b></summary>
-
-Password sign-in always works and needs no setup. Google is an extra convenience,
-and turning it on takes two steps.
-
-**1. Get a client ID.** In the [Google Cloud console](https://console.cloud.google.com/apis/credentials),
-create an *OAuth client ID* of type **Web application**, and add your dashboard
-origin (`http://localhost:5173`) under **Authorized JavaScript origins**. There
-is no redirect URI to add and no client secret to copy — this uses the ID-token
-flow, so there is no secret in the system at all. Put the ID in `deploy/.env`:
-
-```
-GOOGLE_OAUTH_CLIENT_ID=1234567890-abcdef.apps.googleusercontent.com
-```
-
-Restart the orchestrator and a **Sign in with Google** button appears.
-
-**2. Put the address on an account.** This is the part people miss:
-
-> **Google sign-in cannot create an account.** It only proves you are the holder
-> of one that already exists. On this system an account is permission to run
-> containers on other people's machines — Google can vouch for who you are, but
-> it cannot grant that.
-
-The easy way is the dashboard's **People** page: *Add person*, type a username
-and their Gmail address, done — they sign in with Google and you never share a
-password. A refused sign-in names the exact address it refused, so you can paste
-it straight in.
-
-From a shell, if you prefer or the dashboard is unreachable:
-
-```bash
-# Add Google as an option on an existing password account
-python -m scripts.create_user --username abhishek --role ADMIN \
-    --email abhishek@example.com --update
-
-# Or a classmate who only ever uses Google, with no password at all
-python -m scripts.create_user --username priya --role OPERATOR \
-    --email priya@example.com --google-only
-```
-
-Signing in with an address nobody has added gives a refusal, by design.
-
-Leave `GOOGLE_OAUTH_CLIENT_ID` unset and the orchestrator never contacts Google —
-which is what keeps an offline deployment working. Details, including the
-replay-window limitation this accepts, are in
-[`docs/adr/ADR-012-addendum.md`](docs/adr/ADR-012-addendum.md).
-
-</details>
-
-### 3. Open the dashboard
-
-```bash
-cd dashboard
-npm install
-npm run dev
-```
-
-Open **http://localhost:5173** and sign in with the account from step 2.
-
-### 4. Connect a machine
-
-In the dashboard, click **Add a node**. It creates a single-use enrollment token
-and shows you the exact command to run on the volunteer machine. The dashboard
-then waits for that specific machine to appear.
-
-**Windows** (native PowerShell — WSL2 not required):
+Open **PowerShell** and run:
 
 ```powershell
-$env:ORCH_TOKEN='<TOKEN>'; irm http://<orchestrator>:8090/install.ps1 | iex
+git clone https://github.com/AbhishekPoojary/Adaptive-Peer-To-Peer-GPU-Orchestration-For-Distributed-AI-Training.git
+cd Adaptive-Peer-To-Peer-GPU-Orchestration-For-Distributed-AI-Training
 ```
 
-**Linux / macOS:**
+### 3. Start it
 
-```bash
-curl -sSL http://<orchestrator>:8090/install.sh | bash -s -- --token <TOKEN>
+```powershell
+powershell -ExecutionPolicy Bypass -File demo.ps1 -Public
 ```
 
-What happens on that machine:
+That one command does everything: starts the database and storage, sets up
+secure random passwords for the system, lends your own PC's graphics card,
+starts the website, and creates the secure links. **The first time**, it also:
 
-- If it **has Docker**, training runs inside a locked-down container.
-- If it **doesn't**, the installer offers to run training as a normal
-  background process instead. It spells out exactly what protection you give up
-  and requires you to type *yes*.
-- The agent generates its own cryptographic keypair on first run. **The private
-  key never leaves the machine.**
+- asks you to choose an **admin username and password** — this is your account;
+- takes a few extra minutes to download and prepare everything.
 
-> **📡 Machines on other networks.** A friend's laptop cannot reach your
-> `localhost`. Put the orchestrator on a [Tailscale](https://tailscale.com)
-> network or behind a tunnel, and give peers that address instead. Agents only
-> ever dial *out*, so **no peer needs port forwarding or a public IP** — but the
-> orchestrator itself does need to be reachable.
-
-### 5. Train something
-
-Use the dashboard's **Submit** page, or the API directly.
-
-<details open>
-<summary><b>Training on your own images</b></summary>
-
-Built-in `cifar10` and `mnist` need no setup. To train on **your own data**,
-upload it first on the **Datasets** page (or `POST /datasets`).
-
-**Format.** A `.zip` of class folders, with both splits:
+When it's ready it prints a link:
 
 ```
-train/cat/img001.png     test/cat/img900.png
-train/cat/img002.jpg     test/cat/img901.png
-train/dog/img500.png     test/dog/img950.png
-train/dog/img501.png     test/dog/img951.png
+   Send your friend this link:
+
+       https://something-random.trycloudflare.com
 ```
 
-- The **folder name is the label**. Two or more classes.
-- `train/` and `test/` must contain the **same class names**.
-- Any mix of `png`, `jpg`, `bmp`, `gif`, `webp`, `tif`. Any sizes — everything is
-  resized to 64×64 RGB.
-- Zipping the *folder* rather than its contents is fine; the extra top level is
-  unwrapped for you.
+Send that link to your friends. They follow [Part 1](#part-1--train-a-model) to
+train, and [Part 2](#part-2--lend-your-computer) to lend their computers.
 
-**Your archive doesn't have to look like that.** That is the layout it is
-*stored* in, not the layout you have to produce. Public datasets ship half a
-dozen conventions and the person with the data is usually the one who can't
-rewrite a zip, so the server rearranges it on upload:
+> Leave out `-Public` if everyone is on the same Wi-Fi as you — you'll get a
+> local link instead.
 
-| What you upload | What is stored |
-|---|---|
-| `seg_train/seg_train/forest/1.jpg` (Intel) | `train/forest/1.jpg` |
-| `training/cat/1.jpg` + `valid/cat/1.jpg` | `train/` + `test/` |
-| `train/cat.0.jpg` (flat Kaggle) | `train/cat/cat.0.jpg` |
-| `seg_pred/*.jpg` — no labels | dropped |
+### Every day after that
 
-The upload response lists every change, and the same list is written onto the
-dataset's description. Nothing is relaxed by this: the rearranged archive goes
-back through the *same* validator before anything is stored, and an archive
-refused for being dangerous — a zip-slip path, a symlink entry — is refused
-here too rather than tidied up into an accepted one. Set
-`DATASET_NORMALIZE_LAYOUT=false` to require the exact layout instead.
+- **To start:** open PowerShell in the project folder and run the same
+  `demo.ps1 -Public` command. **The link is different each time**, so send the
+  new one.
+- **To stop:** close the windows it opened, then run
+  `docker compose -f deploy/compose.yaml down`.
 
-**Supply the test split yourself if you can.** It is what the reported accuracy
-is measured on, so it is worth choosing deliberately. If your archive has none,
-a fraction of `train/` is held out (every 5th image by default,
-`DATASET_AUTOSPLIT_FRACTION`) — and that fact is recorded on the dataset, so a
-reader who sees the accuracy can also see that the split behind it was picked
-by the server rather than by you.
+### Things only you (the admin) can do
 
-```bash
-curl -sX POST http://localhost:8090/datasets \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -F name=flowers -F file=@flowers.zip
-```
-
-Then submit against it with `dataset_id` instead of `dataset`:
-
-```bash
-curl -sX POST http://localhost:8090/jobs \
-  -H "Authorization: Bearer $ACCESS_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"spec":{"dataset_id":"<id from the upload>","model":"cnn","epochs":5,
-       "batch_size":32,"learning_rate":0.01,"world_size":1,
-       "min_gpu_mem_bytes":null},"scheduler_name":"adaptive"}'
-```
-
-Uploading requires the **ADMIN** role: a dataset gets unpacked and trained
-against on other people's machines. The archive is checked before it is stored —
-path traversal, symlinks, non-image files, and zip bombs are refused — and each
-peer re-verifies its SHA-256 before extracting. Only image classification is
-supported, because `small_cnn` is the only architecture that exists. Details and
-the limitations this accepts are in
-[`docs/adr/ADR-014-custom-datasets.md`](docs/adr/ADR-014-custom-datasets.md).
-
-</details>
-
-The built-in path, unchanged:
-
-```bash
-curl -sX POST http://localhost:8090/jobs \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"spec":{"dataset":"mnist","model":"cnn","epochs":3,"batch_size":64,
-       "learning_rate":0.01,"world_size":1,"min_gpu_mem_bytes":null},
-       "scheduler_name":"adaptive"}'
-```
-
-Watch it run on the job detail page: live logs, live loss and accuracy — and
-when it finishes, a **Trained model** card with a Download button. The
-orchestrator streams the checkpoint to you; there is no need to open MinIO.
-
-Who submitted a job comes from your **token**, never from the request body —
-`submitted_by` is evidence, not a self-declared string.
-
-### Sharing the dashboard, and the one limit worth knowing
-
-`demo.ps1 -Public` puts the dashboard behind a Cloudflare quick tunnel so
-someone on another network can sign in, upload a dataset, and collect the
-trained model without installing anything.
-
-**That tunnel cuts off any single request that runs longer than a minute or
-two.** Measured on the link this was built for, one request carrying 346 MB died
-after 34 MB and 130 seconds, while 10 MB arrived fine in 64 seconds — it is a
-limit on elapsed time per request, not on the size of the file.
-
-So the dashboard does not send an archive in one request. It opens an upload,
-sends the file in 4 MiB pieces, and asks the orchestrator to assemble them:
-
-```
-POST   /datasets/uploads                      open one, get the chunk size
-PUT    /datasets/uploads/{id}/chunks/{index}   send a piece (repeatable)
-GET    /datasets/uploads/{id}                  which pieces arrived
-POST   /datasets/uploads/{id}/complete         assemble, validate, store
-DELETE /datasets/uploads/{id}                  give up, release the disk
-```
-
-No piece runs long enough to be cut off, and one that fails anyway is retried
-on its own rather than costing the whole archive. Because a repeated chunk
-replaces its predecessor, resending is always safe — which is what makes the
-retry sound rather than hopeful. `GET` reports what has arrived, so an upload
-interrupted at chunk 60 of 87 resumes instead of restarting.
-
-Everything after assembly is the single-shot path exactly: same validation,
-same layout normalisation, same record. `POST /datasets` still accepts a whole
-archive in one request and is the right tool from a script on the LAN.
-
-### Sending less, rather than sending it faster
-
-Chunking made a large upload finish. It did nothing about how long it takes,
-and on a home uplink that is the part people actually feel.
-
-Parallel chunks were the obvious next move and the measurement killed it — six
-concurrent uploads ran at **half** the speed of one (24 MiB in 219s against
-107s), because the uplink was already full and extra connections only added
-contention. There was no throughput to win.
-
-There were bytes to lose, though. The trainer resizes every custom-dataset image
-to `CUSTOM_IMAGE_SIZE` (64px) before the model sees it, so anything larger is
-detail discarded on arrival. The dashboard now does that resize *before*
-uploading, in a worker:
-
-| | Intel scene classification |
-|---|---|
-| As downloaded | 346 MB |
-| Resized to training size | 55 MB |
-| Classes, train/test split | identical — 6 classes, 14,034 / 3,000 |
-
-Roughly six times less to send, for pixels the model would never have seen.
-
-The archive is rebuilt as a stream, not unzipped into memory: measured on that
-346 MB file, peak heap was **69 MB**, which is the difference between working
-and crashing the tab on the modest laptop this project is aimed at.
-
-Three things keep it honest:
-
-- **It is recorded.** The resize is written onto the dataset next to the
-  server's own layout notes, so a reader who finds an accuracy figure can see
-  which transformations stand between the stored archive and the file someone
-  chose.
-- **It cannot lose you an upload.** An unsupported browser, a decode failure, a
-  worker that will not load — any of them falls back to uploading the original,
-  unchanged.
-- **It can be turned off.** A checkbox on the form, on by default because the
-  saving is large and costs the model nothing.
-
-Uploading from the machine running the orchestrator (`http://localhost:5173`)
-is still much faster than any of this — 2.5s for the same file, because those
-bytes never leave it.
-
----
-
-## Results — and what is *not* claimed
-
-Every number here was measured on real runs, not estimated. The artifacts live
-in `bench/report/` and each carries the git commit and the hardware it ran on.
-
-| Measured | Result |
+| Where | What |
 | --- | --- |
-| Real MNIST training, end to end through the authenticated API | **99.03%** test accuracy on CUDA |
-| Adaptive scheduler vs. a node with 3 recorded failures | placed **6/6** jobs on the reliable node (`round_robin` 3/6, `least_loaded` 2/6) |
-| Machine `SIGKILL`ed mid-training | detected in **5.8 s**; job finished elsewhere **55.9 s** after it vanished |
-| A machine with **no Docker at all** | trained to **96.67%** on CUDA via the opt-in unsandboxed path |
-| Test suite | 416 tests against a real Postgres — no mocked database, no simulated failures |
+| **Machines → Add a node** | Get a join command for someone lending their computer |
+| **Machines → Remove** | Tidy away a computer that's gone for good (its history is kept) |
+| **People** | Add someone, reset a forgotten password, make someone an admin, or switch off an account |
 
-**Not claimed: any speedup from distribution.** All development happened on one
-laptop with one GPU, where extra workers fight over the same device — measured,
-`world_size=2` took **251 s** against `world_size=1`'s **171 s**. On a single
-machine, distribution is a *cost*. Every benchmark artifact carries a
-machine-written `limitations` block stating which claims its run could and could
-not test (ADR-013).
+**Turning off sign-ups:** anyone with your link can create an account and train
+on your group's computers. To stop that, open `deploy\.env` in Notepad, add the
+line `ALLOW_REGISTRATION=false`, and start the system again. You can still add
+people yourself on the **People** page.
 
-`docs/STATUS.md` is the honest account of what's done, what isn't, and where to
-pick up next.
+**On a Mac or Linux?** The one-command start is Windows-only for now; the
+[technical guide](docs/TECHNICAL.md) explains the manual steps.
 
 ---
 
-## How it works under the hood
+## Common questions
 
-Each row links to the ADR explaining *why* — worth reading if a choice looks odd.
+**The link doesn't open.** It changes every time the host restarts the system —
+ask for the current one. And the host's computer has to be on, with the system
+running.
 
-| Concern | Approach | ADR |
-| --- | --- | --- |
-| Assignment | Agents **pull** leases; the orchestrator never dials in, so peers work from behind NAT with no port forwarding | ADR-003 |
-| Fencing | A counter (`lease_epoch`) rises each attempt, so a stale machine waking up late has its writes rejected | ADR-003 |
-| Failure detection | φ-accrual detector over real heartbeat timings, with a 5 s hard floor | ADR-004 |
-| Placement | `S_i = α·L_i − β·R_i + γ·D_i` over measured load, earned reliability, and measured round-trip time | ADR-009 |
-| Reliability | Wilson lower bound over recorded outcomes, decaying over time — earned from history, never assumed | ADR-009 |
-| Distributed training | `torchrun` + c10d rendezvous, `gloo` backend, real DDP | ADR-005 |
-| Checkpoints | Blob-then-manifest writes to MinIO, so a half-written checkpoint is never resumed from | ADR-006 |
-| Isolation | `cap_drop=ALL`, no-new-privileges, read-only rootfs, memory/PID limits; opt-in subprocess path for peers without Docker | ADR-007 |
-| Machine identity | One-time token → Ed25519 challenge-response → short-lived JWT | ADR-008 |
-| Human identity | Password → scrypt → short-lived JWT with a separate audience and role | ADR-012 |
-| Google sign-in | Optional. Google ID token verified against Google's keys → the *same* user JWT. Never creates an account | ADR-012 addendum |
-| Custom datasets | Upload an ImageFolder zip; validated without decompressing, stored in MinIO, fetched per-claim via a presigned URL and SHA-256 verified by the peer | ADR-014 |
-| Managing people | Admin-only `/users` CRUD and a **People** page; still no self-registration, and the last enabled admin cannot demote or disable themselves | ADR-012 addendum 2 |
-| Getting the model | `GET /jobs/{id}/checkpoint` reads the manifest and the orchestrator **streams** the bytes — no presigned URL, because it signs against an endpoint a browser cannot resolve | ADR-006 addendum 2 |
+**My upload is very slow.** It depends on your internet's upload speed.
+Pictures are shrunk before sending to help. Keep the tab open; brief
+interruptions are retried automatically.
 
-## Repository layout
+**My job says "queued" and nothing happens.** No computer is free right now.
+It starts as soon as one is — the host can check the **Machines** page to see
+who's connected.
 
-```
-orchestrator/   FastAPI control plane (async SQLAlchemy 2.0, Postgres 16, Alembic)
-agent/          Runs on each peer: telemetry, lease lifecycle, container execution
-trainer/        The actual PyTorch training entrypoint (torchrun/DDP aware)
-dashboard/      React + Vite operator UI, live logs and metrics
-installer/      One-command agent install (install.ps1 / install.sh)
-bench/          Evaluation harness + machine-written reports (schema.json documents them)
-scripts/        Operational commands (create_user.py, data repair, CI guardrail)
-tests/          pytest suite — the only place Fake*/Stub* doubles may live
-deploy/         compose.yaml + .env.example for the dev stack
-docs/adr/       Architecture Decision Records (ADR-001..014, plus addenda)
-docs/STATUS.md  Honest current state and handover notes
-```
+**The accuracy is low.** Usually there are too few pictures, or the categories
+look very alike. Add more pictures per category, or train for more epochs.
 
-## Development
+**"Sign in with Google" doesn't work on the link.** Google only allows sign-in
+from addresses registered in advance, and the shared link changes every time.
+Use a username and password instead — **Create one** on the sign-in page.
 
-```bash
-pip install -e ".[dev]"
+**I forgot my password.** Ask the host. They can't see your password, but they
+can give you a new one with **Reset password** on the **People** page.
 
-# The suite needs a real Postgres; the compose stack provides one.
-export TEST_DATABASE_URL=postgresql+asyncpg://orchestrator:orchestrator@localhost:5432/orchestrator
-pytest -q
+**Is it safe to lend my computer?** With Docker installed, each job runs sealed
+off from your files. Without Docker (Windows only), jobs run as an ordinary
+program — the installer explains the difference and asks you first. Either way, lend it only
+within a group you trust.
 
-ruff check .
-mypy orchestrator agent bench
-bash scripts/check_no_fake_data.sh
-```
+---
 
-There is deliberately **no SQLite option**. The guarantees under test are
-Postgres row-locking semantics (`SELECT … FOR UPDATE SKIP LOCKED`), which SQLite
-does not share — passing against SQLite would prove nothing.
+## Words you might see
 
-## Benchmarks
+| Word | Meaning |
+| --- | --- |
+| **Node / machine** | A computer that has joined to help with training. |
+| **Job / run** | One training request. |
+| **Dataset** | Your zip of pictures, after upload. |
+| **Epoch** | One pass through all your pictures. |
+| **Accuracy** | The share of set-aside pictures the model gets right. |
+| **Model** | The trained result you download. |
+| **GPU / graphics card** | The part of a computer that makes training fast. |
 
-```bash
-export BENCH_PASSWORD='<your password>'
-python -m bench.harness --scenario reliability_placement --username <you>
-python -m bench.harness --scenario failure_recovery --username <you>
-```
+---
 
-The harness starts real agent processes and induces real failures — `docker kill`
-on a live trainer, `SIGKILL` on a peer that must then be detected as gone. It
-refuses to run from a dirty working tree, and a run that can't complete its
-measurements writes **nothing** rather than publishing a report with a hole in
-it.
+## For developers
 
-Expect minutes per run: real training plus real failure detection, which has a
-3 s floor by design (ADR-004 addendum 2). See `docs/OPERATIONS.md`.
+How it works, the measurements behind it, and how to develop on it:
 
-## Ground rules
-
-Every number this project reports is measured. No fabricated telemetry, no
-assumed reliability, no `time.sleep` standing in for work, no simulated failures
-outside `tests/`. `scripts/check_no_fake_data.sh` enforces what it mechanically
-can, and runs in CI.
-
-See `CONTRIBUTING.md` for the full rules and the reasoning behind them.
+- **[Technical guide](docs/TECHNICAL.md)** — architecture, manual setup, the API,
+  benchmarks.
+- **[Project status](docs/STATUS.md)** — what has been measured, and what is not
+  claimed.
+- **[Design decisions](docs/adr/)** — why things are the way they are.
+- **[Contributing](CONTRIBUTING.md)** — the rules, including "every number is
+  measured".

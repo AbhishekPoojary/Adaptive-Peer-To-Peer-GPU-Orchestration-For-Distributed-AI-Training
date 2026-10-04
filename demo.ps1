@@ -88,6 +88,31 @@ if (-not (Test-Path $envFile)) {
     Copy-Item (Join-Path $repo "deploy\.env.example") $envFile
     Say "  Created deploy\.env from the example" "Yellow"
 }
+# The example file ships placeholder secrets that are public (they are in this
+# repository). Left in place, anyone could forge an admin sign-in token
+# (JWT_SIGNING_KEY) or enrol machines (ADMIN_API_KEY) -- and -Public puts this
+# on the internet. Replace any still-default value with a random one. The only
+# cost is that existing sign-ins end once, the first time this runs.
+function New-Secret {
+    # Cryptographic randomness: these are signing keys, not shuffles.
+    $bytes = New-Object byte[] 32
+    [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    -join ($bytes | ForEach-Object { $_.ToString("x2") })
+}
+$defaults = @{ "JWT_SIGNING_KEY" = "dev-only-change-me"; "ADMIN_API_KEY" = "dev-admin-key-change-me" }
+$envText = Get-Content $envFile
+$changed = $false
+foreach ($name in $defaults.Keys) {
+    if ($envText -match "^$name=$([regex]::Escape($defaults[$name]))$") {
+        $envText = $envText -replace "^$name=.*", "$name=$(New-Secret)"
+        $changed = $true
+    }
+}
+if ($changed) {
+    Set-Content -Path $envFile -Value $envText -Encoding utf8
+    Say "  Secrets        replaced the example placeholders with random values" "Green"
+}
+
 $minioPort = (Select-String -Path $envFile -Pattern '^MINIO_API_PORT=(\d+)').Matches.Groups[1].Value
 if (-not $minioPort) { $minioPort = "9000" }
 $adminKey = (Select-String -Path $envFile -Pattern '^ADMIN_API_KEY=(.+)$').Matches.Groups[1].Value
@@ -154,6 +179,36 @@ do {
     }
 } while (-not $ok)
 Say "  Orchestrator   healthy on port $orchPort" "Green"
+
+# --- 5a. The first admin account ---------------------------------------------
+# A fresh install has no accounts. Anyone can create an ordinary account on the
+# sign-in page, but adding machines and managing people needs an admin, and
+# making one used to mean a Python environment, a database URL and a script.
+# Asked for here instead, once, on the first run only.
+$admins = docker exec deploy-postgres-1 psql -U orchestrator -d orchestrator -tAc `
+    "select count(*) from users where role = 'ADMIN' and disabled_at is null" 2>$null
+if ("$admins".Trim() -eq "0") {
+    Say ""
+    Say "  First run: create your admin account (you sign in with this)." "Cyan"
+    do { $adminUser = Read-Host "    Choose a username (letters, numbers, . _ -)" } while (-not $adminUser)
+    do {
+        $first = Read-Host "    Choose a password (at least 12 characters)" -AsSecureString
+        $second = Read-Host "    Type it again" -AsSecureString
+        $p1 = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($first))
+        $p2 = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($second))
+        $okPassword = ($p1 -eq $p2) -and ($p1.Length -ge 12)
+        if (-not $okPassword) { Say "    Those didn't match, or were shorter than 12 characters. Try again." "Yellow" }
+    } while (-not $okPassword)
+    # Passed by environment variable, never as an argument, so it does not
+    # land in shell history (scripts/create_user.py reads ORCH_USER_PASSWORD).
+    $code = Invoke-Native { docker exec -e "ORCH_USER_PASSWORD=$p1" deploy-orchestrator-1 python -m scripts.create_user --username $adminUser --role ADMIN --no-prompt }
+    $p1 = $null; $p2 = $null
+    if ($code -ne 0) {
+        Say "  ! Could not create the account (exit $code). Run this again to retry." "Red"
+        exit 1
+    }
+    Say "  Admin account  $adminUser created" "Green"
+}
 
 # --- 5b. Keep the trainer image in step with the source ----------------------
 # When Docker is available the agent runs training in a container, so the image
@@ -291,6 +346,16 @@ if ($Public) {
 # gets a bare "Blocked request" that looks like the app being down.
 Say "  Starting the dashboard..." "Gray"
 $dash = Join-Path $repo "dashboard"
+
+# A fresh download has no dashboard dependencies yet; fetch them once.
+if (-not (Test-Path (Join-Path $dash "node_modules"))) {
+    Say "  First run: installing the dashboard (a minute or two, once)..." "Yellow"
+    $code = Invoke-Native { npm --prefix $dash install --no-audit --no-fund }
+    if ($code -ne 0) {
+        Say "  ! npm install failed. Is Node.js installed? https://nodejs.org (LTS)" "Red"
+        exit 1
+    }
+}
 
 # A dashboard left over from a previous run keeps port 5173, and Vite quietly
 # moves to 5174 rather than failing. The tunnel still points at 5173, so the
