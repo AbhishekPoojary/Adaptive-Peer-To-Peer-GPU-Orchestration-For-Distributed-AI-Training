@@ -3,14 +3,15 @@
 #
 #   bash deploy/cloud/setup.sh
 #
-# Written for an Oracle Cloud "Always Free" Ubuntu server (docs/DEPLOY-ORACLE.md)
+# Written for a small Ubuntu cloud server -- Azure for Students
+# (docs/DEPLOY-AZURE.md) or Oracle Cloud Always Free (docs/DEPLOY-ORACLE.md) --
 # and safe to run again at any time: it keeps your settings, data and
 # certificates, and rebuilds whatever changed. To update to the latest version:
 #
 #   git pull && bash deploy/cloud/setup.sh
 #
 # What it does, in order:
-#   1. installs Docker if it is missing;
+#   1. adds swap space on a small server, and installs Docker if it is missing;
 #   2. opens the web ports in the server's own firewall (Oracle's Ubuntu
 #      images block everything but SSH by default);
 #   3. works out this server's permanent web addresses from its public IP;
@@ -33,7 +34,23 @@ ENV_FILE="deploy/cloud/.env"
 [ "$(uname -s)" = "Linux" ] || die "run this on the Linux cloud server, not on your own computer."
 command -v sudo >/dev/null || die "sudo is required."
 
-# --- 1. Docker -----------------------------------------------------------------
+# --- 1. Swap and Docker -----------------------------------------------------------
+# The free student server has 1 GB of memory: enough to run everything, not
+# enough to build the dashboard or absorb a busy moment without the kernel
+# killing something. Disk used as overflow memory makes the difference, and
+# costs nothing on a server this size. Added once; kept across reboots.
+mem_mb="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)"
+if [ "$mem_mb" -lt 3500 ] && ! swapon --show | grep -q '/swapfile'; then
+    say "Adding 4 GB of swap (this server has ${mem_mb} MB of memory)..."
+    sudo fallocate -l 4G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
+    sudo chmod 600 /swapfile
+    sudo mkswap /swapfile >/dev/null
+    sudo swapon /swapfile
+    grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+    ok "Swap added"
+fi
+
+# --- Docker -----------------------------------------------------------------------
 if ! command -v docker >/dev/null 2>&1; then
     say "Installing Docker (a few minutes, once)..."
     curl -fsSL https://get.docker.com | sudo sh
@@ -50,8 +67,9 @@ compose() {
 
 # --- 2. The server's own firewall ------------------------------------------------
 # Oracle's Ubuntu images ship iptables rules that reject everything except SSH,
-# *in addition to* the cloud network's rules (docs/DEPLOY-ORACLE.md, step 4).
-# Both must allow 80 and 443. This handles the server's half.
+# *in addition to* the cloud network's rules (docs/DEPLOY-ORACLE.md, step 3).
+# Both must allow 80 and 443; this handles the server's half. On Azure the
+# server firewall is already open and this changes nothing that matters.
 if command -v iptables >/dev/null 2>&1; then
     for port in 80 443; do
         sudo iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null \
@@ -160,6 +178,7 @@ echo "   Machines -> Add a node to get the join command for each computer."
 echo
 if [ "$reachable" = "no" ]; then
     warn "The website isn't reachable from the internet yet. The usual cause is"
-    warn "the cloud network's firewall: open ports 80 and 443 there"
-    warn "(docs/DEPLOY-ORACLE.md, step 4), wait a minute, and run this again."
+    warn "the cloud network's firewall: allow ports 80 and 443 there (Azure:"
+    warn "the VM's Networking page; Oracle: the subnet's security list), wait a"
+    warn "minute, and run this again."
 fi

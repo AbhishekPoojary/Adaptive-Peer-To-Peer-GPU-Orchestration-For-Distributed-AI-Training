@@ -174,13 +174,18 @@ One person runs the central part — the website everyone signs into and the
 | Links you share | **Permanent** — never change | Change every time you restart it |
 | Your PC must be on | No | Yes, the whole time |
 | Friends rejoin after a restart | Automatically | They need a new command |
-| Setup | ~30 minutes once, needs a card for Oracle's identity check | ~30 minutes once |
+| Setup | ~30 minutes once (free for students; no card with Azure for Students) | ~30 minutes once |
 
 ### Option A — a free cloud server (recommended)
 
-Follow **[Put it on a free cloud server](docs/DEPLOY-ORACLE.md)**: create a free
-Oracle Cloud server, open two ports, and paste one command. You get permanent
-links to share, and your own PC joins as one of the computers that train.
+Create a small free cloud server, tick two boxes, and paste one command. You get
+permanent links to share, and your own PC joins as one of the computers that
+train. Pick a guide:
+
+- **[Azure for Students](docs/DEPLOY-AZURE.md)** — **no credit card**; for
+  students (activate it through the GitHub Student Developer Pack).
+- **[Oracle Cloud Always Free](docs/DEPLOY-ORACLE.md)** — for anyone with a
+  Visa, Mastercard or Amex card for Oracle's identity check.
 
 ### Option B — your own Windows PC
 
@@ -255,7 +260,8 @@ train, and [Part 2](#part-2--lend-your-computer) to lend their computers.
 **Turning off sign-ups:** anyone with your link can create an account and train
 on your group's computers. To stop that, set `ALLOW_REGISTRATION=false` — in
 `deploy\.env` on your PC (open it in Notepad, add the line, start the system
-again), or as described in the [cloud guide](docs/DEPLOY-ORACLE.md#later). You
+again), or as described in the cloud guide ([Azure](docs/DEPLOY-AZURE.md#later),
+[Oracle](docs/DEPLOY-ORACLE.md#later)). You
 can still add people yourself on the **People** page.
 
 **On a Mac or Linux?** Use Option A — the cloud server is set up from any
