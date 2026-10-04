@@ -1,0 +1,14 @@
+# The dashboard, built for production and served by Caddy with HTTPS.
+
+FROM node:22-alpine AS build
+WORKDIR /dashboard
+COPY dashboard/package.json dashboard/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY dashboard/ ./
+ARG VITE_ORCHESTRATOR_URL
+ENV VITE_ORCHESTRATOR_URL=${VITE_ORCHESTRATOR_URL}
+RUN npm run build
+
+FROM caddy:2-alpine
+COPY deploy/cloud/Caddyfile /etc/caddy/Caddyfile
+COPY --from=build /dashboard/dist /srv

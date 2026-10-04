@@ -18,7 +18,7 @@ that can tell those categories apart.
 | --- | --- | --- |
 | **Train a model** on your own pictures | [Part 1](#part-1--train-a-model) | A web browser and the link someone sent you |
 | **Lend your computer** so others can train on it | [Part 2](#part-2--lend-your-computer) | About 10 minutes, once |
-| **Run the whole thing** for your group | [Part 3](#part-3--run-it-for-your-group) | A Windows PC, about 30 minutes the first time |
+| **Run the whole thing** for your group | [Part 3](#part-3--run-it-for-your-group) | About 30 minutes, once — on a free cloud server, or your own Windows PC |
 
 You don't need to know anything about AI or programming for Parts 1 and 2.
 
@@ -121,8 +121,9 @@ network setup.
 ### What you need
 
 - **Windows, Mac or Linux.**
-- **Python 3.11, 3.12 or 3.13** — free from [python.org](https://www.python.org/downloads/).
-  On Windows, tick **"Add python.exe to PATH"** during installation.
+- **Python** — on Windows, installed for you if it's missing. On a Mac or
+  Linux, install Python 3.11–3.13 from [python.org](https://www.python.org/downloads/)
+  first.
 - **Optional:** an NVIDIA graphics card. Without one your computer still helps,
   just more slowly.
 - **[Docker Desktop](https://www.docker.com/products/docker-desktop/)** —
@@ -166,9 +167,24 @@ rejoins as itself, with its track record intact.
 ## Part 3 — Run it for your group
 
 One person runs the central part — the website everyone signs into and the
-"brain" that hands jobs to computers. This guide is for **Windows**.
+"brain" that hands jobs to computers. There are two ways:
 
-### 1. Install these, once
+| | **A free cloud server** (recommended) | **Your own Windows PC** |
+| --- | --- | --- |
+| Links you share | **Permanent** — never change | Change every time you restart it |
+| Your PC must be on | No | Yes, the whole time |
+| Friends rejoin after a restart | Automatically | They need a new command |
+| Setup | ~30 minutes once, needs a card for Oracle's identity check | ~30 minutes once |
+
+### Option A — a free cloud server (recommended)
+
+Follow **[Put it on a free cloud server](docs/DEPLOY-ORACLE.md)**: create a free
+Oracle Cloud server, open two ports, and paste one command. You get permanent
+links to share, and your own PC joins as one of the computers that train.
+
+### Option B — your own Windows PC
+
+#### 1. Install these, once
 
 | Program | What it's for | Get it |
 | --- | --- | --- |
@@ -181,7 +197,7 @@ One person runs the central part — the website everyone signs into and the
 Restart your PC after installing, then start **Docker Desktop** once and let it
 finish setting up.
 
-### 2. Download the project
+#### 2. Download the project
 
 Open **PowerShell** and run:
 
@@ -190,7 +206,7 @@ git clone https://github.com/AbhishekPoojary/Adaptive-Peer-To-Peer-GPU-Orchestra
 cd Adaptive-Peer-To-Peer-GPU-Orchestration-For-Distributed-AI-Training
 ```
 
-### 3. Start it
+#### 3. Start it
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File demo.ps1 -Public
@@ -217,15 +233,18 @@ train, and [Part 2](#part-2--lend-your-computer) to lend their computers.
 > Leave out `-Public` if everyone is on the same Wi-Fi as you — you'll get a
 > local link instead.
 
-### Every day after that
+#### Every day after that
 
 - **To start:** open PowerShell in the project folder and run the same
   `demo.ps1 -Public` command. **The link is different each time**, so send the
-  new one.
+  new one — and computers that joined need a new join command. (Option A
+  avoids both.)
 - **To stop:** close the windows it opened, then run
   `docker compose -f deploy/compose.yaml down`.
 
 ### Things only you (the admin) can do
+
+(These are the same whichever option you chose.)
 
 | Where | What |
 | --- | --- |
@@ -234,20 +253,22 @@ train, and [Part 2](#part-2--lend-your-computer) to lend their computers.
 | **People** | Add someone, reset a forgotten password, make someone an admin, or switch off an account |
 
 **Turning off sign-ups:** anyone with your link can create an account and train
-on your group's computers. To stop that, open `deploy\.env` in Notepad, add the
-line `ALLOW_REGISTRATION=false`, and start the system again. You can still add
-people yourself on the **People** page.
+on your group's computers. To stop that, set `ALLOW_REGISTRATION=false` — in
+`deploy\.env` on your PC (open it in Notepad, add the line, start the system
+again), or as described in the [cloud guide](docs/DEPLOY-ORACLE.md#later). You
+can still add people yourself on the **People** page.
 
-**On a Mac or Linux?** The one-command start is Windows-only for now; the
-[technical guide](docs/TECHNICAL.md) explains the manual steps.
+**On a Mac or Linux?** Use Option A — the cloud server is set up from any
+computer. Running it on your own Mac or Linux machine is covered in the
+[technical guide](docs/TECHNICAL.md).
 
 ---
 
 ## Common questions
 
-**The link doesn't open.** It changes every time the host restarts the system —
-ask for the current one. And the host's computer has to be on, with the system
-running.
+**The link doesn't open.** If the system runs on the host's own PC, the link
+changes every time they restart it — ask for the current one, and the PC has to
+be on. (On a cloud server the link never changes.)
 
 **My upload is very slow.** It depends on your internet's upload speed.
 Pictures are shrunk before sending to help. Keep the tab open; brief

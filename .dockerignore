@@ -1,0 +1,15 @@
+# Nothing any image needs. node_modules in particular must never be copied:
+# a Windows checkout's would overwrite the Linux install inside the image.
+**/node_modules
+dashboard/dist
+dashboard/openapi.json
+.git
+**/__pycache__
+**/*.pyc
+.venv
+.mypy_cache
+.ruff_cache
+.pytest_cache
+gpu_orchestrator.egg-info
+deploy/.env
+deploy/cloud/.env

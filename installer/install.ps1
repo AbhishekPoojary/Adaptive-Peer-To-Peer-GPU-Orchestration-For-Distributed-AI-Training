@@ -79,28 +79,54 @@ dashboard's "Add a node" button.
     # COMPATIBLE one rather than taking the first it finds — `py -3.13` often
     # exists alongside a too-new `python`.
 
-    $pythonExe = $null
-    $pythonPre = @()
-    $seen = @()
-    $candidates = @(
-        @("py", @("-3.13")), @("py", @("-3.12")), @("py", @("-3.11")),
-        @("python", @()), @("python3", @()), @("py", @())
-    )
-    foreach ($entry in $candidates) {
-        $exe = $entry[0]; $pre = $entry[1]
-        if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) { continue }
-        try {
-            $probe = & $exe @pre -c "import sys;print('%d.%d' % sys.version_info[:2])" 2>$null
-            if (-not $probe) { continue }
-            $seen += $probe
-            $parts = $probe.Split('.')
-            $maj = [int]$parts[0]; $min = [int]$parts[1]
-            if ($maj -eq 3 -and $min -ge 11 -and $min -le 13) {
-                $pythonExe = $exe
-                $pythonPre = $pre
-                break
-            }
-        } catch { continue }
+    # Detection as a function, so it can run again after an automatic install.
+    # Returns @{ Exe; Pre; Seen } rather than setting outer variables: this
+    # file runs through `irm | iex`, where $script: scope can be the user's own
+    # session, and nothing here may leak into it.
+    function Find-CompatiblePython {
+        $result = @{ Exe = $null; Pre = @(); Seen = @() }
+        $candidates = @(
+            @("py", @("-3.13")), @("py", @("-3.12")), @("py", @("-3.11")),
+            @("python", @()), @("python3", @()), @("py", @())
+        )
+        foreach ($entry in $candidates) {
+            $exe = $entry[0]; $pre = $entry[1]
+            if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) { continue }
+            try {
+                $probe = & $exe @pre -c "import sys;print('%d.%d' % sys.version_info[:2])" 2>$null
+                if (-not $probe) { continue }
+                $result.Seen += $probe
+                $parts = $probe.Split('.')
+                $maj = [int]$parts[0]; $min = [int]$parts[1]
+                if ($maj -eq 3 -and $min -ge 11 -and $min -le 13) {
+                    $result.Exe = $exe
+                    $result.Pre = $pre
+                    return $result
+                }
+            } catch { continue }
+        }
+        return $result
+    }
+    $found = Find-CompatiblePython
+    $pythonExe = $found.Exe; $pythonPre = $found.Pre; $seen = $found.Seen
+
+    # No compatible Python: install 3.13 rather than stopping and sending the
+    # person off to a download page. winget ships with Windows 10 and 11; a
+    # per-user install needs no administrator rights and leaves any other
+    # Python they have alone.
+    if (-not $pythonExe -and (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Step "no compatible Python found; installing Python 3.13 (a few minutes, once)"
+        winget install --id Python.Python.3.13 --exact --silent --scope user `
+            --accept-package-agreements --accept-source-agreements --disable-interactivity | Out-Null
+        # This window's PATH predates the install; add where it just went.
+        $installed = Join-Path $env:LOCALAPPDATA "Programs\Python\Python313"
+        foreach ($dir in @($installed, (Join-Path $installed "Scripts"),
+                           (Join-Path $env:LOCALAPPDATA "Programs\Python\Launcher"))) {
+            if ((Test-Path $dir) -and ($env:Path -notlike "*$dir*")) { $env:Path = "$dir;$env:Path" }
+        }
+        $found = Find-CompatiblePython
+        $pythonExe = $found.Exe; $pythonPre = $found.Pre; $seen = $found.Seen
+        if ($pythonExe) { Write-Step "Python 3.13 installed" }
     }
 
     if (-not $pythonExe) {

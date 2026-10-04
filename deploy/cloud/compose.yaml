@@ -1,0 +1,62 @@
+# Cloud overlay: the same stack as deploy/compose.yaml, on a server with a
+# permanent public address (docs/DEPLOY-ORACLE.md). Used together with it:
+#
+#   docker compose --env-file deploy/cloud/.env \
+#     -f deploy/compose.yaml -f deploy/cloud/compose.yaml up -d --build
+#
+# deploy/cloud/setup.sh runs exactly that, after generating the .env.
+#
+# The differences from the laptop stack:
+# * Nothing but Caddy is reachable from outside. The database, storage and
+#   orchestrator ports that the laptop stack publishes for development are
+#   removed (`!reset`): on a public server they would be open to the internet.
+# * Caddy serves HTTPS with free, automatic certificates, on two permanent
+#   names -- the dashboard at APP_HOST and the orchestrator (for machines) at
+#   API_HOST -- so links and join commands never change.
+# * Production mode: the orchestrator refuses to start with placeholder
+#   secrets, and setup.sh generates real ones.
+
+services:
+  postgres:
+    ports: !reset []
+
+  minio:
+    ports: !reset []
+
+  orchestrator:
+    ports: !reset []
+    environment:
+      APP_ENV: prod
+      # Uploaded datasets reach peers through the orchestrator itself
+      # (GET /leases/{id}/dataset), so no storage address is ever handed out.
+      S3_PUBLIC_ENDPOINT_URL: ""
+
+  web:
+    build:
+      # Relative to deploy/ -- Compose resolves every file's paths against the
+      # first file's directory, not this overlay's.
+      context: ..
+      dockerfile: deploy/cloud/Dockerfile.web
+      args:
+        # Baked into the dashboard: the address "Add a node" puts in the join
+        # command it gives people.
+        VITE_ORCHESTRATOR_URL: https://${API_HOST:?run deploy/cloud/setup.sh}
+    restart: unless-stopped
+    depends_on:
+      - orchestrator
+    environment:
+      APP_HOST: ${APP_HOST:?run deploy/cloud/setup.sh}
+      API_HOST: ${API_HOST:?run deploy/cloud/setup.sh}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      # Certificates survive restarts and rebuilds, so they are not re-issued
+      # (and do not run into the certificate authority's rate limits).
+      - caddydata:/data
+      - caddyconfig:/config
+
+volumes:
+  caddydata:
+  caddyconfig:

@@ -1,0 +1,25 @@
+# The only public entry point. Caddy obtains and renews HTTPS certificates
+# for both names on its own.
+
+# The dashboard. Its calls to the orchestrator go to /api/..., which is
+# forwarded with the prefix removed -- the same arrangement the development
+# server makes, so the dashboard code is identical in both.
+{$APP_HOST} {
+	encode gzip
+	handle_path /api/* {
+		reverse_proxy orchestrator:8000
+	}
+	handle {
+		root * /srv
+		# A single-page app: unknown paths are its own routes.
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+# The orchestrator, for machines: join commands, heartbeats, the live log
+# stream (WebSocket), dataset downloads and checkpoints. Caddy passes the
+# original host and https on, so the installer it serves names this address.
+{$API_HOST} {
+	reverse_proxy orchestrator:8000
+}
