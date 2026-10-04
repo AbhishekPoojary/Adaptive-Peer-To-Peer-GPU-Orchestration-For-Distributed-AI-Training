@@ -18,7 +18,11 @@ services:
       start_period: 5s
 
   minio:
-    image: minio/minio:latest
+    # MinIO no longer publishes images (minio/minio and quay.io/minio/minio
+    # are gone). pgsty/minio is a maintained build of the same server: same
+    # command, same `mc` health check, same data format. Pinned so a fresh
+    # install gets exactly what was tested.
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
