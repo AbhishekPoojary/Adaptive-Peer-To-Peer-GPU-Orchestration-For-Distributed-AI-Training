@@ -42,7 +42,7 @@ it is written.
 | **Peers update themselves** | The agent restarts into a newer bundle while idle and pulls a newer trainer image (ADR-015). A real agent at an old version exited for update within one check interval; the full installer loop on a real peer is not yet verified |
 | **Downloading the trained model** | ADR-006 addendum 2; a July run's checkpoint streamed byte-identical to storage (sha256 `471b73f9…` on both sides), opening as a valid torch archive |
 
-548 tests, all against a real Postgres. No mocked database, no simulated
+554 tests, all against a real Postgres. No mocked database, no simulated
 failures outside `tests/`.
 
 ---
@@ -153,29 +153,31 @@ ADR-008/ADR-012; worth revisiting if this ever holds anything sensitive.
 In-process fixed-window counters, so N orchestrator replicas allow N times the
 limit. ADR-010 deploys one. A second replica needs shared state (ADR-012 §7).
 
-### 5. A node can never be removed
+### 5. Removed nodes are hidden, not deleted
 
-There is no `DELETE /nodes/{id}`. Every machine that ever enrolled stays in the
-fleet list forever, so a long-lived deployment's Overview reads `0 / N` with a
-denominator of dead laptops. A decommission route plus a "hide offline" filter
-is a small change and the most visible remaining rough edge.
+An admin removes a machine from the Machines page (or `DELETE /nodes/{id}`):
+it leaves the list, its agent can no longer authenticate or mint a token, and
+its row stays so the jobs it trained still name it. A node holding live work
+is refused (409). There is no bulk "remove everything offline" yet, so a
+fleet that accumulated many dead benchmark nodes is cleaned one at a time.
 
-### 6. One model architecture, and `MODEL` is free text
+### 6. One model architecture, now enforced
 
-`SmallCNN` is the only architecture that exists. `MODEL` accepts any string and
-silently substitutes it — honestly logged, but a job recording `resnet18` that
-trained a small CNN is a confusing record. It should become an allowlist the way
-`dataset` did in ADR-014. Supporting non-image data means new architectures
+`SmallCNN` is the only architecture. `MODEL` is an allowlist (`small_cnn`, or
+its alias `cnn`) checked at submit; four historical jobs that claimed
+`resnet18`, `resnet` or `m` (and trained SmallCNN) still read, because stored
+specs are returned as-is. Supporting non-image data means new architectures
 first, not a new dataset format.
 
-### 7. The generated API client is stale
+### 7. The API client is current, and a test keeps it that way
 
-`dashboard/src/api/schema.gen.ts` predates `/datasets`, `/users`, and
-`/checkpoint`, so five files (`api/auth.ts`, `api/datasets.ts`, `api/jobs.ts`,
-`api/users.ts`, `components/TrainedModelCard.tsx`) hand-write `fetch` instead of
-using the typed client. One `npm run generate:api` against a running
-orchestrator closes it. Left as-is only because each was written when the
-orchestrator was mid-change.
+`schema.gen.ts` was regenerated, and can now be regenerated without a running
+orchestrator (`npm run generate:api:offline`). `tests/test_api_client_current.py`
+fails whenever the API serves an operation the client lacks; against the old
+client it named exactly the five routes added in this round. A few dashboard
+calls still use `fetch` directly on purpose: login and sign-in options run
+before any token exists, and chunked uploads send raw binary pieces with
+per-piece retry.
 
 ### 8. Google sign-in bounds replay rather than preventing it
 

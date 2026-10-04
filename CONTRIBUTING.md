@@ -15,7 +15,9 @@ can; the rest is enforced by review.
 3. **Latency is measured RTT (EWMA), never a constant.** Reliability is
    derived from recorded lease history, never assigned.
 4. **Training is real** (real datasets, real backprop, measured accuracy).
-   No `time.sleep()` standing in for work outside tests.
+   No `time.sleep()` standing in for work outside tests. A wait that is not
+   work -- a backoff between network retries -- carries an explicit
+   `# allow-sleep: <reason>` on its line, so every exception is visible.
 5. **Fakes/stubs live only in `tests/`** and are named `Fake*` or `Stub*`.
 6. **Every benchmark number is machine-written** to a timestamped artifact
    with git SHA + hardware inventory. Nothing hand-typed.

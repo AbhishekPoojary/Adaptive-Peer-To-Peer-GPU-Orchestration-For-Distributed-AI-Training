@@ -224,6 +224,7 @@ async def list_nodes(session: AsyncSession, *, settings: Settings) -> list[NodeS
     stmt = (
         select(Node, latest_sample)
         .outerjoin(latest_sample, latest_subq.c.node_id == Node.id)
+        .where(Node.decommissioned_at.is_(None))
         .order_by(Node.name)
     )
     rows = (await session.execute(stmt)).all()
@@ -273,3 +274,38 @@ async def get_node_detail(
         # latest sample yet" case above.
         telemetry_samples=[out for s in samples if (out := _sample_out(s)) is not None],
     )
+
+
+class NodeBusyError(Exception):
+    """The node holds live work and cannot be removed yet."""
+
+
+async def decommission_node(session: AsyncSession, *, node_id: uuid.UUID) -> Node | None:
+    """Remove a node from the fleet. Returns None if unknown. Caller commits.
+
+    Refused (:class:`NodeBusyError`) while the node holds a PENDING or ACTIVE
+    lease: removing a machine mid-job would strand the job until its lease
+    expired, which is the failure path, not the intended one. Cancel the job
+    or wait for it. Idempotent: removing a removed node changes nothing.
+    """
+    from orchestrator.models.lease import Lease, LeaseState
+
+    node = await session.get(Node, node_id, with_for_update={"key_share": True})
+    if node is None:
+        return None
+    if node.decommissioned_at is not None:
+        return node
+    busy = (
+        await session.execute(
+            select(Lease.id)
+            .where(Lease.node_id == node_id)
+            .where(Lease.state.in_((LeaseState.PENDING, LeaseState.ACTIVE)))
+            .limit(1)
+        )
+    ).first()
+    if busy is not None:
+        raise NodeBusyError(str(node_id))
+    node.decommissioned_at = datetime.now(UTC)
+    node.status = NodeStatus.OFFLINE
+    await session.flush()
+    return node

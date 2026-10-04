@@ -97,6 +97,14 @@ async def require_node_auth(
             detail="unknown node",
             headers=_UNAUTH_HEADERS,
         )
+    if node.decommissioned_at is not None:
+        # Removed by an admin. Without this its still-valid token would let
+        # it heartbeat straight back into the fleet it was removed from.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="this node was removed from the fleet; re-enroll to rejoin",
+            headers=_UNAUTH_HEADERS,
+        )
     return node
 
 

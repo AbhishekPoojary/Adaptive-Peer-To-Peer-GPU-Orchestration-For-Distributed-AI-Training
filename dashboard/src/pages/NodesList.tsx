@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, ServerOff } from "lucide-react";
-import { useNodesQuery } from "@/api/nodes";
+import { useNodesQuery, useRemoveNodeMutation } from "@/api/nodes";
+import { isAdmin } from "@/api/session";
 import type { NodeSummary } from "@/api/types";
 import { AddNodeModal } from "@/components/AddNodeModal";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
@@ -11,6 +12,14 @@ import { StatusPill } from "@/components/StatusPill";
 import { UpdatedAgo } from "@/components/UpdatedAgo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { formatBytes, formatPercent, formatRelativeTime } from "@/lib/format";
 
 function hardwareSummary(node: NodeSummary): string {
@@ -168,7 +177,70 @@ const columns: DataTableColumn<NodeSummary>[] = [
       </span>
     ),
   },
+  {
+    key: "actions",
+    header: "",
+    // Offline machines only, and only for admins (the API enforces both: it
+    // is admin-only and refuses a node holding live work). An online machine
+    // is contributing; removing it is never the cleanup this is for.
+    render: (n) =>
+      isAdmin() && n.status !== "ONLINE" ? <RemoveNodeButton node={n} /> : null,
+  },
 ];
+
+function RemoveNodeButton({ node }: { node: NodeSummary }) {
+  const [open, setOpen] = useState(false);
+  const remove = useRemoveNodeMutation();
+
+  return (
+    // The row opens the node's page on click, and React bubbles events from
+    // the dialog's portal -- its backdrop included -- through this tree. One
+    // boundary here keeps every click in the control and its dialog local.
+    <div onClick={(event) => event.stopPropagation()}>
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={() => {
+          remove.reset();
+          setOpen(true);
+        }}
+      >
+        Remove
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Remove {node.name}?</DialogTitle>
+            <DialogDescription>
+              It leaves the Machines list and its agent can no longer connect. Jobs it
+              trained keep their record of it. To bring the machine back, add it again
+              with a new install command.
+            </DialogDescription>
+          </DialogHeader>
+          {remove.error && (
+            <p role="alert" className="text-sm text-fault">
+              {remove.error.message}
+            </p>
+          )}
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={remove.isPending}
+              onClick={() =>
+                remove.mutate(node.id, { onSuccess: () => setOpen(false) })
+              }
+            >
+              {remove.isPending ? "Removing…" : "Remove machine"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
 
 function PageShell({
   title,

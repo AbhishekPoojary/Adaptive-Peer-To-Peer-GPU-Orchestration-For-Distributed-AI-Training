@@ -449,7 +449,8 @@ async def issue_challenge(
     enforce_rate_limit(get_node_auth_limiter(), request, bucket="challenge")
 
     node = await session.get(Node, body.node_id)
-    if node is None:
+    if node is None or node.decommissioned_at is not None:
+        # A removed node cannot mint itself a fresh token either.
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="unknown node"
         )
@@ -482,7 +483,7 @@ async def refresh_token(
         raise _INVALID_CHALLENGE
 
     node = await session.get(Node, body.node_id)
-    if node is None:  # node deleted between challenge and refresh
+    if node is None or node.decommissioned_at is not None:  # gone or removed
         await session.commit()
         raise _INVALID_CHALLENGE
 

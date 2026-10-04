@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.api.deps import (
@@ -26,6 +26,7 @@ from orchestrator.api.deps import (
     enforce_rate_limit,
     get_node_auth_limiter,
     get_settings_dep,
+    require_admin_user,
     require_node_auth,
     require_user,
 )
@@ -33,6 +34,7 @@ from orchestrator.core.config import Settings
 from orchestrator.core.db import get_session
 from orchestrator.core.security import PublicKeyError, create_node_jwt
 from orchestrator.models.node import Node
+from orchestrator.models.user import User
 from orchestrator.schemas.node import (
     HeartbeatRequest,
     HeartbeatResponse,
@@ -43,7 +45,9 @@ from orchestrator.schemas.node import (
 )
 from orchestrator.services.enrollment import TokenClaimOutcome
 from orchestrator.services.nodes import (
+    NodeBusyError,
     RegistrationError,
+    decommission_node,
     get_node_detail,
     list_nodes,
     record_heartbeat,
@@ -175,3 +179,31 @@ async def get_node_endpoint(
     return NodeDetailResponse(
         **detail.summary.model_dump(), telemetry_samples=detail.telemetry_samples
     )
+
+
+@router.delete("/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_node(
+    node_id: uuid.UUID,
+    _admin: User = Depends(require_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Remove a machine from the fleet (admin only).
+
+    The node disappears from the fleet list and its agent can no longer
+    authenticate; its history (leases, audits, the jobs it trained) is kept.
+    409 while it holds live work. A machine that should come back re-enrolls
+    with a new token and joins as a new node.
+    """
+    try:
+        node = await decommission_node(session, node_id=node_id)
+    except NodeBusyError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="this node is running a job; cancel it or wait for it to finish",
+        ) from exc
+    if node is None:
+        await session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown node")
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

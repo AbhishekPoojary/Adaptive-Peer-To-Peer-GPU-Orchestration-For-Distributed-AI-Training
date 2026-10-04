@@ -98,6 +98,12 @@ class Node(Base):
     # fairness from this: the eligible node whose last assignment is oldest
     # (NULL = never assigned) is picked next, then this is stamped. NULL for a
     # node the scheduler has never placed a job on. ---
+    # Set when an admin removes the node (DELETE /nodes/{id}). The row stays,
+    # because leases, audits and jobs name it; the node is hidden from the
+    # fleet list and can no longer authenticate.
+    decommissioned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_assigned_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

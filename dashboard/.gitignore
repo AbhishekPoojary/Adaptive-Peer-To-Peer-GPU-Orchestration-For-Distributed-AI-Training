@@ -22,3 +22,5 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+# Exported by `npm run generate:api:offline`; schema.gen.ts is the committed artifact.
+openapi.json

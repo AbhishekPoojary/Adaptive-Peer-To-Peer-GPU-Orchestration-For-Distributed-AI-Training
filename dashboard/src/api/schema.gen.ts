@@ -91,6 +91,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/agent-bundle/version": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Bundle Version
+         * @description The current bundle's fingerprint, for agents deciding whether to update.
+         *
+         *     Public for the same reason the bundle is: it is the code, not a secret.
+         *     An agent polls this while idle and, when it differs from the version it
+         *     was installed with, exits for its installer to fetch the new bundle and
+         *     restart it. That is how a fix reaches every peer without anyone on the
+         *     peer re-running anything.
+         */
+        get: operations["get_agent_bundle_version_agent_bundle_version_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/agent-bundle.tar.gz": {
         parameters: {
             query?: never;
@@ -384,7 +410,16 @@ export interface paths {
         get: operations["get_node_endpoint_nodes__node_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Remove Node
+         * @description Remove a machine from the fleet (admin only).
+         *
+         *     The node disappears from the fleet list and its agent can no longer
+         *     authenticate; its history (leases, audits, the jobs it trained) is kept.
+         *     409 while it holds live work. A machine that should come back re-enrolls
+         *     with a new token and joins as a new node.
+         */
+        delete: operations["remove_node_nodes__node_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -942,6 +977,71 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/leases/{lease_id}/dataset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Lease Dataset
+         * @description Stream the uploaded dataset of the job this lease is running.
+         *
+         *     The trainer used to fetch it straight from MinIO by a presigned URL. That
+         *     URL names this host's LAN address, so a peer joining over the internet --
+         *     through a tunnel, which is how a friend's laptop joins -- could not reach
+         *     it at all, and on the LAN it travelled as plain HTTP. Through here it
+         *     takes the same route and the same encryption as everything else the peer
+         *     does. It is streamed, never buffered: datasets are the one thing here
+         *     that is reliably large.
+         *
+         *     Authorised by the lease token, under the same fence as checkpoints: only
+         *     while this lease is the job's live attempt. The trainer still checks the
+         *     archive's SHA-256 before extracting it.
+         */
+        get: operations["read_lease_dataset_leases__lease_id__dataset_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/leases/{lease_id}/checkpoint-objects/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Checkpoint Object
+         * @description A trainer reads its job's manifest or a checkpoint blob.
+         *
+         *     404 when the object does not exist, which on the manifest is the ordinary
+         *     answer for a first attempt ("nothing to resume from"). 503 when storage is
+         *     unreachable, kept distinct so the trainer's log says which of the two
+         *     happened rather than reporting an outage as "no prior checkpoint".
+         */
+        get: operations["read_checkpoint_object_leases__lease_id__checkpoint_objects__key__get"];
+        /**
+         * Write Checkpoint Object
+         * @description Rank 0 of the live attempt stores a checkpoint blob or its manifest.
+         *
+         *     The size is checked against the declared length before the body is read
+         *     and again after, so an oversized upload is refused without buffering it
+         *     when the client is honest about its length and still refused when not.
+         */
+        put: operations["write_checkpoint_object_leases__lease_id__checkpoint_objects__key__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1055,6 +1155,8 @@ export interface components {
             rendezvous?: components["schemas"]["RendezvousAssignment"] | null;
             /** Job Spec */
             job_spec?: Record<string, never> | null;
+            /** Checkpoint Token */
+            checkpoint_token?: string | null;
         };
         /**
          * DatasetListResponse
@@ -1411,8 +1513,11 @@ export interface components {
             dataset?: ("cifar10" | "mnist") | null;
             /** Dataset Id */
             dataset_id?: string | null;
-            /** Model */
-            model: string;
+            /**
+             * Model
+             * @enum {string}
+             */
+            model: "small_cnn" | "cnn";
             /** Epochs */
             epochs: number;
             /** Batch Size */
@@ -2200,6 +2305,28 @@ export interface operations {
             };
         };
     };
+    get_agent_bundle_version_agent_bundle_version_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+        };
+    };
     get_agent_bundle_agent_bundle_tar_gz_get: {
         parameters: {
             query?: never;
@@ -2630,6 +2757,37 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["NodeDetailResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_node_nodes__node_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -3503,6 +3661,106 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LeaseOut"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_lease_dataset_leases__lease_id__dataset_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                Range?: string | null;
+            };
+            path: {
+                lease_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_checkpoint_object_leases__lease_id__checkpoint_objects__key__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                lease_id: string;
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    write_checkpoint_object_leases__lease_id__checkpoint_objects__key__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                lease_id: string;
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

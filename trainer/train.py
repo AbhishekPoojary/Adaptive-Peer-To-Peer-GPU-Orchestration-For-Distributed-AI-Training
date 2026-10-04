@@ -551,7 +551,7 @@ def _download_and_verify(url: str, *, expected_sha256: str, destination: str) ->
                             f"{attempt} attempts: {exc}"
                         ) from exc
                     _log(f"dataset download: piece at byte {downloaded} failed ({exc}); retrying")
-                    time.sleep(min(2**attempt, 30))
+                    time.sleep(min(2**attempt, 30))  # allow-sleep: retry backoff
             digest.update(piece)
             sink.write(piece)
             downloaded += len(piece)

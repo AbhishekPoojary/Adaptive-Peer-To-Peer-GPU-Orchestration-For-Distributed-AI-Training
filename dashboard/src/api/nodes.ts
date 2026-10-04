@@ -1,5 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
-import { api, unwrap } from "./client";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ApiError, api, fallbackMessage, unwrap } from "./client";
 
 /** Poll interval for fleet-wide views: no WebSocket yet (REST-polled, ADR-011). */
 export const POLL_INTERVAL_MS = 4000;
@@ -44,5 +44,31 @@ export function useNodeDetailQuery(nodeId: string | undefined, samples = 100) {
     },
     enabled: Boolean(nodeId),
     refetchInterval: POLL_INTERVAL_MS,
+  });
+}
+
+/**
+ * Remove a machine from the fleet (admin only; DELETE /nodes/{id}).
+ *
+ * Its history stays -- the jobs it trained still name it -- but it leaves the
+ * fleet list and its agent can no longer sign in. 204 has no body, which
+ * `unwrap` would read as an empty response, so errors are mapped here.
+ */
+export function useRemoveNodeMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (nodeId: string) => {
+      const result = await api.DELETE("/nodes/{node_id}", {
+        params: { path: { node_id: nodeId } },
+      });
+      if (result.error !== undefined) {
+        const detail = (result.error as { detail?: unknown }).detail;
+        throw new ApiError(
+          typeof detail === "string" ? detail : fallbackMessage(result.response.status),
+          result.response.status,
+        );
+      }
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["nodes"] }),
   });
 }

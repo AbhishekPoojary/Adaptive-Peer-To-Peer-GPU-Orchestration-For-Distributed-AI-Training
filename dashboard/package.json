@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "generate:api": "openapi-typescript http://localhost:8090/openapi.json -o src/api/schema.gen.ts",
+    "generate:api:offline": "python ../scripts/export_openapi.py openapi.json && openapi-typescript openapi.json -o src/api/schema.gen.ts",
     "test": "vitest run"
   },
   "dependencies": {

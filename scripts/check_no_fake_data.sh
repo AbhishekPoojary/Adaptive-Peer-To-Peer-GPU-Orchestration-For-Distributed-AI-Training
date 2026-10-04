@@ -5,7 +5,9 @@
 #   1. random.uniform|random.gauss|random.randint|np.random|numpy.random
 #      — unless the line carries a `# allow-random: <reason>` annotation.
 #   2. class/def names matching Fake|Stub|Mock outside tests/.
-#   3. time.sleep under trainer/ (training must never sleep-simulate work).
+#   3. time.sleep under trainer/ (training must never sleep-simulate work)
+#      -- unless the line carries a `# allow-sleep: <reason>` annotation, for
+#      a wait that is not work at all (a backoff between network retries).
 #
 # Runs under Git Bash on Windows and in CI (ubuntu-latest).
 
@@ -71,8 +73,14 @@ while IFS= read -r line; do
     lineno="${rest%%:*}"
     content="${rest#*:}"
 
+    case "$content" in
+        *"# allow-sleep:"*)
+            continue
+            ;;
+    esac
+
     fail=1
-    fail_msgs+=("SLEEP-SIMULATED WORK: $file:$lineno uses time.sleep under trainer/: ${content# }")
+    fail_msgs+=("SLEEP-SIMULATED WORK: $file:$lineno uses time.sleep under trainer/ without a '# allow-sleep: <reason>' annotation: ${content# }")
 done < <(grep -rnE 'time\.sleep' --include='*.py' trainer 2>/dev/null)
 
 if [ "$fail" -ne 0 ]; then
