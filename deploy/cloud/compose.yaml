@@ -30,6 +30,13 @@ services:
       # Uploaded datasets reach peers through the orchestrator itself
       # (GET /leases/{id}/dataset), so no storage address is ever handed out.
       S3_PUBLIC_ENDPOINT_URL: ""
+      # Every request arrives from Caddy, so without this each visitor looks
+      # like the same address and everyone shares one sign-in rate limit (ten
+      # attempts a minute for the whole site). Trusting the forwarded address
+      # is safe here and only here: the orchestrator has no published port, so
+      # Caddy is the only thing that can reach it, and Caddy replaces any
+      # X-Forwarded-For a visitor sends rather than passing it on.
+      FORWARDED_ALLOW_IPS: "*"
 
   web:
     build:

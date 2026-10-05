@@ -279,6 +279,11 @@ def client_key(request: Request) -> str:
     orchestrator on the overlay with no reverse proxy in front, so the socket
     peer *is* the client. If a trusted proxy is ever added, this must be taught
     which hop to trust — not simply switched to the header.
+
+    The cloud deployment is that case (Caddy in front): there uvicorn is told
+    to trust Caddy (``FORWARDED_ALLOW_IPS`` in ``deploy/cloud/compose.yaml``)
+    and rewrites ``request.client`` from the header itself, so this function
+    still reads only the socket peer and needs no change.
     """
     return request.client.host if request.client is not None else "unknown"
 
