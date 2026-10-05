@@ -96,9 +96,11 @@ git clone https://github.com/AbhishekPoojary/Adaptive-Peer-To-Peer-GPU-Orchestra
 cd orchestrator && bash deploy/cloud/setup.sh
 ```
 
-It installs everything it needs, so the first run takes **5–15 minutes**. Near
-the end it asks you to choose an **admin username and password** — that's your
-account. When it finishes it prints:
+First it asks you to choose an **admin username and password** — that's your
+account. Then it installs everything it needs, which takes **5–15 minutes** the
+first time. It runs in the background, so if the window closes or your
+connection drops it carries on — connect again and run
+`tail -f ~/orchestrator-setup.log` to watch. When it finishes it prints:
 
 ```
    Website (send this to everyone):   https://app.YOUR.PUBLIC.IP.sslip.io
@@ -133,7 +135,9 @@ cd orchestrator && git pull && bash deploy/cloud/setup.sh
 ```
 
 Your accounts, datasets, models and settings are kept. Computers that have
-joined update themselves.
+joined update themselves. An update that changes only the orchestrator takes a
+few minutes; one that changes the website takes longer on a small server,
+because the website is rebuilt. Either way it keeps going if you disconnect.
 
 **Turning off sign-ups.** On the server, run
 `nano orchestrator/deploy/cloud/.env`, change `ALLOW_REGISTRATION=true` to

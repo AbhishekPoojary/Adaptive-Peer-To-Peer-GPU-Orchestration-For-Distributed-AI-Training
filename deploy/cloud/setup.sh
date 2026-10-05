@@ -10,6 +10,9 @@
 #
 #   git pull && bash deploy/cloud/setup.sh
 #
+# It runs in the background: closing the window or losing the connection does
+# not stop it. Its progress is in ~/orchestrator-setup.log.
+#
 # What it does, in order:
 #   1. adds swap space on a small server, and installs Docker if it is missing;
 #   2. opens the web ports in the server's own firewall (Oracle's Ubuntu
@@ -17,7 +20,7 @@
 #   3. works out this server's permanent web addresses from its public IP;
 #   4. on first run, writes deploy/cloud/.env with freshly generated secrets;
 #   5. builds and starts everything;
-#   6. on first run, asks for your admin username and password;
+#   6. on first run, creates your admin account (asked for at the start);
 #   7. prints the links to share.
 
 set -euo pipefail
@@ -33,6 +36,77 @@ ENV_FILE="deploy/cloud/.env"
 
 [ "$(uname -s)" = "Linux" ] || die "run this on the Linux cloud server, not on your own computer."
 command -v sudo >/dev/null || die "sudo is required."
+
+LOG="$HOME/orchestrator-setup.log"
+LOCK="$REPO/deploy/cloud/.setup.lock"
+ADMIN_PENDING="$REPO/deploy/cloud/.admin-pending"
+
+ask_admin() {
+    # Sets admin_user and admin_password.
+    while :; do
+        read -rp "    Username (letters, numbers, . _ -): " admin_user
+        [ -n "$admin_user" ] && break
+    done
+    while :; do
+        read -rsp "    Password (at least 12 characters): " admin_password; echo
+        read -rsp "    Type it again: " p2; echo
+        if [ "$admin_password" = "$p2" ] && [ "${#admin_password}" -ge 12 ]; then break; fi
+        warn "Those didn't match, or were shorter than 12 characters. Try again."
+    done
+    unset p2
+}
+
+# --- 0. Run in the background, so a dropped connection can't stop it -----------
+# The build takes long enough on a small server that a laptop going to sleep,
+# or the Wi-Fi blinking, used to kill it halfway through over SSH. So the work
+# itself runs detached from this terminal, and this terminal only shows its
+# progress: closing it, or losing the connection, leaves the setup running.
+# Anything that needs typing is asked here, first, while someone is watching.
+if [ -z "${ORCH_SETUP_DETACHED:-}" ]; then
+    # One at a time: two runs at once fight over the same containers.
+    if ! flock -n "$LOCK" true 2>/dev/null; then
+        die "a setup is already running. Watch it with:  tail -f $LOG"
+    fi
+
+    need_admin=no
+    if [ ! -f "$ENV_FILE" ]; then
+        need_admin=yes  # first run: nothing exists yet
+    elif command -v docker >/dev/null 2>&1; then
+        admins="$(sudo docker compose --env-file "$ENV_FILE" -f deploy/compose.yaml -f deploy/cloud/compose.yaml \
+            exec -T postgres psql -U orchestrator -d orchestrator -tAc \
+            "select count(*) from users where role = 'ADMIN' and disabled_at is null" 2>/dev/null | tr -d '[:space:]')"
+        [ "$admins" = "0" ] && need_admin=yes
+    fi
+    if [ "$need_admin" = yes ]; then
+        say "First, choose your admin account (you sign in with this)."
+        ask_admin
+        # Handed to the background run in a file only this user can read; it
+        # reads and deletes it before doing anything else.
+        ( umask 077; printf '%s\n%s\n' "$admin_user" "$admin_password" > "$ADMIN_PENDING" )
+        unset admin_password
+    fi
+
+    rm -f "$LOG.status"
+    ORCH_SETUP_DETACHED=1 setsid nohup bash "$REPO/deploy/cloud/setup.sh" "$@" > "$LOG" 2>&1 < /dev/null &
+    worker=$!
+    say "Setting up in the background -- you can close this window at any time;"
+    say "it keeps going. To watch it again later:  tail -f $LOG"
+    echo
+    tail -n +1 -f --pid="$worker" "$LOG" 2>/dev/null || true
+    exit "$(cat "$LOG.status" 2>/dev/null || echo 1)"
+fi
+
+# From here on: the detached run.
+trap 'echo $? > "$LOG.status"' EXIT
+exec 9>"$LOCK"
+flock -n 9 || die "a setup is already running. Watch it with:  tail -f $LOG"
+
+admin_user=""
+admin_password=""
+if [ -f "$ADMIN_PENDING" ]; then
+    { read -r admin_user; read -r admin_password; } < "$ADMIN_PENDING"
+    rm -f "$ADMIN_PENDING"
+fi
 
 # --- 1. Swap and Docker -----------------------------------------------------------
 # The free student server has 1 GB of memory: enough to run everything, not
@@ -141,24 +215,16 @@ ok "Orchestrator running"
 admins="$(compose exec -T postgres psql -U orchestrator -d orchestrator -tAc \
     "select count(*) from users where role = 'ADMIN' and disabled_at is null" 2>/dev/null | tr -d '[:space:]')"
 if [ "${admins:-0}" = "0" ]; then
-    echo
-    say "Create your admin account (you sign in with this)."
-    while :; do
-        read -rp "    Username (letters, numbers, . _ -): " admin_user
-        [ -n "$admin_user" ] && break
-    done
-    while :; do
-        read -rsp "    Password (at least 12 characters): " p1; echo
-        read -rsp "    Type it again: " p2; echo
-        if [ "$p1" = "$p2" ] && [ "${#p1}" -ge 12 ]; then break; fi
-        warn "Those didn't match, or were shorter than 12 characters. Try again."
-    done
-    # By environment variable, never as an argument (scripts/create_user.py).
-    compose exec -T -e ORCH_USER_PASSWORD="$p1" orchestrator \
-        python -m scripts.create_user --username "$admin_user" --role ADMIN --no-prompt
-    unset p1 p2
-    ok "Admin account $admin_user created"
+    if [ -n "$admin_user" ]; then
+        # By environment variable, never as an argument (scripts/create_user.py).
+        compose exec -T -e ORCH_USER_PASSWORD="$admin_password" orchestrator \
+            python -m scripts.create_user --username "$admin_user" --role ADMIN --no-prompt
+        ok "Admin account $admin_user created"
+    else
+        warn "There is no admin account yet. Run this setup again to create one."
+    fi
 fi
+unset admin_password
 
 # --- 7. Done ---------------------------------------------------------------------
 say "Checking the website is reachable over HTTPS (certificates can take a minute)..."

@@ -10,7 +10,16 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml README.md ./
+# Dependencies first, in their own layer, read straight from pyproject.toml.
+# Installing them after the source (as this used to) re-ran the whole install
+# on every code change -- over ten minutes on a 1 GB cloud server, for an
+# update that changed one file. Now this layer is reused until the dependency
+# list itself changes.
+COPY pyproject.toml ./
+RUN python -c "import tomllib; p = tomllib.load(open('pyproject.toml', 'rb'))['project']; print('\n'.join(p['dependencies'] + p['optional-dependencies']['server']))" > /tmp/requirements.txt \
+    && pip install --no-cache-dir -r /tmp/requirements.txt
+
+COPY README.md ./
 COPY orchestrator ./orchestrator
 # agent/, trainer/ and installer/ are not imported by the running server; they
 # are served as static/bundled artifacts by orchestrator/api/installer.py so a
@@ -28,7 +37,8 @@ COPY installer ./installer
 # on the host.
 COPY scripts/create_user.py ./scripts/create_user.py
 
-RUN pip install --no-cache-dir ".[server]"
+# Only the project itself: its dependencies are already in the layer above.
+RUN pip install --no-cache-dir --no-deps .
 
 COPY orchestrator/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
