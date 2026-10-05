@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, ServerOff } from "lucide-react";
 import { useNodesQuery, useRemoveNodeMutation } from "@/api/nodes";
-import { isAdmin } from "@/api/session";
+import { getUser, isAdmin } from "@/api/session";
 import type { NodeSummary } from "@/api/types";
 import { AddNodeModal } from "@/components/AddNodeModal";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
@@ -49,7 +49,7 @@ export function NodesList() {
   const addNodeButton = (
     <Button size="sm" onClick={() => setAddNodeOpen(true)}>
       <Plus className="size-3.5" aria-hidden="true" />
-      Add a node
+      Add a computer
     </Button>
   );
   const addNodeModal = (
@@ -101,13 +101,13 @@ export function NodesList() {
       {nodes.length === 0 ? (
         <EmptyState
           icon={<ServerOff className="size-8" />}
-          title="No nodes yet — add one to get started"
+          title="No computers yet — add one to get started"
           description={
             <div className="flex flex-col gap-2 text-left">
               <p>
-                A peer joins the fleet by running one command on their machine —
-                click "Add a node" above to mint a one-time enrollment token and
-                get that command.
+                A computer joins by running one command on it — click "Add a
+                computer" above to get that command. Anyone signed in can lend
+                their own.
               </p>
             </div>
           }
@@ -180,15 +180,21 @@ const columns: DataTableColumn<NodeSummary>[] = [
   {
     key: "actions",
     header: "",
-    // Offline machines only, and only for admins (the API enforces both: it
-    // is admin-only and refuses a node holding live work). An online machine
-    // is contributing; removing it is never the cleanup this is for.
+    // Offline machines only, for admins and for whoever added the machine
+    // (the API enforces both, and refuses a node holding live work). An online
+    // machine is contributing; removing it is never the cleanup this is for.
     render: (n) =>
-      isAdmin() && n.status !== "ONLINE" ? <RemoveNodeButton node={n} /> : null,
+      canRemove(n) && n.status !== "ONLINE" ? <RemoveNodeButton node={n} /> : null,
   },
 ];
 
-function RemoveNodeButton({ node }: { node: NodeSummary }) {
+/** Admins remove any machine; a lender removes the ones they added. */
+function canRemove(node: NodeSummary): boolean {
+  const me = getUser();
+  return isAdmin() || (me !== null && node.enrolled_by === me.username);
+}
+
+export function RemoveNodeButton({ node }: { node: NodeSummary }) {
   const [open, setOpen] = useState(false);
   const remove = useRemoveNodeMutation();
 

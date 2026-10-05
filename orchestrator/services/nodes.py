@@ -19,6 +19,7 @@ from sqlalchemy.orm import aliased
 from orchestrator.core.config import Settings
 from orchestrator.core.metrics import heartbeats_received_total
 from orchestrator.core.security import load_ed25519_public_key
+from orchestrator.models.enrollment import EnrollmentToken
 from orchestrator.models.node import Node, NodeStatus, NodeTelemetrySample
 from orchestrator.schemas.node import (
     GpuTelemetry,
@@ -52,9 +53,13 @@ async def register_node(
     # Validate the key first — fail before touching the token.
     load_ed25519_public_key(req.public_key)
 
-    outcome, _ = await claim_enrollment_token(session, raw_token=req.enrollment_token)
+    outcome, token_id = await claim_enrollment_token(
+        session, raw_token=req.enrollment_token
+    )
     if outcome is not TokenClaimOutcome.CLAIMED:
         raise RegistrationError(outcome)
+    token = await session.get(EnrollmentToken, token_id)
+    assert token is not None  # just claimed in this transaction
 
     # Server-assigned unique name via a dedicated sequence (race-safe).
     seq_value = (await session.execute(text("SELECT nextval('node_name_seq')"))).scalar_one()
@@ -66,6 +71,7 @@ async def register_node(
         status=NodeStatus.OFFLINE,
         hardware=req.hardware.model_dump(),
         agent_version=req.agent_version,
+        enrolled_by=token.created_by,
         reliability_prior_alpha=settings.reliability_prior_alpha,
         reliability_prior_beta=settings.reliability_prior_beta,
     )
@@ -198,6 +204,7 @@ def _to_summary(
         hardware=HardwareInventory.model_validate(node.hardware),
         lease_success_count=node.lease_success_count,
         lease_failure_count=node.lease_failure_count,
+        enrolled_by=node.enrolled_by,
         latest_telemetry=_sample_out(latest),
     )
 

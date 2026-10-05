@@ -156,6 +156,8 @@ class NodeSummary(BaseModel):
     hardware: HardwareInventory
     lease_success_count: int
     lease_failure_count: int
+    #: Username of whoever added this machine; None if not recorded.
+    enrolled_by: str | None = None
     # None means the node has never sent a heartbeat yet — not zeros.
     latest_telemetry: TelemetrySampleOut | None
 

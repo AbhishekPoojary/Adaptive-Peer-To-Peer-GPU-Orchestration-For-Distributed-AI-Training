@@ -12,6 +12,8 @@ import { Datasets } from "@/pages/Datasets";
 import { Users } from "@/pages/Users";
 import { Benchmarks } from "@/pages/Benchmarks";
 import { NotFound } from "@/pages/NotFound";
+import { Welcome } from "@/pages/Welcome";
+import { Lend } from "@/pages/Lend";
 
 /**
  * Keys JobDetail by the route's :jobId so navigating from one job straight to
@@ -41,6 +43,8 @@ const router = createBrowserRouter([
     ),
     children: [
       { index: true, element: <Overview /> },
+      { path: "welcome", element: <Welcome /> },
+      { path: "lend", element: <Lend /> },
       { path: "nodes", element: <NodesList /> },
       { path: "nodes/:nodeId", element: <NodeDetail /> },
       { path: "jobs", element: <JobsList /> },

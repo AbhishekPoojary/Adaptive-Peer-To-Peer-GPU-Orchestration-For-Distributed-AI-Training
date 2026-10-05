@@ -209,6 +209,38 @@ async def require_admin_key_or_admin_user(
     await require_admin_user(user=user)
 
 
+async def require_enroller(
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+    authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings_dep),
+) -> User | None:
+    """Who may mint an enrollment token: the admin key, an admin, or -- while
+    ``ALLOW_SELF_LENDING`` is on -- any signed-in user lending their own
+    computer.
+
+    Returns the user (whose username the token, and so the machine, is stamped
+    with), or None for the static admin key, which has no user.
+    """
+    if x_admin_key is not None:
+        await require_admin_key_or_admin_user(
+            x_admin_key=x_admin_key,
+            authorization=authorization,
+            session=session,
+            settings=settings,
+        )
+        return None
+    user = await require_user(
+        authorization=authorization, session=session, settings=settings
+    )
+    if user.role is not UserRole.ADMIN and not settings.allow_self_lending:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="on this deployment only an admin can add computers; ask one to add yours",
+        )
+    return user
+
+
 # --- Rate limiting (ADR-012 §7) ----------------------------------------------
 
 

@@ -131,6 +131,8 @@ export interface AuthProviders {
   google: { enabled: boolean; client_id: string | null; origins?: string[] };
   /** Whether "Create account" may be offered. */
   registration?: boolean;
+  /** Whether any signed-in user may add their own computer. */
+  lending?: boolean;
 }
 
 /**

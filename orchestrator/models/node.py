@@ -104,6 +104,10 @@ class Node(Base):
     decommissioned_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Username of whoever added this machine, copied from the enrollment token
+    # that enrolled it. Lets a lender see and remove their own machines. NULL
+    # for nodes enrolled before this was recorded.
+    enrolled_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_assigned_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

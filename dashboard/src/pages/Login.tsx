@@ -65,7 +65,9 @@ export function Login() {
   }
 
   // Back to whatever the guard intercepted, so a bookmarked job link survives.
-  const destination = location.state?.from ?? "/";
+  // A deep link the guard bounced here wins; otherwise sign-in and sign-up
+  // both land on the "train or lend?" choice.
+  const destination = location.state?.from ?? "/welcome";
 
   function switchTo(next: Mode) {
     setMode(next);

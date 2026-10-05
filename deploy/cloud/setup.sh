@@ -173,8 +173,8 @@ echo "  ====================================================================="
 echo "   Website (send this to everyone):   https://${APP_HOST}"
 echo "   Machines join through:             https://${API_HOST}"
 echo "  ====================================================================="
-echo "   These addresses are permanent. Sign in on the website, then use"
-echo "   Machines -> Add a node to get the join command for each computer."
+echo "   These addresses are permanent. Sign in on the website and choose"
+echo "   Lend my computer to get the join command for each computer."
 echo
 if [ "$reachable" = "no" ]; then
     warn "The website isn't reachable from the internet yet. The usual cause is"

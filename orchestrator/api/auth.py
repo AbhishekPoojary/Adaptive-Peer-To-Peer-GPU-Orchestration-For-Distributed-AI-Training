@@ -10,7 +10,8 @@ Human identity:
 - ``GET /auth/me``: who the presented user token belongs to.
 
 Fleet administration (static admin key **or** an ADMIN user token):
-- ``POST /auth/enrollment-tokens``: mint a single-use token.
+- ``POST /auth/enrollment-tokens``: mint a single-use token (any signed-in
+  user while ALLOW_SELF_LENDING is on, for their own computer).
 - ``GET /auth/enrollment-tokens``: list minted tokens (metadata only).
 - ``POST /auth/enrollment-tokens/{id}/revoke``: withdraw an unused token.
 
@@ -35,6 +36,7 @@ from orchestrator.api.deps import (
     get_node_auth_limiter,
     get_settings_dep,
     require_admin_key_or_admin_user,
+    require_enroller,
     require_user,
 )
 from orchestrator.core.config import Settings
@@ -183,17 +185,33 @@ def _token_status(token: EnrollmentToken, *, now: datetime) -> str:
     "/enrollment-tokens",
     status_code=status.HTTP_201_CREATED,
     response_model=EnrollmentTokenCreateResponse,
-    dependencies=[Depends(require_admin_key_or_admin_user)],
 )
 async def create_enrollment_token_endpoint(
     body: EnrollmentTokenCreateRequest,
+    minted_for: User | None = Depends(require_enroller),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings_dep),
 ) -> EnrollmentTokenCreateResponse:
-    """Mint a single-use enrollment token. Returns the raw token exactly once."""
+    """Mint a single-use enrollment token. Returns the raw token exactly once.
+
+    Open to any signed-in user while ``ALLOW_SELF_LENDING`` is on, so people can
+    lend their own computer without asking an admin. The token is stamped with
+    the caller's username -- never the request body's label -- and the machine
+    that uses it is theirs (``Node.enrolled_by``). Limited per account, so a
+    signed-in user cannot mint tokens in bulk.
+    """
+    if minted_for is not None and minted_for.role is not UserRole.ADMIN:
+        decision = get_login_limiter().check(f"enroll:{minted_for.id}")
+        if not decision.allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="too many join commands in a short time; wait a minute",
+                headers={"Retry-After": str(decision.retry_after_seconds)},
+            )
+    created_by = minted_for.username if minted_for is not None else body.created_by
     ttl_seconds = body.ttl_seconds or settings.enrollment_token_ttl_seconds
     token, raw_token = await create_enrollment_token(
-        session, created_by=body.created_by, ttl_seconds=ttl_seconds
+        session, created_by=created_by, ttl_seconds=ttl_seconds
     )
     await session.commit()
     return EnrollmentTokenCreateResponse(
@@ -394,6 +412,7 @@ async def providers(
             ],
         ),
         registration=settings.allow_registration,
+        lending=settings.allow_self_lending,
     )
 
 

@@ -132,9 +132,14 @@ network setup.
 
 ### 1. Get your join command
 
-Ask the person who runs the system to click **Add a node** on the
-**Machines** page. They'll send you one line of text to copy — a different one
-for Windows and for Mac/Linux.
+Open the link you were sent and sign in (or **Create one**). You're asked what
+you'd like to do — choose **Lend my computer**. (Later, it's **Lend** in the
+menu at the top.) The page shows one line of text to copy; pick **Windows**,
+**macOS** or **Linux** above it to match the computer you're lending.
+
+No need to ask anyone: each command is made for you, works once, and the
+computer that uses it is listed under **Your computers** on that page — where
+you can also remove it again.
 
 ### 2. Run it
 
@@ -253,8 +258,7 @@ train, and [Part 2](#part-2--lend-your-computer) to lend their computers.
 
 | Where | What |
 | --- | --- |
-| **Machines → Add a node** | Get a join command for someone lending their computer |
-| **Machines → Remove** | Tidy away a computer that's gone for good (its history is kept) |
+| **Machines → Remove** on anyone's computer | Lenders can remove only their own; you can remove any |
 | **People** | Add someone, reset a forgotten password, make someone an admin, or switch off an account |
 
 **Turning off sign-ups:** anyone with your link can create an account and train
@@ -263,6 +267,12 @@ on your group's computers. To stop that, set `ALLOW_REGISTRATION=false` — in
 again), or as described in the cloud guide ([Azure](docs/DEPLOY-AZURE.md#later),
 [Oracle](docs/DEPLOY-ORACLE.md#later)). You
 can still add people yourself on the **People** page.
+
+**Approving every computer yourself:** anyone signed in can lend their own
+computer, and a lent computer receives other people's training pictures while
+it trains their jobs. To vet each one instead, set `ALLOW_SELF_LENDING=false`
+the same way; then only admins get join commands (**Lend** or **Machines → Add
+a computer**), and send them on to whoever is lending.
 
 **On a Mac or Linux?** Use Option A — the cloud server is set up from any
 computer. Running it on your own Mac or Linux machine is covered in the

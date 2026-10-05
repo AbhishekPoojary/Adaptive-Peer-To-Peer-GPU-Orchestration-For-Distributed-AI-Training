@@ -151,11 +151,9 @@ async def test_admin_token_forged_by_flipping_the_role_claim_is_rejected(
         signing_key=TEST_JWT_KEY,
         ttl_seconds=900,
     )
-    resp = await anon_client.post(
-        "/auth/enrollment-tokens",
-        json={"created_by": "forged"},
-        headers=auth_headers(forged),
-    )
+    # Listing enrollment tokens is admin-only (minting no longer is: anyone
+    # may lend their own computer).
+    resp = await anon_client.get("/auth/enrollment-tokens", headers=auth_headers(forged))
     assert resp.status_code == 403, resp.text
 
 

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, RefreshCw } from "lucide-react";
 import { useCreateEnrollmentTokenMutation } from "@/api/auth";
-import { isAdmin } from "@/api/session";
 import { ApiError } from "@/api/client";
 import { useWatchForNewNodeQuery } from "@/api/nodes";
 import type { NodeSummary } from "@/api/types";
@@ -135,29 +134,29 @@ function hardwareSummary(node: NodeSummary): string {
   return gpus.map((g) => `${g.name}, ${formatBytes(g.vram_bytes)}`).join(" · ");
 }
 
-export interface AddNodeModalProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  /** Nodes known to exist the moment the modal is opened — the baseline the
-   * live watch diffs against to find the first genuinely new enrollment. */
+export interface EnrollPanelProps {
+  /** Nodes known to exist when the panel mounts — the baseline the live watch
+   * diffs against to find the first genuinely new enrollment. */
   existingNodes: NodeSummary[];
+  /** Whether to keep watching for the machine to connect. */
+  active: boolean;
 }
 
 /**
- * "Add a node": mints a real enrollment token, shows the one-line install
- * command, and honestly waits for that exact node to show up in `GET /nodes`
- * — polling every ~2s and diffing against the set of node ids that existed
- * when the modal opened. This is real detection, never a fake spinner: if
- * nothing connects, it just keeps waiting and says so, with a way to
- * regenerate the token (e.g. if it expires first).
+ * The join command and the live "waiting for it to connect" state, shared by
+ * the "Add a computer" dialog and the Lend page.
  *
- * The caller mounts this keyed on the open/closed transition (see Overview's
- * and NodesList's `key={addNodeOpen ? "open" : "closed"}`), so every time it
- * opens it is a genuinely fresh component instance — the baseline snapshot
- * and the minted token are simply this instance's initial state, with no
- * "reset when a prop changes" bookkeeping needed.
+ * Mints a real enrollment token, shows the one-line install command, and
+ * honestly waits for a new node to show up in `GET /nodes` — polling every ~2s
+ * and diffing against the set of node ids that existed when it mounted. This is
+ * real detection, never a fake spinner: if nothing connects, it keeps waiting
+ * and says so, with a way to regenerate the token (e.g. if it expires first).
+ *
+ * The caller mounts it fresh each time (a `key` on open/close, or only once
+ * the node list has loaded), so the baseline snapshot and the minted token are
+ * simply this instance's initial state.
  */
-export function AddNodeModal({ open, onOpenChange, existingNodes }: AddNodeModalProps) {
+export function EnrollPanel({ existingNodes, active }: EnrollPanelProps) {
   const mintMutation = useCreateEnrollmentTokenMutation();
   const [baselineIds] = useState<Set<string>>(
     () => new Set(existingNodes.map((n) => n.id)),
@@ -167,15 +166,19 @@ export function AddNodeModal({ open, onOpenChange, existingNodes }: AddNodeModal
   const [, setTick] = useState(0);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Editable, because only a human knows which address a peer can actually
-  // reach — LAN, Tailscale, or a tunnel. The guess is a starting point.
+  // reach — LAN, Tailscale, or a tunnel. The guess is a starting point, and on
+  // a public deployment it is already right, so the field stays tucked away
+  // unless the guess is one no other machine could use.
   const [baseUrl, setBaseUrl] = useState<string>(() => guessPeerFacingUrl());
+  const [editAddress, setEditAddress] = useState(false);
   const [os, setOs] = useState<PeerOs>(() => detectOs());
 
   const token = mintMutation.data;
 
-  // Mint a token exactly once, when this (fresh, per-open) instance mounts.
+  // Mint a token exactly once, when this (fresh) instance mounts. The server
+  // stamps it with the signed-in user; the label only matters for the admin key.
   useEffect(() => {
-    mintMutation.mutate({ created_by: "dashboard-operator" });
+    mintMutation.mutate({ created_by: "dashboard" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -188,19 +191,15 @@ export function AddNodeModal({ open, onOpenChange, existingNodes }: AddNodeModal
     return () => window.clearInterval(id);
   }, []);
 
-  // Keep watching for as long as the modal is open and a token exists. We
-  // deliberately do NOT gate this on "already connected" — that would create
-  // a circular dependency (enabled depends on the derived node, which
-  // depends on this query's own data). Polling a lightweight GET /nodes every
-  // ~2s for the rest of the time the modal happens to stay open costs nothing
-  // real; the UI below simply stops *displaying* the waiting state once a
-  // match is found.
-  const waiting = open && Boolean(token);
+  // Keep watching while the panel is active and a token exists. Not gated on
+  // "already connected": that would be circular (enabled depends on the
+  // derived node, which depends on this query's own data), and a light
+  // GET /nodes every ~2s costs nothing real.
+  const waiting = active && Boolean(token);
   const watchQuery = useWatchForNewNodeQuery(waiting);
 
   // The first node in a fresh poll whose id isn't in the baseline is the one
-  // that just enrolled — derived straight from the query result, not stored
-  // state, so there is nothing to keep in sync by hand.
+  // that just enrolled — derived straight from the query result.
   const connectedNode: NodeSummary | null = useMemo(() => {
     if (!watchQuery.data) return null;
     return watchQuery.data.nodes.find((n) => !baselineIds.has(n.id)) ?? null;
@@ -222,193 +221,194 @@ export function AddNodeModal({ open, onOpenChange, existingNodes }: AddNodeModal
     }
   }
 
-  async function handleCopy() {
-    await copyText(command, setCopied);
-  }
-
-  async function handleCopySteps() {
-    if (!token) return;
-    await copyText(friendInstructions(os, baseUrl, token.token), setCopiedSteps);
-  }
-
   function handleRegenerate() {
-    mintMutation.mutate({ created_by: "dashboard-operator" });
+    mintMutation.mutate({ created_by: "dashboard" });
   }
 
+  return (
+    <div className="flex flex-col gap-3">
+      {mintMutation.isPending && (
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-4 w-2/3" />
+        </div>
+      )}
+
+      {mintMutation.isError && (
+        <div className="rounded-[var(--radius-control)] bg-fault-wash px-3 py-2 text-sm text-primary">
+          <p>
+            {mintMutation.error instanceof ApiError
+              ? mintMutation.error.message
+              : "Couldn't create a join command. Please try again."}
+          </p>
+          <Button variant="secondary" size="sm" className="mt-2" onClick={handleRegenerate}>
+            Try again
+          </Button>
+        </div>
+      )}
+
+      {token && !connectedNode && (
+        <>
+          <div className="flex gap-1" role="tablist" aria-label="Operating system">
+            {(["windows", "macos", "linux"] as PeerOs[]).map((value) => (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={os === value}
+                onClick={() => setOs(value)}
+                className={
+                  os === value
+                    ? "rounded-[var(--radius-control)] bg-elevated px-2.5 py-1 text-xs font-medium text-accent border border-hairline"
+                    : "rounded-[var(--radius-control)] px-2.5 py-1 text-xs text-secondary hover:bg-elevated"
+                }
+              >
+                {OS_LABEL[value]}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <code className="flex-1 overflow-x-auto whitespace-pre rounded bg-elevated px-2.5 py-2 font-data text-xs text-primary">
+              {command}
+            </code>
+            <Button
+              type="button"
+              variant="secondary"
+              size="icon"
+              onClick={() => void copyText(command, setCopied)}
+              aria-label="Copy join command"
+            >
+              {copied ? (
+                <Check className="size-4 text-good" aria-hidden="true" />
+              ) : (
+                <Copy className="size-4" aria-hidden="true" />
+              )}
+            </Button>
+          </div>
+
+          <p className="text-xs text-tertiary">
+            {os === "windows"
+              ? "Paste it into PowerShell (right-click pastes) and press Enter. Python is installed for you if it's missing."
+              : "Paste it into Terminal and press Enter. Needs Python 3.11–3.13, and Docker Desktop running."}{" "}
+            Leave the window open while your computer is lending.
+          </p>
+
+          {(unreachable || editAddress) && (
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="peer-address" className="text-xs font-medium text-secondary">
+                Address this machine is reachable at
+              </label>
+              <input
+                id="peer-address"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                spellCheck={false}
+                className="w-full rounded-[var(--radius-control)] border border-hairline bg-elevated px-2.5 py-1.5 font-data text-xs text-primary outline-none"
+              />
+              {unreachable ? (
+                <p className="rounded-[var(--radius-control)] bg-fault-wash px-2.5 py-1.5 text-xs text-primary">
+                  <strong>Another computer cannot reach this address.</strong>{" "}
+                  On their machine <code className="font-data">localhost</code>{" "}
+                  means <em>their</em> machine. Replace it with your LAN address
+                  (e.g. <code className="font-data">http://192.168.1.5:8090</code>)
+                  or your Tailscale address.
+                </p>
+              ) : (
+                <p className="text-xs text-tertiary">
+                  The computer must be able to open this address.
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() =>
+                void copyText(friendInstructions(os, baseUrl, token.token), setCopiedSteps)
+              }
+            >
+              {copiedSteps ? "Copied — paste it to them" : "Copy step-by-step instructions"}
+            </Button>
+            {!unreachable && !editAddress && (
+              <Button type="button" variant="ghost" size="sm" onClick={() => setEditAddress(true)}>
+                Change address
+              </Button>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-control)] bg-sunken px-3 py-2.5 text-xs">
+            <span className={expired ? "text-warn" : "text-secondary"}>
+              {expired
+                ? "This command has expired — make a new one."
+                : `Works once, until ${formatTimestamp(token.expires_at)}`}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleRegenerate}
+              disabled={mintMutation.isPending}
+            >
+              <RefreshCw className="size-3.5" aria-hidden="true" />
+              New command
+            </Button>
+          </div>
+
+          <div className="flex items-center gap-2 rounded-[var(--radius-control)] bg-sunken px-3 py-2.5 text-[0.8125rem] text-muted">
+            <RefreshCw
+              className="size-3.5 shrink-0 animate-spin text-tertiary motion-reduce:animate-none"
+              aria-hidden="true"
+            />
+            Waiting for the computer to connect… (checking every ~2s)
+          </div>
+        </>
+      )}
+
+      {connectedNode && (
+        <div className="flex items-center gap-2 rounded-[var(--radius-control)] bg-ok-wash px-3 py-2 text-sm text-primary">
+          <Check className="size-4 shrink-0 text-good" aria-hidden="true" />
+          <span>
+            <strong className="font-data">{connectedNode.name}</strong> connected —{" "}
+            {hardwareSummary(connectedNode)}. Leave its window open while it lends.
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export interface AddNodeModalProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  existingNodes: NodeSummary[];
+}
+
+/**
+ * "Add a computer": the join command in a dialog, for the Machines and
+ * Overview pages. The caller mounts it keyed on the open/closed transition, so
+ * every open is a fresh panel with a fresh token and baseline.
+ */
+export function AddNodeModal({ open, onOpenChange, existingNodes }: AddNodeModalProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Add a node</DialogTitle>
+          <DialogTitle>Add a computer</DialogTitle>
           <DialogDescription>
-            Run this on the peer machine whose GPU you want to share. It enrolls
-            that machine with the orchestrator and starts heartbeating — nothing
-            else on it changes.
+            Run this on the computer you want to lend. It joins the group and
+            starts taking training jobs — nothing else on it changes. Each
+            command works for one computer.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-3">
-          {!isAdmin() && (
-            <div className="rounded-[var(--radius-control)] bg-caution-wash px-3 py-2 text-sm text-primary">
-              Adding a node needs an admin account, and you're signed in as an
-              operator. Ask whoever runs the fleet to enroll the machine, or to
-              give your account the admin role.
-            </div>
-          )}
-
-          {mintMutation.isPending && (
-            <div className="flex flex-col gap-2">
-              <Skeleton className="h-9 w-full" />
-              <Skeleton className="h-4 w-2/3" />
-            </div>
-          )}
-
-          {mintMutation.isError && (
-            <div className="rounded-[var(--radius-control)] bg-fault-wash px-3 py-2 text-sm text-primary">
-              <p>
-                {mintMutation.error instanceof ApiError
-                  ? mintMutation.error.message
-                  : "Couldn't mint an enrollment token. Please try again."}
-              </p>
-              <Button variant="secondary" size="sm" className="mt-2" onClick={handleRegenerate}>
-                Try again
-              </Button>
-            </div>
-          )}
-
-          {token && !connectedNode && (
-            <>
-              <div className="flex flex-col gap-1.5">
-                <label
-                  htmlFor="peer-address"
-                  className="text-xs font-medium text-secondary"
-                >
-                  Address this machine is reachable at
-                </label>
-                <input
-                  id="peer-address"
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                  spellCheck={false}
-                  className="w-full rounded-[var(--radius-control)] border border-hairline bg-elevated px-2.5 py-1.5 font-data text-xs text-primary outline-none"
-                />
-                {unreachable ? (
-                  <p className="rounded-[var(--radius-control)] bg-fault-wash px-2.5 py-1.5 text-xs text-primary">
-                    <strong>Another computer cannot reach this address.</strong>{" "}
-                    On their machine <code className="font-data">localhost</code>{" "}
-                    means <em>their</em> machine. Replace it with your LAN address
-                    (e.g. <code className="font-data">http://192.168.1.5:8090</code>)
-                    or your Tailscale address.
-                  </p>
-                ) : (
-                  <p className="text-xs text-tertiary">
-                    The peer must be able to open this address. Same Wi-Fi is
-                    enough for a LAN address; otherwise use Tailscale.
-                  </p>
-                )}
-              </div>
-
-              <div className="flex gap-1" role="tablist" aria-label="Peer operating system">
-                {(["windows", "macos", "linux"] as PeerOs[]).map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    role="tab"
-                    aria-selected={os === value}
-                    onClick={() => setOs(value)}
-                    className={
-                      os === value
-                        ? "rounded-[var(--radius-control)] bg-elevated px-2.5 py-1 text-xs font-medium text-accent border border-hairline"
-                        : "rounded-[var(--radius-control)] px-2.5 py-1 text-xs text-secondary hover:bg-elevated"
-                    }
-                  >
-                    {OS_LABEL[value]}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex items-center gap-2">
-                <code className="flex-1 overflow-x-auto whitespace-pre rounded bg-elevated px-2.5 py-2 font-data text-xs text-primary">
-                  {command}
-                </code>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="icon"
-                  onClick={() => void handleCopy()}
-                  aria-label="Copy install command"
-                >
-                  {copied ? (
-                    <Check className="size-4 text-good" aria-hidden="true" />
-                  ) : (
-                    <Copy className="size-4" aria-hidden="true" />
-                  )}
-                </Button>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => void handleCopySteps()}
-                >
-                  {copiedSteps ? "Copied — paste it to them" : "Copy instructions for a friend"}
-                </Button>
-                <span className="text-xs text-tertiary">
-                  Numbered, plain-language steps. No terminal experience needed.
-                </span>
-              </div>
-
-              <p className="text-xs text-tertiary">
-                {os === "windows"
-                  ? "Runs in PowerShell. WSL2 is not required."
-                  : "Runs in Terminal."}{" "}
-                The peer needs Python 3.11–3.13. Docker is optional — without it
-                the installer offers a simpler path and says what that gives up.
-              </p>
-
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-control)] bg-sunken px-3 py-2.5 text-xs">
-                <span className={expired ? "text-warn" : "text-secondary"}>
-                  {expired
-                    ? "Token expired — regenerate to get a fresh one."
-                    : `Token expires ${formatTimestamp(token.expires_at)}`}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleRegenerate}
-                  disabled={mintMutation.isPending}
-                >
-                  <RefreshCw className="size-3.5" aria-hidden="true" />
-                  Regenerate token
-                </Button>
-              </div>
-
-              <div className="flex items-center gap-2 rounded-[var(--radius-control)] bg-sunken px-3 py-2.5 text-[0.8125rem] text-muted">
-                <RefreshCw
-                  className="size-3.5 shrink-0 animate-spin text-tertiary motion-reduce:animate-none"
-                  aria-hidden="true"
-                />
-                Waiting for the node to connect… (checking every ~2s)
-              </div>
-            </>
-          )}
-
-          {connectedNode && (
-            <div className="flex items-center gap-2 rounded-[var(--radius-control)] bg-ok-wash px-3 py-2 text-sm text-primary">
-              <Check className="size-4 shrink-0 text-good" aria-hidden="true" />
-              <span>
-                <strong className="font-data">{connectedNode.name}</strong> connected —{" "}
-                {hardwareSummary(connectedNode)}
-              </span>
-            </div>
-          )}
-        </div>
+        <EnrollPanel existingNodes={existingNodes} active={open} />
 
         <DialogFooter>
           <Button variant="secondary" onClick={() => onOpenChange(false)}>
-            {connectedNode ? "Done" : "Close"}
+            Close
           </Button>
         </DialogFooter>
       </DialogContent>

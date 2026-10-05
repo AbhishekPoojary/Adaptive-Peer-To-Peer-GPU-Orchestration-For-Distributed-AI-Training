@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
  * advertising six places the visitor is not going. The primary user has one
  * path (upload, watch, collect) and does not need a standing directory.
  *
- * No icons. Seven labels at this size read faster as words than as
+ * No icons. Eight labels at this size read faster as words than as
  * word-plus-glyph pairs, and an icon set here would be decoration competing
  * with the state dots that actually carry meaning.
  *
@@ -34,6 +34,7 @@ const NAV_ITEMS: {
   { to: "/datasets", label: "Datasets" },
   { to: "/submit", label: "Train" },
   { to: "/jobs", label: "Runs" },
+  { to: "/lend", label: "Lend" },
   { to: "/nodes", label: "Machines" },
   { to: "/benchmarks", label: "Benchmarks" },
   { to: "/users", label: "People", adminOnly: true },
@@ -57,7 +58,11 @@ export function TopNav() {
         setPill(null);
         return;
       }
-      setPill({ left: active.offsetLeft, width: active.offsetWidth });
+      // Measure the link's <li>, not the link: each <li> is `relative`, so it
+      // is the link's offsetParent and the link's own offsetLeft is always 0
+      // -- which parked the pill over the first item whatever was active.
+      const item = active.closest("li") ?? active;
+      setPill({ left: item.offsetLeft, width: item.offsetWidth });
     };
 
     measure();

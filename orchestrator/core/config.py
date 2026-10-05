@@ -128,6 +128,11 @@ class Settings(BaseSettings):
     # datasets and run jobs on the fleet -- which is exactly what a leaked link
     # would let a stranger do. Turn off to go back to admin-created accounts.
     allow_registration: bool = True
+    # Whether any signed-in user may add their own computer to the fleet
+    # ("Lend my computer"), rather than only admins. A lent computer runs other
+    # users' jobs and so receives their training data while it does; turn this
+    # off to have an admin vet every machine instead.
+    allow_self_lending: bool = True
     # Admin bootstrap key for POST /auth/enrollment-tokens. No default: absent
     # means the admin surface is disabled, and startup is refused outside dev
     # (see orchestrator.main.lifespan). Never bake a real key into an image.

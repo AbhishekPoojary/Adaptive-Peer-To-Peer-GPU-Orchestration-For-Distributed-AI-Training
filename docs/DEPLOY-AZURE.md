@@ -134,9 +134,10 @@ restarts.
 
 1. Open the **Website** link and sign in with the admin account.
 2. Add the computers that will do the training — including your own laptop:
-   **Machines** → **Add a node**, and run the command it shows on each one
+   click **Lend** at the top, and run the command it shows on that computer
    ([README, Part 2](../README.md#part-2--lend-your-computer)). Each computer
-   runs it once; from then on it reconnects by itself.
+   runs it once; from then on it reconnects by itself. Friends do the same
+   from their own accounts — no need to send them anything but the link.
 3. Send the Website link to your friends. They click **Create one** to make an
    account ([README, Part 1](../README.md#part-1--train-a-model)).
 

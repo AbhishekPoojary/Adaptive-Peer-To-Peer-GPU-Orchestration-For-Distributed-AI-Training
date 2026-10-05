@@ -15,7 +15,13 @@ _MAX_TOKEN_TTL_SECONDS = 30 * 24 * 3600
 
 
 class EnrollmentTokenCreateRequest(BaseModel):
-    """Body of POST /auth/enrollment-tokens (admin-only)."""
+    """Body of POST /auth/enrollment-tokens.
+
+    ``created_by`` is honoured only for the static admin key (CLI bootstrap,
+    where there is no user). For a signed-in user it is ignored and the token
+    is stamped with their username, which is what later makes the machine
+    theirs (``Node.enrolled_by``).
+    """
 
     model_config = _FORBID
 
@@ -178,6 +184,8 @@ class AuthProvidersResponse(BaseModel):
     google: GoogleProviderOut
     #: Whether the sign-in page may offer "Create account" (ALLOW_REGISTRATION).
     registration: bool = False
+    #: Whether any signed-in user may add their own computer (ALLOW_SELF_LENDING).
+    lending: bool = False
 
 
 class LoginResponse(BaseModel):

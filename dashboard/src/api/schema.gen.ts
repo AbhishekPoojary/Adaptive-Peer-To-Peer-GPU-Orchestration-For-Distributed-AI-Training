@@ -155,6 +155,12 @@ export interface paths {
         /**
          * Create Enrollment Token Endpoint
          * @description Mint a single-use enrollment token. Returns the raw token exactly once.
+         *
+         *     Open to any signed-in user while ``ALLOW_SELF_LENDING`` is on, so people can
+         *     lend their own computer without asking an admin. The token is stamped with
+         *     the caller's username -- never the request body's label -- and the machine
+         *     that uses it is theirs (``Node.enrolled_by``). Limited per account, so a
+         *     signed-in user cannot mint tokens in bulk.
          */
         post: operations["create_enrollment_token_endpoint_auth_enrollment_tokens_post"];
         delete?: never;
@@ -279,9 +285,11 @@ export interface paths {
          *     authorization path, so nothing downstream of here knows or cares which
          *     mechanism was used (ADR-012 addendum §3).
          *
-         *     This never creates an account. An identity Google vouches for that matches no
-         *     row is refused, because on this system an account is permission to run
-         *     containers on other people's machines.
+         *     An identity Google vouches for that matches no account gets a new OPERATOR
+         *     account when the deployment allows self-registration -- exactly what
+         *     ``POST /auth/register`` would give the same person, so Google adds no new
+         *     way in. With ``ALLOW_REGISTRATION=false`` it is refused instead, because an
+         *     account is then something only an admin hands out.
          */
         post: operations["google_login_auth_google_post"];
         delete?: never;
@@ -439,7 +447,7 @@ export interface paths {
         post?: never;
         /**
          * Remove Node
-         * @description Remove a machine from the fleet (admin only).
+         * @description Remove a machine from the fleet: an admin, or whoever added it.
          *
          *     The node disappears from the fleet list and its agent can no longer
          *     authenticate; its history (leases, audits, the jobs it trained) is kept.
@@ -1101,6 +1109,11 @@ export interface components {
              * @default false
              */
             registration: boolean;
+            /**
+             * Lending
+             * @default false
+             */
+            lending: boolean;
         };
         /** Body_upload_dataset_datasets_post */
         Body_upload_dataset_datasets_post: {
@@ -1270,7 +1283,12 @@ export interface components {
         };
         /**
          * EnrollmentTokenCreateRequest
-         * @description Body of POST /auth/enrollment-tokens (admin-only).
+         * @description Body of POST /auth/enrollment-tokens.
+         *
+         *     ``created_by`` is honoured only for the static admin key (CLI bootstrap,
+         *     where there is no user). For a signed-in user it is ignored and the token
+         *     is stamped with their username, which is what later makes the machine
+         *     theirs (``Node.enrolled_by``).
          */
         EnrollmentTokenCreateRequest: {
             /** Created By */
@@ -1767,6 +1785,8 @@ export interface components {
             lease_success_count: number;
             /** Lease Failure Count */
             lease_failure_count: number;
+            /** Enrolled By */
+            enrolled_by?: string | null;
             latest_telemetry: components["schemas"]["TelemetrySampleOut"] | null;
             /** Telemetry Samples */
             telemetry_samples: components["schemas"]["TelemetrySampleOut"][];
@@ -1841,6 +1861,8 @@ export interface components {
             lease_success_count: number;
             /** Lease Failure Count */
             lease_failure_count: number;
+            /** Enrolled By */
+            enrolled_by?: string | null;
             latest_telemetry: components["schemas"]["TelemetrySampleOut"] | null;
         };
         /**

@@ -147,7 +147,11 @@ Postgres (the database), MinIO (checkpoint storage), and the orchestrator API.
 ### 2. Create your account
 
 Anyone can create an ordinary (OPERATOR) account on the sign-in page
-(`POST /auth/register`; `ALLOW_REGISTRATION=false` turns that off). The first
+(`POST /auth/register`; `ALLOW_REGISTRATION=false` turns that off), and any
+signed-in user can mint a join command for their own computer from the
+dashboard's **Lend** page (`POST /auth/enrollment-tokens`, stamped with their
+username, which becomes `nodes.enrolled_by`; `ALLOW_SELF_LENDING=false` limits
+that to admins). The first
 **admin** has to be made on the host -- `demo.ps1` asks for one on its first
 run; by hand:
 

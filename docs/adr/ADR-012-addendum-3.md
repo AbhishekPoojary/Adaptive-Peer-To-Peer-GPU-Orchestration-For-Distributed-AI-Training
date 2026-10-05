@@ -57,3 +57,25 @@ make two people who both call an upload "cats" collide for no reason.
 * The orchestrator's operator still holds MinIO's credentials and could read
   stored objects directly. This decision governs the application, not someone
   with root on the server.
+
+## Revision: lending your own computer
+
+Adding a machine was admin-only, so a friend who wanted to lend a computer had
+to wait for an admin to mint a join command and send it over. Now any signed-in
+user may mint one for **their own** computer (`require_enroller`), while
+`ALLOW_SELF_LENDING` is on (the default):
+
+- The token's `created_by` is the caller's username, never the request body's
+  label (that label is kept only for the static admin key, which has no user).
+- `register_node` copies it to `nodes.enrolled_by` (migration
+  `0016_node_enrolled_by`; NULL for machines enrolled earlier).
+- `DELETE /nodes/{id}` is allowed to an admin or to the node's `enrolled_by`
+  user; anyone else gets 403. The idle-only rule is unchanged.
+- Minting is limited per account, so a signed-in user cannot mint in bulk.
+  Listing and revoking tokens stay admin-only.
+
+The trade-off is stated where it is configured: a lent computer receives other
+users' training data while it trains their jobs, so with sign-ups open, anyone
+holding the link can lend a computer and see the data of jobs placed on it.
+That was already true of anyone an admin enrolled; what changes is who decides.
+`ALLOW_SELF_LENDING=false` returns that decision to admins.

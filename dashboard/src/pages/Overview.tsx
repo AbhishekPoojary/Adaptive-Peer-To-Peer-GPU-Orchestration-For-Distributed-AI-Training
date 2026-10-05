@@ -2,7 +2,6 @@ import { Link } from "react-router-dom";
 import { ArrowRight, Download } from "lucide-react";
 import { useJobMetricsQuery, useJobsQuery } from "@/api/jobs";
 import { useNodesQuery } from "@/api/nodes";
-import { isAdmin } from "@/api/session";
 import {
   QUEUE_DEPTH_STATES,
   asJobResult,
@@ -361,12 +360,6 @@ function NothingYet() {
           </Link>
         </Button>
       </div>
-      {!isAdmin() && (
-        <p className="mt-4 text-xs text-muted">
-          Uploading your own dataset needs an admin account — whoever runs this
-          fleet can grant one.
-        </p>
-      )}
     </Panel>
   );
 }

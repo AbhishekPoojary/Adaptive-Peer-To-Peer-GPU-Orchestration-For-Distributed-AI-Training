@@ -1,4 +1,4 @@
-"""An admin can remove a machine from the fleet (DELETE /nodes/{id}).
+"""An admin, or whoever added it, can remove a machine (DELETE /nodes/{id}).
 
 Every machine that ever enrolled used to stay in the fleet list for good, so a
 long-lived deployment's Overview read "0 / N" against a denominator of dead
@@ -58,8 +58,8 @@ async def test_admin_removes_an_idle_node_and_it_is_shut_out(api_client: AsyncCl
 
 
 @pytest.mark.asyncio
-async def test_only_admins_remove_nodes(api_client: AsyncClient) -> None:
-    reg, _key = await register_new_node(api_client, with_gpu=True)
+async def test_nobody_else_removes_a_node(api_client: AsyncClient) -> None:
+    reg, _key = await register_new_node(api_client, with_gpu=True)  # not theirs
     resp = await api_client.delete(f"/nodes/{reg['node_id']}")  # operator token
     assert resp.status_code == 403
     assert reg["node_id"] in await _listed(api_client)

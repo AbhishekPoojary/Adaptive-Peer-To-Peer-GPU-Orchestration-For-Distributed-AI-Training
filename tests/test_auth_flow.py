@@ -15,6 +15,7 @@ import asyncpg
 import pytest
 from httpx import AsyncClient
 
+from orchestrator.core.config import get_settings
 from orchestrator.core.security import create_node_jwt, hash_token
 from tests.helpers import (
     TEST_ADMIN_KEY,
@@ -201,10 +202,11 @@ async def test_malformed_telemetry_rejected(
 
 @pytest.mark.asyncio
 async def test_token_minting_requires_admin_credentials(
-    anon_client: AsyncClient,
+    anon_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Minting accepts the static admin key **or** an ADMIN user token, and
-    nothing else (ADR-012 §6).
+    """Minting accepts the static admin key or a signed-in user, and nothing
+    else (ADR-012 §6). A plain OPERATOR may mint for their own computer while
+    self-lending is on (``tests/test_self_lending.py``), and only then.
 
     Run against ``anon_client`` so each case carries exactly the credential
     under test — the default ``api_client`` would silently add an operator
@@ -222,9 +224,11 @@ async def test_token_minting_requires_admin_credentials(
     )
     assert resp.status_code == 401, resp.text
 
-    # A genuine, authenticated user who simply lacks the role: 403, not 401.
-    # The distinction matters — 401 would tell them to log in again, which
+    # A genuine, authenticated user who may not add computers here: 403, not
+    # 401. The distinction matters — 401 would tell them to log in again, which
     # would not help.
+    monkeypatch.setenv("ALLOW_SELF_LENDING", "false")
+    get_settings.cache_clear()
     resp = await anon_client.post(
         "/auth/enrollment-tokens",
         json=body,
