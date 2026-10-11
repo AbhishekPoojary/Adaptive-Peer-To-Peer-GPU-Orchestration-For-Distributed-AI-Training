@@ -48,9 +48,10 @@ from orchestrator.models.scheduling import (
     SchedulingDecisionCandidate,
 )
 from orchestrator.schedulers.adaptive import (
-    AdaptiveScheduler,
+    ABLATIONS,
     CandidateReliability,
     ScoredCandidate,
+    adaptive_weights,
     score_candidates,
     select_top_n,
 )
@@ -212,12 +213,13 @@ def _persist_decision(
     decision's ``selected_node_id`` is the rendezvous host (rank 0) — the single
     node the audit points at as the attempt's coordinator (ADR-005).
     """
+    alpha, beta, gamma = adaptive_weights(job.scheduler_name, settings)
     decision = SchedulingDecision(
         job_id=job.id,
-        scheduler_name=AdaptiveScheduler.name,
-        alpha=settings.scheduler_alpha_load,
-        beta=settings.scheduler_beta_reliability,
-        gamma=settings.scheduler_gamma_latency,
+        scheduler_name=job.scheduler_name,
+        alpha=alpha,
+        beta=beta,
+        gamma=gamma,
         reliability_halflife_seconds=settings.reliability_decay_halflife_seconds,
         wilson_z=settings.reliability_wilson_z,
         selected_node_id=rendezvous_id,
@@ -304,12 +306,13 @@ async def place_job_cohort(
     wilson = _wilson_by_node(reliability, wilson_z=settings.reliability_wilson_z)
 
     scored: list[ScoredCandidate] = []
-    if job.scheduler_name == AdaptiveScheduler.name:
+    if job.scheduler_name in ABLATIONS:
+        alpha, beta, gamma = adaptive_weights(job.scheduler_name, settings)
         scored = score_candidates(
             reliability,
-            alpha=settings.scheduler_alpha_load,
-            beta=settings.scheduler_beta_reliability,
-            gamma=settings.scheduler_gamma_latency,
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma,
             wilson_z=settings.reliability_wilson_z,
             load_significant_spread=settings.scheduler_load_significant_spread,
             latency_significant_spread_ms=settings.scheduler_latency_significant_spread_ms,
@@ -359,7 +362,7 @@ async def place_job_cohort(
     job.rendezvous_node_id = rdzv.node.id
     job.scheduled_node_id = rdzv.node.id  # rank-0 node, for read continuity
 
-    if job.scheduler_name == AdaptiveScheduler.name:
+    if job.scheduler_name in ABLATIONS:
         _persist_decision(
             session,
             job=job,
@@ -374,9 +377,7 @@ async def place_job_cohort(
             "halflife_s=%.1f wilson_z=%.3f candidates=%d cohort=%s rendezvous=%s",
             job.id,
             world_size,
-            settings.scheduler_alpha_load,
-            settings.scheduler_beta_reliability,
-            settings.scheduler_gamma_latency,
+            *adaptive_weights(job.scheduler_name, settings),
             settings.reliability_decay_halflife_seconds,
             settings.reliability_wilson_z,
             len(scored),

@@ -15,7 +15,7 @@ name). It registers here only so the name is validatable/selectable; its
 
 from __future__ import annotations
 
-from orchestrator.schedulers.adaptive import AdaptiveScheduler
+from orchestrator.schedulers.adaptive import ABLATIONS, AdaptiveScheduler
 from orchestrator.schedulers.base import Scheduler
 from orchestrator.schedulers.least_loaded import LeastLoadedScheduler
 from orchestrator.schedulers.round_robin import RoundRobinScheduler
@@ -23,7 +23,7 @@ from orchestrator.schedulers.round_robin import RoundRobinScheduler
 _REGISTRY: dict[str, Scheduler] = {
     RoundRobinScheduler.name: RoundRobinScheduler(),
     LeastLoadedScheduler.name: LeastLoadedScheduler(),
-    AdaptiveScheduler.name: AdaptiveScheduler(),
+    **{name: AdaptiveScheduler() for name in ABLATIONS},
 }
 
 

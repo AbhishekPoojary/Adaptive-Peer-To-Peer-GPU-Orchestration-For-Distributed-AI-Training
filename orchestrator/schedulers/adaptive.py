@@ -37,6 +37,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from orchestrator.core.config import Settings
 from orchestrator.models.job import Job
 from orchestrator.schedulers.base import NodeSnapshot, current_load
 from orchestrator.schedulers.reliability import wilson_lower_bound
@@ -227,6 +228,30 @@ def select_top_n(scored: list[ScoredCandidate], n: int) -> list[ScoredCandidate]
     on node name, so selection is stable across passes.
     """
     return sorted(scored, key=_rank_key)[: max(0, n)]
+
+
+#: The adaptive score and its ablations: each variant switches one term of
+#: S_i = alpha*L_i - beta*R_i + gamma*D_i off, so an evaluation can show what
+#: each term contributes. Selectable per job like any scheduler.
+ABLATIONS: dict[str, str | None] = {
+    "adaptive": None,
+    "adaptive_no_load": "alpha",
+    "adaptive_no_reliability": "beta",
+    "adaptive_no_latency": "gamma",
+}
+
+
+def adaptive_weights(scheduler_name: str, settings: Settings) -> tuple[float, float, float]:
+    """(alpha, beta, gamma) for an adaptive variant, the ablated term zeroed."""
+    weights = {
+        "alpha": settings.scheduler_alpha_load,
+        "beta": settings.scheduler_beta_reliability,
+        "gamma": settings.scheduler_gamma_latency,
+    }
+    off = ABLATIONS[scheduler_name]
+    if off is not None:
+        weights[off] = 0.0
+    return weights["alpha"], weights["beta"], weights["gamma"]
 
 
 class AdaptiveScheduler:
