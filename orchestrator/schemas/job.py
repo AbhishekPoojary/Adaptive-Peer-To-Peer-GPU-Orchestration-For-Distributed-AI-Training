@@ -28,7 +28,7 @@ BuiltinDataset = Literal["cifar10", "mnist"]
 #: anything it did not recognise -- four stored jobs say "resnet18", "resnet"
 #: or "m" and trained SmallCNN. An allowlist makes the record true at submit.
 #: Stored specs are returned as plain dicts, so those historical jobs still read.
-ModelName = Literal["small_cnn", "cnn"]
+ModelName = Literal["small_cnn", "cnn", "resnet18"]
 
 
 class JobSpec(BaseModel):
@@ -54,6 +54,9 @@ class JobSpec(BaseModel):
     batch_size: int = Field(ge=1)
     learning_rate: float = Field(gt=0)
     world_size: int = Field(ge=1)
+    #: Local SGD: optimizer steps each rank takes between weight averages.
+    #: 1 (the default, and every historical job) is plain DDP.
+    sync_every: int = Field(default=1, ge=1, le=10_000)
     # NULL means the job is CPU-eligible (no GPU-memory requirement). A value is
     # a hard minimum a candidate node's largest GPU must meet.
     min_gpu_mem_bytes: int | None = Field(default=None, ge=0)

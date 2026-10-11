@@ -221,6 +221,7 @@ def build_run_kwargs(
         "EPOCHS": str(job_spec["epochs"]),
         "BATCH_SIZE": str(job_spec["batch_size"]),
         "LEARNING_RATE": str(job_spec["learning_rate"]),
+        "SYNC_EVERY": str(job_spec.get("sync_every", 1)),
         "JOB_ID": job_id,
         "LEASE_ID": lease_id,
         "LEASE_EPOCH": str(lease_epoch),

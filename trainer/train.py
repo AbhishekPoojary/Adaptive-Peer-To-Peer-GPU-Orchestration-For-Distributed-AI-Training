@@ -105,6 +105,36 @@ _MNIST_MEAN = (0.1307,)
 _MNIST_STD = (0.3081,)
 
 
+def resnet18_small(in_channels: int, num_classes: int) -> nn.Module:
+    """torchvision's ResNet-18, with the standard small-image stem.
+
+    The ImageNet stem (7x7 stride-2 conv, then max-pool) shrinks a 32x32 image
+    to 8x8 before the first residual block; the usual CIFAR adaptation is a 3x3
+    stride-1 conv and no pool. 11.2M parameters against SmallCNN's 0.14M, so
+    each gradient sync moves about 45 MB instead of 0.56 MB.
+    """
+    from torchvision.models import resnet18
+
+    model = resnet18(num_classes=num_classes)
+    model.conv1 = nn.Conv2d(in_channels, 64, 3, stride=1, padding=1, bias=False)
+    model.maxpool = nn.Identity()  # type: ignore[assignment]
+    return model
+
+
+def _average_parameters(model: nn.Module, world_size: int) -> None:
+    """Local SGD's synchronization: every rank ends with the mean weights.
+
+    Parameters and buffers (BatchNorm running statistics) are averaged, so the
+    ranks hold one identical model afterwards -- what plain DDP gives at every
+    step, paid for only once per ``SYNC_EVERY`` steps.
+    """
+    with torch.no_grad():
+        for tensor in list(model.parameters()) + list(model.buffers()):
+            if tensor.dtype.is_floating_point:
+                dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+                tensor /= world_size
+
+
 class SmallCNN(nn.Module):
     """A compact, dataset-agnostic CNN sized for CIFAR-10/MNIST on a 4GB card.
 
@@ -1102,6 +1132,11 @@ def main() -> None:
     epochs = int(_require_env("EPOCHS"))
     batch_size = int(_require_env("BATCH_SIZE"))
     learning_rate = float(_require_env("LEARNING_RATE"))
+    # Local SGD (1 = plain DDP, gradients all-reduced every step): each rank
+    # takes this many optimizer steps on its own shard, then the ranks average
+    # their weights. On a home link a full sync can cost several times a
+    # step's compute; this divides that cost by SYNC_EVERY.
+    sync_every = int(os.environ.get("SYNC_EVERY", "1"))
     job_id = os.environ.get("JOB_ID", "unknown")
     lease_id = os.environ.get("LEASE_ID", "unknown")
     lease_epoch = os.environ.get("LEASE_EPOCH", "unknown")
@@ -1119,6 +1154,8 @@ def main() -> None:
         raise RuntimeError(f"BATCH_SIZE must be >= 1, got {batch_size}")
     if learning_rate <= 0:
         raise RuntimeError(f"LEARNING_RATE must be > 0, got {learning_rate}")
+    if sync_every < 1:
+        raise RuntimeError(f"SYNC_EVERY must be >= 1, got {sync_every}")
 
     dist_config = _read_dist_config()
     device = _select_device(dist_config)
@@ -1130,10 +1167,10 @@ def main() -> None:
         else:
             _log(message)
 
-    if model_name.lower() not in ("small_cnn", "cnn"):
+    if model_name.lower() not in ("small_cnn", "cnn", "resnet18"):
         log(
-            f"MODEL='{model_name}' is not implemented; only 'small_cnn' exists — "
-            f"using SmallCNN honestly rather than fabricating another architecture."
+            f"MODEL='{model_name}' is not implemented; 'small_cnn' and 'resnet18' "
+            f"exist — using SmallCNN honestly rather than fabricating another architecture."
         )
 
     log(
@@ -1254,7 +1291,12 @@ def main() -> None:
             pin_memory=pin_memory,
         )
 
-    base_model = SmallCNN(in_channels=in_channels, num_classes=num_classes).to(device)
+    if model_name.lower() == "resnet18":
+        base_model = resnet18_small(in_channels, num_classes).to(device)
+    else:
+        base_model = SmallCNN(in_channels=in_channels, num_classes=num_classes).to(device)
+    log(f"model: {type(base_model).__name__} "
+        f"({sum(p.numel() for p in base_model.parameters()):,} parameters)")
     optimizer = torch.optim.Adam(base_model.parameters(), lr=learning_rate)
     criterion = nn.CrossEntropyLoss()
 
@@ -1313,7 +1355,8 @@ def main() -> None:
         if dist_config.is_main:
             print(json.dumps({"type": "sync_profile", **profile,
                               "backend": dist_config.backend,
-                              "world_size": dist_config.world_size}), flush=True)
+                              "world_size": dist_config.world_size,
+                              "sync_every": sync_every}), flush=True)
     else:
         model = base_model
 
@@ -1388,15 +1431,21 @@ def main() -> None:
         running_loss_t = torch.zeros((), device=device)
         n_batches = 0
         epoch_t0 = time.monotonic()
+        local_sgd = dist_config.distributed and sync_every > 1
         for images, labels in train_loader:
             images = images.to(device, non_blocking=pin_memory)
             labels = labels.to(device, non_blocking=pin_memory)
 
             optimizer.zero_grad()
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-            loss.backward()  # DDP hooks all-reduce gradients here across ranks
+            # Plain DDP all-reduces gradients in backward; local SGD skips that
+            # (no_sync) and averages the weights every sync_every steps instead.
+            with model.no_sync() if local_sgd else contextlib.nullcontext():  # type: ignore[operator]
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+                loss.backward()
             optimizer.step()
+            if local_sgd and (global_step + 1) % sync_every == 0:
+                _average_parameters(base_model, dist_config.world_size)
 
             running_loss_t += loss.detach()
             n_batches += 1
@@ -1407,6 +1456,10 @@ def main() -> None:
             if checkpoint_every_n_steps > 0 and global_step % checkpoint_every_n_steps == 0:
                 save_checkpoint_now(epoch_to_resume=epoch, loss=loss.item())
 
+        if local_sgd:
+            # Ranks may stop mid-interval; every epoch ends on one shared model,
+            # so evaluation and checkpoints see the cohort's model, not rank 0's.
+            _average_parameters(base_model, dist_config.world_size)
         mean_loss = _epoch_mean_loss(running_loss_t.item(), n_batches, dist_config, device)
 
         # Only rank 0 evaluates + reports (the model is identical on every rank
@@ -1416,11 +1469,18 @@ def main() -> None:
             correct, total, test_accuracy = _evaluate_accuracy(
                 eval_model, test_loader, device, pin_memory=pin_memory
             )
+            epoch_seconds = time.monotonic() - epoch_t0
             log(
-                f"epoch {epoch}/{epochs} done in {time.monotonic() - epoch_t0:.1f}s: "
+                f"epoch {epoch}/{epochs} done in {epoch_seconds:.1f}s: "
                 f"train_loss={mean_loss:.4f} test_accuracy={test_accuracy:.4f} "
                 f"({correct}/{total}) global_step={global_step}"
             )
+            # Machine-readable for the experiment runner: wall time per epoch is
+            # what "faster with more machines" is measured in.
+            print(json.dumps({"type": "epoch_time", "epoch": epoch,
+                              "seconds": round(epoch_seconds, 3),
+                              "world_size": dist_config.world_size,
+                              "sync_every": sync_every}), flush=True)
             _emit_metric(
                 epoch=epoch, loss=mean_loss, test_accuracy=test_accuracy, step=global_step
             )

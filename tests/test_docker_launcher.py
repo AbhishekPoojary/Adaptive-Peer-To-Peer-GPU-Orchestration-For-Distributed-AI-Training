@@ -141,6 +141,7 @@ def test_environment_carries_the_job_spec_and_lease_identity() -> None:
         "EPOCHS": "5",
         "BATCH_SIZE": "128",
         "LEARNING_RATE": "0.001",
+        "SYNC_EVERY": "1",
         "JOB_ID": "job-1",
         "LEASE_ID": "lease-1",
         "LEASE_EPOCH": "3",
