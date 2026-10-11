@@ -288,6 +288,11 @@ def _select_device(dist_config: DistConfig) -> torch.device:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if dist_config.backend == "nccl" and torch.cuda.is_available():
         return torch.device(f"cuda:{dist_config.local_rank}")
+    # Ranks on separate machines (each with its own GPU) over gloo: gloo
+    # all-reduces CUDA tensors too, through host memory. The agent sets this
+    # only for a cohort across machines.
+    if os.environ.get("DIST_USE_GPU") == "1" and torch.cuda.is_available():
+        return torch.device(f"cuda:{dist_config.local_rank}")
     return torch.device("cpu")
 
 

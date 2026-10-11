@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.api.deps import (
     assert_node_scope,
+    client_key,
     enforce_rate_limit,
     get_node_auth_limiter,
     get_settings_dep,
@@ -116,6 +117,7 @@ async def register(
 async def heartbeat(
     node_id: uuid.UUID,
     body: HeartbeatRequest,
+    request: Request,
     node: Node = Depends(require_node_auth),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings_dep),
@@ -123,7 +125,11 @@ async def heartbeat(
     """Record a heartbeat for the authenticated, self-scoped node."""
     assert_node_scope(node_id, node)
     result = await record_heartbeat(
-        session, node=node, payload=body, settings=settings
+        session,
+        node=node,
+        payload=body,
+        settings=settings,
+        public_address=client_key(request),
     )
     await session.commit()
     return HeartbeatResponse(

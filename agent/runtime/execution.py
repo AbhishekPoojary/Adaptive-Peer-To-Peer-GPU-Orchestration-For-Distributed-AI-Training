@@ -43,6 +43,7 @@ from agent.runtime.subprocess_launcher import (
     launch_trainer_process,
     parse_memory_limit,
 )
+from agent.telemetry.network import local_network_address
 
 logger = logging.getLogger("agent.runtime.execution")
 
@@ -69,15 +70,16 @@ async def _launch_unsandboxed(
     passes to Docker — so the trainer is configured identically on both
     backends and they cannot drift.
     """
-    if rendezvous is not None and rendezvous.world_size > 1:
-        # A multi-rank cohort needs the c10d rendezvous network the container
-        # path builds. Refused rather than silently degraded to one rank, which
-        # would report a world_size=N result that was never distributed.
-        raise DockerLaunchError(
-            "multi-rank (world_size > 1) jobs require the container path; this "
-            "node is running unsandboxed and can only take single-rank work"
-        )
     environment: dict[str, str] = dict(run_kwargs["environment"])
+    if rendezvous is not None and rendezvous.world_size > 1:
+        if not rendezvous.host_address:
+            # Refused rather than silently degraded to one rank, which would
+            # report a world_size=N result that was never distributed.
+            raise DockerLaunchError(
+                "multi-rank job without a reachable rendezvous address: the "
+                "orchestrator does not know rank 0's LAN address yet"
+            )
+        environment.update(multi_machine_environment(rendezvous))
     try:
         return await asyncio.to_thread(
             launch_trainer_process,
@@ -89,6 +91,34 @@ async def _launch_unsandboxed(
         raise DockerLaunchError(str(exc)) from exc
     except Exception as exc:
         raise DockerLaunchError(f"could not start the trainer process: {exc}") from exc
+
+
+def multi_machine_environment(rendezvous: RendezvousSpec) -> dict[str, str]:
+    """What torch.distributed needs to join a cohort across machines directly.
+
+    Rank 0 hosts the rendezvous store on its LAN address; every rank connects
+    there (``env://``). ``USE_LIBUV=0`` because Windows builds of torch cannot
+    create the store otherwise. ``GLOO_SOCKET_IFNAME`` pins gloo to the network
+    the cohort shares: a laptop also has virtual adapters (Hyper-V, WSL, VPN)
+    whose addresses the other machine cannot reach. ``DIST_USE_GPU`` lets each
+    rank train on its own GPU -- these are separate machines, unlike the
+    single-host container cohort, where two ranks would share one GPU.
+    """
+    port = rendezvous.endpoint.rsplit(":", 1)[-1]
+    _address, interface = local_network_address(f"http://{rendezvous.host_address}")
+    environment = {
+        "RANK": str(rendezvous.rank),
+        "WORLD_SIZE": str(rendezvous.world_size),
+        "LOCAL_RANK": "0",
+        "MASTER_ADDR": str(rendezvous.host_address),
+        "MASTER_PORT": port,
+        "DIST_BACKEND": rendezvous.backend,
+        "USE_LIBUV": "0",
+        "DIST_USE_GPU": "1",
+    }
+    if interface:
+        environment["GLOO_SOCKET_IFNAME"] = interface
+    return environment
 
 
 @dataclass

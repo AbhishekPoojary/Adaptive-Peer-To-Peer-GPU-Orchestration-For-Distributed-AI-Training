@@ -109,6 +109,8 @@ class RendezvousSpec:
     network: str
     host_alias: str
     max_restarts: int
+    #: Rank 0's LAN address, for ranks run without Docker across machines.
+    host_address: str | None = None
 
 
 @runtime_checkable

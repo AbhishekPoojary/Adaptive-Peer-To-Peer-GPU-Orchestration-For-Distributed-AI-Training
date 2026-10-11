@@ -107,7 +107,12 @@ async def _previous_rtt_ewma(session: AsyncSession, node_id: object) -> float | 
 
 
 async def record_heartbeat(
-    session: AsyncSession, *, node: Node, payload: HeartbeatRequest, settings: Settings
+    session: AsyncSession,
+    *,
+    node: Node,
+    payload: HeartbeatRequest,
+    settings: Settings,
+    public_address: str | None = None,
 ) -> HeartbeatResult:
     """Record a heartbeat: insert a telemetry sample, update RTT EWMA, mark the
     node ONLINE and stamp last_heartbeat_at. Caller commits.
@@ -118,6 +123,10 @@ async def record_heartbeat(
     """
     received_at = datetime.now(UTC)
     prev_ewma = await _previous_rtt_ewma(session, node.id)
+    if payload.lan_address is not None:
+        node.lan_address = str(payload.lan_address)
+    if public_address is not None:
+        node.public_address = public_address
 
     if payload.rtt_ms is None:
         new_ewma = prev_ewma

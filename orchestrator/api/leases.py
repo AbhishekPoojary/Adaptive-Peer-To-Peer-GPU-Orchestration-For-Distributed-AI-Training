@@ -177,7 +177,14 @@ async def claim_lease(
 
     job = await session.get(Job, lease.job_id)
     assert job is not None  # the lease was just activated against it
-    rendezvous = rendezvous_assignment(job, lease, settings=settings)
+    host = (
+        await session.get(Node, job.rendezvous_node_id)
+        if job.rendezvous_node_id is not None
+        else None
+    )
+    rendezvous = rendezvous_assignment(
+        job, lease, settings=settings, host_address=host.lan_address if host else None
+    )
     job_spec = dict(job.spec)
     await _attach_dataset_fetch(job_spec, session=session, settings=settings)
     checkpoint_token = create_checkpoint_jwt(

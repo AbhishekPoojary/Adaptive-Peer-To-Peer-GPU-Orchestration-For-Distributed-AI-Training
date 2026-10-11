@@ -57,7 +57,7 @@ def rendezvous_wiring(job: Job) -> tuple[str, str]:
 
 
 def rendezvous_assignment(
-    job: Job, lease: Lease, *, settings: Settings
+    job: Job, lease: Lease, *, settings: Settings, host_address: str | None = None
 ) -> RendezvousAssignment:
     """Build the rank/world_size/endpoint an agent needs to launch a claimed
     lease (M5). Pure over the job + lease + config."""
@@ -73,6 +73,7 @@ def rendezvous_assignment(
         network=network if world_size > 1 else "",
         host_alias=host_alias if world_size > 1 else "",
         max_restarts=settings.torchrun_max_restarts,
+        host_address=host_address if world_size > 1 else None,
     )
 
 

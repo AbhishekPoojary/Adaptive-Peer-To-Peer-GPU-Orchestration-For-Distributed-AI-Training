@@ -108,6 +108,12 @@ class Node(Base):
     # that enrolled it. Lets a lender see and remove their own machines. NULL
     # for nodes enrolled before this was recorded.
     enrolled_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Where other machines can reach this one (from its heartbeats): its address
+    # on its own LAN, and the address it reaches the orchestrator from. Machines
+    # sharing a public address sit behind one router, so a multi-machine job is
+    # only placed on such a group, and rank 0's LAN address is the rendezvous.
+    lan_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    public_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_assigned_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

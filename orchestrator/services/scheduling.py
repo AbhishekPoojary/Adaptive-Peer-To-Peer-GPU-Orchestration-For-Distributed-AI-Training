@@ -66,6 +66,30 @@ from orchestrator.services.jobs import transition_job
 
 logger = logging.getLogger("orchestrator.scheduling")
 
+
+def _same_network(ordered: list[NodeSnapshot], n: int) -> list[NodeSnapshot] | None:
+    """The first ``n`` of ``ordered`` that can reach each other, best first.
+
+    One machine reaches itself. Several must sit behind one router -- the same
+    public address -- since a peer at another site cannot accept connections
+    from outside its own network. So candidates are walked in the scheduler's
+    order and grouped by public address; the first group to reach ``n`` wins,
+    keeping the scheduler's preference within it. None if no group is big
+    enough, and the job waits.
+    """
+    if n <= 1:
+        return ordered[:n] if len(ordered) >= n else None
+    groups: dict[str, list[NodeSnapshot]] = {}
+    for snapshot in ordered:
+        address = snapshot.node.public_address
+        if address is None:
+            continue  # never reported where it is: cannot be paired
+        group = groups.setdefault(address, [])
+        group.append(snapshot)
+        if len(group) == n:
+            return group
+    return None
+
 # Job states that are awaiting (re)placement by a scheduler pass.
 _PLACEABLE = (JobState.QUEUED, JobState.REASSIGNED)
 
@@ -317,10 +341,14 @@ async def place_job_cohort(
             load_significant_spread=settings.scheduler_load_significant_spread,
             latency_significant_spread_ms=settings.scheduler_latency_significant_spread_ms,
         )
-        selected = [sc.snapshot for sc in select_top_n(scored, world_size)]
+        ordered = [sc.snapshot for sc in select_top_n(scored, len(scored))]
     else:
         scheduler = get_scheduler(job.scheduler_name)
-        selected = scheduler.rank_candidates(job, candidates)[:world_size]
+        ordered = scheduler.rank_candidates(job, candidates)
+    picked = _same_network(ordered, world_size)
+    if picked is None:
+        return None
+    selected = picked
 
     # Rendezvous host: the highest-reliability cohort member (ADR-005). Ties
     # break toward the node the scheduler itself ranked higher (smaller index).

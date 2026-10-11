@@ -63,6 +63,7 @@ from agent.runtime.docker_launcher import (
 )
 from agent.runtime.execution import DockerLaunchError, ExecutionResult, run_lease_execution
 from agent.telemetry.latency import RttEwma, Stopwatch
+from agent.telemetry.network import local_network_address
 from agent.telemetry.nvml import GpuInventoryEntry, GpuTelemetryEntry, collect_gpu_telemetry
 from agent.telemetry.nvml import collect_gpu_inventory as _collect_gpu_inventory
 from agent.telemetry.system import collect_host_inventory, collect_system_telemetry
@@ -193,7 +194,9 @@ def build_hardware_inventory() -> dict[str, Any]:
     }
 
 
-def build_heartbeat_payload(*, rtt_ms: float | None) -> dict[str, Any]:
+def build_heartbeat_payload(
+    *, rtt_ms: float | None, lan_address: str | None = None
+) -> dict[str, Any]:
     """Real CPU/RAM (+ GPU-or-null) telemetry for POST /nodes/{id}/heartbeat."""
     system = collect_system_telemetry()
     gpu_tel = collect_gpu_telemetry()
@@ -208,6 +211,7 @@ def build_heartbeat_payload(*, rtt_ms: float | None) -> dict[str, Any]:
         "ram_total_bytes": system.ram_total_bytes,
         "gpu": gpu_payload,
         "rtt_ms": rtt_ms,
+        "lan_address": lan_address,
     }
 
 
@@ -322,7 +326,9 @@ async def send_heartbeat(
     rtt_ms: float | None,
 ) -> tuple[dict[str, Any], float]:
     """Send one heartbeat. Returns (response body, measured RTT in ms)."""
-    payload = build_heartbeat_payload(rtt_ms=rtt_ms)
+    payload = build_heartbeat_payload(
+        rtt_ms=rtt_ms, lan_address=local_network_address(orchestrator)[0]
+    )
     with Stopwatch() as sw:
         resp = await client.post(
             f"{orchestrator}/nodes/{node_id}/heartbeat",
@@ -412,6 +418,7 @@ def _rendezvous_spec(rendezvous: dict[str, Any] | None) -> RendezvousSpec | None
         network=str(rendezvous["network"]),
         host_alias=str(rendezvous["host_alias"]),
         max_restarts=int(rendezvous["max_restarts"]),
+        host_address=rendezvous.get("host_address"),
     )
 
 
@@ -587,7 +594,15 @@ async def _service_lease(
                 has_gpu=has_gpu,
                 launch_config=launch_config,
                 rendezvous=rendezvous,
-                unsandboxed=docker_client is None,
+                # Containers only reach each other on one host; a cohort across
+                # machines runs its ranks as processes, which can (ADR-005).
+                unsandboxed=docker_client is None
+                or (
+                    allow_unsandboxed
+                    and rendezvous is not None
+                    and rendezvous.world_size > 1
+                    and rendezvous.host_address is not None
+                ),
                 launched=launched,
                 checkpoint_token=claimed.get("checkpoint_token"),
             )

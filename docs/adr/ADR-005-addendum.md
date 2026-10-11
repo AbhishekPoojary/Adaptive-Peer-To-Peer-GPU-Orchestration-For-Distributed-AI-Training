@@ -60,3 +60,29 @@ protocol, and the rendezvous-host-is-highest-reliability rule are identical.
 - NCCL vs. gloo is orthogonal to reachability: gloo is used for M5's mixed/CPU
   verification (ADR-005), and the backend choice does not change how ranks find
   each other.
+
+## Addendum: one job across machines without Docker
+
+The container cohort only works on one Docker host: its ranks meet on a
+user-defined bridge network. Peers without Docker can now run one job across
+several machines on the same network:
+
+- Agents report their LAN address with each heartbeat (`lan_address`, parsed
+  as an IP, since it is handed to other peers as `MASTER_ADDR`); the server
+  records the address each heartbeat arrives from (`public_address`).
+  Migration `0017_node_addresses`.
+- A cohort is only formed from machines sharing a public address -- behind one
+  router -- taking the scheduler's own order within that group
+  (`services.scheduling._same_network`). A machine at another site cannot
+  accept connections from outside its network, so a cohort spanning sites
+  would hang at rendezvous.
+- The claim's rendezvous carries rank 0's LAN address (`host_address`). An
+  agent allowed to run unsandboxed launches its rank as a process with
+  `env://` initialisation: `MASTER_ADDR`, `USE_LIBUV=0` (Windows torch cannot
+  create the store otherwise), `GLOO_SOCKET_IFNAME` pinned to the shared
+  network's adapter, and `DIST_USE_GPU=1` so each machine trains on its own GPU
+  over gloo.
+
+Verified: two real agents, paired by the scheduler, trained a world_size=2 job
+over the machine's Wi-Fi address to 97.5%. Not yet verified between two
+physical machines; Windows Firewall must allow Python on the rank-0 machine.

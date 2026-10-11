@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, IPvAnyAddress, model_validator
 
 _FORBID = ConfigDict(extra="forbid")
 
@@ -103,6 +103,9 @@ class HeartbeatRequest(BaseModel):
     ram_total_bytes: int = Field(ge=0)
     gpu: list[GpuTelemetry] | None = None
     rtt_ms: float | None = Field(default=None, ge=0)
+    #: The agent's address on its own network, for multi-machine jobs. Parsed
+    #: as an IP address: it is handed to other peers as MASTER_ADDR.
+    lan_address: IPvAnyAddress | None = None
 
     @model_validator(mode="after")
     def _ram_used_within_total(self) -> HeartbeatRequest:

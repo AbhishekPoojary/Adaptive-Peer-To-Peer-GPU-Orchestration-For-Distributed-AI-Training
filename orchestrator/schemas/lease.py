@@ -46,6 +46,10 @@ class RendezvousAssignment(BaseModel):
     host_alias: str
     # torchrun --max-restarts (bounded elastic re-formation, ADR-005).
     max_restarts: int
+    # Rank 0's address on the cohort's shared LAN, for ranks running without
+    # Docker on different machines: they connect to it directly
+    # (MASTER_ADDR). None when it is not known.
+    host_address: str | None = None
 
 
 class ClaimResponse(BaseModel):
