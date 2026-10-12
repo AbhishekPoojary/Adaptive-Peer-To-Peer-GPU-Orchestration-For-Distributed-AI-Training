@@ -234,13 +234,21 @@ def launch_trainer_process(
     # a single dump at the end.
     env["PYTHONUNBUFFERED"] = "1"
 
+    # Below the agent's priority: CPU training takes every core, and on lab PCs
+    # it starved the agent's heartbeats for 7-17 s, long enough for the failure
+    # detector to declare a healthy node dead. The trainer still gets all the
+    # idle CPU; the agent just always gets its turn first.
+    argv = [sys.executable, str(script)]
     logger.info("launching trainer subprocess: %s %s", sys.executable, script)
-    process = subprocess.Popen(
-        [sys.executable, str(script)],
-        cwd=str(script.parent),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        bufsize=0,
-    )
+    if sys.platform == "win32":
+        process = subprocess.Popen(
+            argv, cwd=str(script.parent), env=env, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, bufsize=0,
+            creationflags=subprocess.BELOW_NORMAL_PRIORITY_CLASS,
+        )
+    else:
+        process = subprocess.Popen(
+            argv, cwd=str(script.parent), env=env, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, bufsize=0, preexec_fn=lambda: os.nice(10),
+        )
     return TrainerProcess(process, memory_limit_bytes=memory_limit_bytes)

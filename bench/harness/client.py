@@ -53,7 +53,20 @@ class BenchClient:
         await self._client.aclose()
 
     async def _get(self, path: str) -> Any:
-        resp = await self._client.get(f"{self.base_url}{path}", headers=self._headers)
+        # Reads are retried: a long run against a small server sees the odd 502
+        # or dropped connection, and one should not end hours of measurement.
+        for attempt in range(5):
+            try:
+                resp = await self._client.get(
+                    f"{self.base_url}{path}", headers=self._headers
+                )
+            except httpx.TransportError:
+                if attempt == 4:
+                    raise
+            else:
+                if resp.status_code < 500 or attempt == 4:
+                    break
+            await asyncio.sleep(2**attempt)
         if resp.status_code != 200:
             raise OrchestratorError(f"GET {path} -> {resp.status_code}: {resp.text}")
         return resp.json()
