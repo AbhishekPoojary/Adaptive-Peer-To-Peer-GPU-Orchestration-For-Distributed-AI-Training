@@ -1,0 +1,66 @@
+{
+ "kind": "scaling",
+ "label": "learn2",
+ "machines": 2,
+ "fleet": [
+  {
+   "name": "node-02",
+   "gpus": [],
+   "cpu": "Intel64 Family 6 Model 154 Stepping 4, GenuineIntel",
+   "cores": 12,
+   "enrolled_by": null
+  },
+  {
+   "name": "node-03",
+   "gpus": [
+    "NVIDIA GeForce RTX 3050 Laptop GPU"
+   ],
+   "cpu": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
+   "cores": 16,
+   "enrolled_by": "panchan330"
+  }
+ ],
+ "spec": {
+  "dataset": "cifar10",
+  "model": "small_cnn",
+  "epochs": 1,
+  "batch_size": 128,
+  "learning_rate": 0.001,
+  "world_size": 1,
+  "sync_every": 1
+ },
+ "scheduler": "round_robin",
+ "jobs": [
+  {
+   "id": "dfe81008-4ce9-43ae-ad91-a55e2ed12379",
+   "state": "COMPLETED",
+   "scheduler": "round_robin",
+   "nodes": [
+    "node-02"
+   ],
+   "attempts": 1,
+   "wait_s": 0.4281120300292969,
+   "jct_s": 107.9193160533905,
+   "submitted": 1791801839.250537,
+   "finished": 1791801947.169853,
+   "accuracy": 0.5587
+  },
+  {
+   "id": "a243e5bf-80c3-464f-9b1b-cf94d2b6baf9",
+   "state": "COMPLETED",
+   "scheduler": "round_robin",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 0.8213250637054443,
+   "jct_s": 18.905417919158936,
+   "submitted": 1791801839.453733,
+   "finished": 1791801858.359151,
+   "accuracy": 0.5187
+  }
+ ],
+ "completed": 2,
+ "makespan_s": 107.9193160533905,
+ "jobs_per_hour": 66.71650880772792
+}

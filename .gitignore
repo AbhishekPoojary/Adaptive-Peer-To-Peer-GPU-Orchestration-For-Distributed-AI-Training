@@ -32,6 +32,7 @@ Thumbs.db
 bench/report/*
 !bench/report/.gitkeep
 !bench/report/*.json
+!bench/report/real/
 
 # Docker
 *.log

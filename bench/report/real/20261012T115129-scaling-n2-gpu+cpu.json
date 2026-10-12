@@ -1,0 +1,206 @@
+{
+ "kind": "scaling",
+ "label": "n2-gpu+cpu",
+ "machines": 2,
+ "fleet": [
+  {
+   "name": "node-02",
+   "gpus": [],
+   "cpu": "Intel64 Family 6 Model 154 Stepping 4, GenuineIntel",
+   "cores": 12,
+   "enrolled_by": null
+  },
+  {
+   "name": "node-03",
+   "gpus": [
+    "NVIDIA GeForce RTX 3050 Laptop GPU"
+   ],
+   "cpu": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
+   "cores": 16,
+   "enrolled_by": "panchan330"
+  }
+ ],
+ "spec": {
+  "dataset": "cifar10",
+  "model": "small_cnn",
+  "epochs": 1,
+  "batch_size": 128,
+  "learning_rate": 0.001,
+  "world_size": 1,
+  "sync_every": 1
+ },
+ "scheduler": "adaptive",
+ "jobs": [
+  {
+   "id": "2a70f6d7-1b4d-4794-80cd-5b651f1bbb2a",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 0.7067828178405762,
+   "jct_s": 19.491863012313843,
+   "submitted": 1791805542.684148,
+   "finished": 1791805562.176011,
+   "accuracy": 0.5671
+  },
+  {
+   "id": "87821e07-00e3-45e4-b1cb-1fea0613a8b9",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-02"
+   ],
+   "attempts": 1,
+   "wait_s": 0.5986640453338623,
+   "jct_s": 112.54396390914917,
+   "submitted": 1791805542.803082,
+   "finished": 1791805655.347046,
+   "accuracy": 0.5542
+  },
+  {
+   "id": "dd7e76e6-6e7e-4403-85c9-eecf4c6f30aa",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 20.520607948303223,
+   "jct_s": 39.09907388687134,
+   "submitted": 1791805542.911246,
+   "finished": 1791805582.01032,
+   "accuracy": 0.5533
+  },
+  {
+   "id": "2c780b15-81af-4f2a-bf94-2e7d638664c5",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 41.251609802246094,
+   "jct_s": 60.47516584396362,
+   "submitted": 1791805543.01937,
+   "finished": 1791805603.494536,
+   "accuracy": 0.5356
+  },
+  {
+   "id": "e89d7236-9c05-4079-b02d-59613b1d552d",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 61.56750297546387,
+   "jct_s": 80.36532092094421,
+   "submitted": 1791805543.170288,
+   "finished": 1791805623.535609,
+   "accuracy": 0.5758
+  },
+  {
+   "id": "d5b2cb40-8247-49d0-9f44-50e3616013e2",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 83.97304511070251,
+   "jct_s": 115.72271704673767,
+   "submitted": 1791805543.278935,
+   "finished": 1791805659.001652,
+   "accuracy": 0.5759
+  },
+  {
+   "id": "1547c472-f3de-44a5-b131-0b8c736b44c9",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-02"
+   ],
+   "attempts": 1,
+   "wait_s": 113.19416213035583,
+   "jct_s": 228.01889610290527,
+   "submitted": 1791805543.354894,
+   "finished": 1791805771.37379,
+   "accuracy": 0.5727
+  },
+  {
+   "id": "79d37aad-022e-49f5-91d8-43c89921d2cb",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 116.62558007240295,
+   "jct_s": 148.21730995178223,
+   "submitted": 1791805543.439359,
+   "finished": 1791805691.656669,
+   "accuracy": 0.4991
+  },
+  {
+   "id": "6bf1f1ee-c0bd-4534-b882-6b2c8c452bc7",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 149.2866668701172,
+   "jct_s": 179.75386595726013,
+   "submitted": 1791805543.510323,
+   "finished": 1791805723.264189,
+   "accuracy": 0.4765
+  },
+  {
+   "id": "7724a6d5-70a8-4fc2-bd16-49c62ca153b5",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 183.20321798324585,
+   "jct_s": 214.19230198860168,
+   "submitted": 1791805543.590204,
+   "finished": 1791805757.782506,
+   "accuracy": 0.5732
+  },
+  {
+   "id": "fa32b251-a64e-453a-9526-8460c20f123e",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 215.48770403862,
+   "jct_s": 247.49565196037292,
+   "submitted": 1791805543.661665,
+   "finished": 1791805791.157317,
+   "accuracy": 0.5765
+  },
+  {
+   "id": "e84492ed-fe4f-43b0-9891-74950adc6b4c",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-02"
+   ],
+   "attempts": 1,
+   "wait_s": 231.28620791435242,
+   "jct_s": 338.9425439834595,
+   "submitted": 1791805543.738677,
+   "finished": 1791805882.681221,
+   "accuracy": 0.501
+  }
+ ],
+ "completed": 12,
+ "makespan_s": 339.99707293510437,
+ "jobs_per_hour": 127.05991739007008
+}

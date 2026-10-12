@@ -1,0 +1,39 @@
+{
+ "kind": "recovery",
+ "label": "trial",
+ "spec": {
+  "dataset": "cifar10",
+  "model": "small_cnn",
+  "epochs": 8,
+  "batch_size": 128,
+  "learning_rate": 0.001,
+  "world_size": 1
+ },
+ "method": "agent and trainer container killed on the victim; times from the orchestrator's records",
+ "trials": [
+  {
+   "rep": 0,
+   "victim": "node-03",
+   "survivor": "node-02",
+   "killed_at": 1791804877.6857884,
+   "detect_s": 15.57741665840149,
+   "restart_s": 17.57443070411682,
+   "resumed_s": 20.460972547531128,
+   "resumed_from_step": 900,
+   "detail": "node-03 stopped responding (\u03c6-accrual suspicion 3.0 \u2265 3.0 after 14.0s of silence (mean interval 1.72s, std 1.36s, acceptable pause 8.0s)); its lease was torn down and the job requeued for reassignment.",
+   "id": "9c8de5b8-4ebe-4f28-84c8-62d9e9819d83",
+   "state": "RUNNING",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-02",
+    "node-03"
+   ],
+   "attempts": 2,
+   "wait_s": 0.44571900367736816,
+   "jct_s": null,
+   "submitted": 1791804851.158828,
+   "finished": null,
+   "accuracy": null
+  }
+ ]
+}

@@ -1,0 +1,94 @@
+{
+ "kind": "scaling",
+ "label": "learn",
+ "machines": 2,
+ "fleet": [
+  {
+   "name": "node-02",
+   "gpus": [],
+   "cpu": "Intel64 Family 6 Model 154 Stepping 4, GenuineIntel",
+   "cores": 12,
+   "enrolled_by": null
+  },
+  {
+   "name": "node-03",
+   "gpus": [
+    "NVIDIA GeForce RTX 3050 Laptop GPU"
+   ],
+   "cpu": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
+   "cores": 16,
+   "enrolled_by": "panchan330"
+  }
+ ],
+ "spec": {
+  "dataset": "cifar10",
+  "model": "small_cnn",
+  "epochs": 1,
+  "batch_size": 128,
+  "learning_rate": 0.001,
+  "world_size": 1,
+  "sync_every": 1
+ },
+ "scheduler": "round_robin",
+ "jobs": [
+  {
+   "id": "4ff0aadf-1d96-4d0a-82e7-47c5c469f40a",
+   "state": "COMPLETED",
+   "scheduler": "round_robin",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 1.1496710777282715,
+   "jct_s": 28.46557307243347,
+   "submitted": 1791801477.879767,
+   "finished": 1791801506.34534,
+   "accuracy": 0.5017
+  },
+  {
+   "id": "0fc15e0b-be74-4786-a2f0-66336af31a8a",
+   "state": "COMPLETED",
+   "scheduler": "round_robin",
+   "nodes": [
+    "node-02"
+   ],
+   "attempts": 1,
+   "wait_s": 0.5342221260070801,
+   "jct_s": 115.93819308280945,
+   "submitted": 1791801478.237856,
+   "finished": 1791801594.176049,
+   "accuracy": 0.5096
+  },
+  {
+   "id": "4d5c9350-caca-4c44-b77f-0e2efe34e49b",
+   "state": "COMPLETED",
+   "scheduler": "round_robin",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 31.344666004180908,
+   "jct_s": 55.70805501937866,
+   "submitted": 1791801478.390796,
+   "finished": 1791801534.098851,
+   "accuracy": 0.5753
+  },
+  {
+   "id": "3a72aced-f4b0-4a04-b4f7-986f00e5f266",
+   "state": "COMPLETED",
+   "scheduler": "round_robin",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 56.580666065216064,
+   "jct_s": 74.81296706199646,
+   "submitted": 1791801478.591429,
+   "finished": 1791801553.404396,
+   "accuracy": 0.5104
+  }
+ ],
+ "completed": 4,
+ "makespan_s": 116.29628205299377,
+ "jobs_per_hour": 123.82167121592265
+}
