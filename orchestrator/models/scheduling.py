@@ -65,6 +65,8 @@ class SchedulingDecision(Base):
     alpha: Mapped[float] = mapped_column(Float, nullable=False)
     beta: Mapped[float] = mapped_column(Float, nullable=False)
     gamma: Mapped[float] = mapped_column(Float, nullable=False)
+    # NULL on decisions made before the speed term existed.
+    delta: Mapped[float | None] = mapped_column(Float, nullable=True)
     reliability_halflife_seconds: Mapped[float] = mapped_column(Float, nullable=False)
     wilson_z: Mapped[float] = mapped_column(Float, nullable=False)
 
@@ -116,6 +118,8 @@ class SchedulingDecisionCandidate(Base):
     # Raw inputs behind the normalized scores. NULL = genuinely unknown.
     raw_util: Mapped[float | None] = mapped_column(Float, nullable=True)
     raw_rtt_ewma_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    c_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    raw_samples_per_second: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Decay-weighted pseudo-counts (prior + decayed lease outcomes) feeding R_i.
     weighted_success: Mapped[float] = mapped_column(Float, nullable=False)
     weighted_failure: Mapped[float] = mapped_column(Float, nullable=False)

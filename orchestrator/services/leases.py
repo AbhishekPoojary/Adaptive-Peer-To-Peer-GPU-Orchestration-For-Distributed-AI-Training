@@ -371,6 +371,8 @@ async def complete_lease(
     now = datetime.now(UTC)
     lease.state = LeaseState.COMPLETED
     lease.released_at = now
+    if result is not None and result.get("samples_per_second"):
+        lease.samples_per_second = float(result["samples_per_second"])
     # Only rank 0 (the rendezvous host) carries the real training result; a
     # rank>0 agent trains silently and reports an all-null payload. Populate
     # job.result from the rank that actually measured metrics, and never clobber

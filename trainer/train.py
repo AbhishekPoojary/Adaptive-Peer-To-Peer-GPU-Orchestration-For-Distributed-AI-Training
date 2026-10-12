@@ -1435,6 +1435,7 @@ def main() -> None:
         # in _evaluate_accuracy.
         running_loss_t = torch.zeros((), device=device)
         n_batches = 0
+        n_samples = 0
         epoch_t0 = time.monotonic()
         local_sgd = dist_config.distributed and sync_every > 1
         for images, labels in train_loader:
@@ -1454,6 +1455,7 @@ def main() -> None:
 
             running_loss_t += loss.detach()
             n_batches += 1
+            n_samples += int(labels.shape[0])
             global_step += 1
             # Fine-grained checkpoint every N steps so at most N steps of work is
             # ever lost. Resume position is the current epoch (re-run from its
@@ -1484,6 +1486,7 @@ def main() -> None:
             # what "faster with more machines" is measured in.
             print(json.dumps({"type": "epoch_time", "epoch": epoch,
                               "seconds": round(epoch_seconds, 3),
+                              "samples": n_samples,
                               "world_size": dist_config.world_size,
                               "sync_every": sync_every}), flush=True)
             _emit_metric(

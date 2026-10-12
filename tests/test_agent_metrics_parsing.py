@@ -174,3 +174,13 @@ def test_json_that_is_not_an_object_is_rejected() -> None:
     assert parse_metric_line("[1, 2, 3]") is None
     assert parse_metric_line("42") is None
     assert parse_final_line('"just a string"') is None
+
+
+def test_epoch_time_frames_carry_the_speed_the_scheduler_learns() -> None:
+    from agent.runtime.metrics import parse_epoch_time_line
+
+    line = '{"type": "epoch_time", "epoch": 1, "seconds": 20.0, "samples": 50000, "world_size": 1}'
+    assert parse_epoch_time_line(line) == (20.0, 50000)
+    # Older trainers printed no sample count: no speed, not a guessed one.
+    assert parse_epoch_time_line('{"type": "epoch_time", "epoch": 1, "seconds": 20.0}') is None
+    assert parse_epoch_time_line('{"type": "metric", "epoch": 1}') is None

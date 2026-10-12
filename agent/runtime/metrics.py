@@ -93,6 +93,22 @@ def parse_resume_line(line: str) -> dict[str, Any] | None:
     }
 
 
+def parse_epoch_time_line(line: str) -> tuple[float, int] | None:
+    """``(seconds, samples)`` iff ``line`` is an epoch-time frame with both."""
+    try:
+        data = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("type") != "epoch_time":
+        return None
+    seconds, samples = data.get("seconds"), data.get("samples")
+    if not _is_real_number(seconds) or seconds <= 0:
+        return None
+    if not isinstance(samples, int) or isinstance(samples, bool) or samples <= 0:
+        return None
+    return float(seconds), samples
+
+
 def parse_final_line(line: str) -> dict[str, Any] | None:
     """Return the final-summary dict iff ``line`` is exactly a final frame;
     otherwise ``None``."""

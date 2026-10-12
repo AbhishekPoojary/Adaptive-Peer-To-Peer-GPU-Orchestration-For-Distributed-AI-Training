@@ -219,6 +219,9 @@ class Settings(BaseSettings):
     scheduler_alpha_load: float = 1.0
     scheduler_beta_reliability: float = 1.0
     scheduler_gamma_latency: float = 0.5
+    # Weight of the speed term C_i (how much slower than the fastest candidate a
+    # node trained this kind of job, learned from its completed attempts).
+    scheduler_delta_speed: float = 1.0
     # Smallest difference treated as a full-scale gap when normalizing the load
     # and latency terms. Normalization divides by max(observed spread, this),
     # so a difference smaller than the domain considers meaningful produces a

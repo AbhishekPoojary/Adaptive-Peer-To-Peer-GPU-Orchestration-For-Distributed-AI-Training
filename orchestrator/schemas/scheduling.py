@@ -25,6 +25,8 @@ class SchedulingCandidateOut(BaseModel):
     s_score: float
     raw_util: float | None
     raw_rtt_ewma_ms: float | None
+    c_score: float | None = None
+    raw_samples_per_second: float | None = None
     weighted_success: float
     weighted_failure: float
     was_selected: bool
@@ -40,6 +42,7 @@ class SchedulingDecisionOut(BaseModel):
     alpha: float
     beta: float
     gamma: float
+    delta: float | None = None
     reliability_halflife_seconds: float
     wilson_z: float
     selected_node_id: uuid.UUID | None

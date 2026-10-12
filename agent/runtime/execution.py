@@ -36,7 +36,12 @@ from agent.runtime.docker_launcher import (
     stream_container_logs,
     wait_for_exit,
 )
-from agent.runtime.metrics import parse_final_line, parse_metric_line, parse_resume_line
+from agent.runtime.metrics import (
+    parse_epoch_time_line,
+    parse_final_line,
+    parse_metric_line,
+    parse_resume_line,
+)
 from agent.runtime.stream_client import LeaseStreamClient, http_to_ws_base, stream_url
 from agent.runtime.subprocess_launcher import (
     TrainerSourceNotFoundError,
@@ -130,6 +135,9 @@ class ExecutionResult:
     final_test_accuracy: float | None
     epochs_completed: int
     device: str | None
+    #: Training images per second over the epochs this rank timed: the speed
+    #: the scheduler learns this machine by. None when nothing was timed.
+    samples_per_second: float | None = None
 
     def as_result_payload(self) -> dict[str, Any]:
         """The ``TrainingResultIn``-shaped dict for the terminal REST call."""
@@ -139,6 +147,7 @@ class ExecutionResult:
             "epochs_completed": self.epochs_completed,
             "exit_code": self.exit_code,
             "device": self.device,
+            "samples_per_second": self.samples_per_second,
         }
 
 
@@ -328,6 +337,7 @@ async def _stream_to_completion(
     only the log loop.
     """
     ws_url = stream_url_
+    timed_seconds, timed_samples = 0.0, 0
     async with LeaseStreamClient(url=ws_url, access_token=access_token) as stream:
         while True:
             item = await loop.run_in_executor(None, line_queue.get)
@@ -358,6 +368,11 @@ async def _stream_to_completion(
                     checkpoint_key=resume["checkpoint_key"],
                 )
                 continue
+            timed = parse_epoch_time_line(line)
+            if timed is not None:
+                timed_seconds += timed[0]
+                timed_samples += timed[1]
+                continue
             parsed_final = parse_final_line(line)
             if parsed_final is not None:
                 final = parsed_final
@@ -373,6 +388,9 @@ async def _stream_to_completion(
             final_test_accuracy=final["final_test_accuracy"],
             epochs_completed=final["epochs_completed"],
             device=final["device"],
+            samples_per_second=(
+                round(timed_samples / timed_seconds, 2) if timed_seconds > 0 else None
+            ),
         )
 
     # No final line (e.g. a crash before it printed) — fall back to the last

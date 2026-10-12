@@ -27,6 +27,9 @@ class BenchClient:
     base_url: str
     _client: httpx.AsyncClient
     _token: str
+    # Kept to sign in again: an access token outlives a short scenario but not
+    # an hours-long run on a real fleet.
+    _credentials: dict[str, str] | None = None
 
     @classmethod
     async def login(
@@ -43,7 +46,21 @@ class BenchClient:
                 f"benchmark login failed ({resp.status_code}): {resp.text}. "
                 f"Create an account with `python -m scripts.create_user`."
             )
-        return cls(base_url=base_url, _client=client, _token=resp.json()["access_token"])
+        return cls(
+            base_url=base_url,
+            _client=client,
+            _token=resp.json()["access_token"],
+            _credentials={"username": username, "password": password},
+        )
+
+    async def _relogin(self) -> bool:
+        if self._credentials is None:
+            return False
+        resp = await self._client.post(f"{self.base_url}/auth/login", json=self._credentials)
+        if resp.status_code != 200:
+            return False
+        self._token = resp.json()["access_token"]
+        return True
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -64,6 +81,8 @@ class BenchClient:
                 if attempt == 4:
                     raise
             else:
+                if resp.status_code == 401 and attempt < 4 and await self._relogin():
+                    continue
                 if resp.status_code < 500 or attempt == 4:
                     break
             await asyncio.sleep(2**attempt)
@@ -75,6 +94,10 @@ class BenchClient:
         resp = await self._client.post(
             f"{self.base_url}{path}", json=body, headers=self._headers
         )
+        if resp.status_code == 401 and await self._relogin():
+            resp = await self._client.post(
+                f"{self.base_url}{path}", json=body, headers=self._headers
+            )
         if resp.status_code >= 400:
             raise OrchestratorError(f"POST {path} -> {resp.status_code}: {resp.text}")
         return resp.json()

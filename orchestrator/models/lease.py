@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -131,6 +132,9 @@ class Lease(Base):
     renewed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Training images per second measured on a completed attempt (the speed
+    # term's evidence). None for anything that did not finish or report it.
+    samples_per_second: Mapped[float | None] = mapped_column(Float, nullable=True)
     released_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

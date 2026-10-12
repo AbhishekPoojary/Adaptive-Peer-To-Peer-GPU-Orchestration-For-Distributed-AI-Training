@@ -14,10 +14,12 @@ def test_each_variant_zeroes_only_its_own_term() -> None:
         settings.scheduler_alpha_load,
         settings.scheduler_beta_reliability,
         settings.scheduler_gamma_latency,
+        settings.scheduler_delta_speed,
     )
     assert all(w > 0 for w in full)
     for index, name in enumerate(
-        ("adaptive_no_load", "adaptive_no_reliability", "adaptive_no_latency")
+        ("adaptive_no_load", "adaptive_no_reliability", "adaptive_no_latency",
+         "adaptive_no_speed")
     ):
         weights = adaptive_weights(name, settings)
         assert weights[index] == 0.0

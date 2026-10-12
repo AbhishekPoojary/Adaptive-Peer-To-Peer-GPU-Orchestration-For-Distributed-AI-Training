@@ -56,6 +56,9 @@ class CandidateReliability:
     snapshot: NodeSnapshot
     weighted_success: float
     weighted_failure: float
+    #: Expected training images per second for this job's kind of work: the
+    #: node's own measurements, else its hardware class's, else None.
+    samples_per_second: float | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,8 @@ class ScoredCandidate:
     d_score: float
     s_score: float
     was_selected: bool
+    c_score: float = 0.0
+    raw_samples_per_second: float | None = None
 
 
 #: Smallest utilization gap (percentage points, load is 0..100) treated as a
@@ -148,17 +153,33 @@ def _normalize_unknown_worst(
     return [1.0 if v is None else (v - lo) / denominator for v in values]
 
 
+def _slowness(speeds: list[float | None]) -> list[float]:
+    """C_i in [0, 1): how much slower than the fastest measured candidate.
+
+    ``1 - speed / fastest``: the fastest scores 0, one five times slower 0.8.
+    A ratio, so the term means the same for a small CNN and a ResNet. An
+    unmeasured node scores a neutral 0.5 -- neither preferred nor shunned, so
+    it gets tried and measured. With nothing measured the term is inert (0).
+    """
+    known = [v for v in speeds if v is not None and v > 0]
+    if not known:
+        return [0.0 for _ in speeds]
+    fastest = max(known)
+    return [0.5 if v is None or v <= 0 else 1.0 - v / fastest for v in speeds]
+
+
 def score_candidates(
     candidates: list[CandidateReliability],
     *,
     alpha: float,
     beta: float,
     gamma: float,
+    delta: float = 0.0,
     wilson_z: float,
     load_significant_spread: float = DEFAULT_LOAD_SIGNIFICANT_SPREAD,
     latency_significant_spread_ms: float = DEFAULT_LATENCY_SIGNIFICANT_SPREAD_MS,
 ) -> list[ScoredCandidate]:
-    """Score every candidate by ``S_i = α·L_i − β·R_i + γ·D_i`` (pure).
+    """Score every candidate by ``S_i = α·L_i − β·R_i + γ·D_i + δ·C_i`` (pure).
 
     Load and latency are normalized across exactly this candidate pool against
     at least the domain's significant spread, so a difference too small to
@@ -177,13 +198,15 @@ def score_candidates(
     d_scores = _normalize_unknown_worst(
         raw_rtts, significant_spread=latency_significant_spread_ms
     )
+    speeds = [c.samples_per_second for c in candidates]
+    c_scores = _slowness(speeds)
 
     scored: list[ScoredCandidate] = []
-    for cand, raw_util, raw_rtt, l_i, d_i in zip(
-        candidates, raw_utils, raw_rtts, l_scores, d_scores, strict=True
+    for cand, raw_util, raw_rtt, l_i, d_i, c_i in zip(
+        candidates, raw_utils, raw_rtts, l_scores, d_scores, c_scores, strict=True
     ):
         r_i = wilson_lower_bound(cand.weighted_success, cand.weighted_failure, wilson_z)
-        s_i = alpha * l_i - beta * r_i + gamma * d_i
+        s_i = alpha * l_i - beta * r_i + gamma * d_i + delta * c_i
         scored.append(
             ScoredCandidate(
                 snapshot=cand.snapshot,
@@ -196,6 +219,8 @@ def score_candidates(
                 d_score=d_i,
                 s_score=s_i,
                 was_selected=False,
+                c_score=c_i,
+                raw_samples_per_second=cand.samples_per_second,
             )
         )
     return scored
@@ -238,20 +263,24 @@ ABLATIONS: dict[str, str | None] = {
     "adaptive_no_load": "alpha",
     "adaptive_no_reliability": "beta",
     "adaptive_no_latency": "gamma",
+    "adaptive_no_speed": "delta",
 }
 
 
-def adaptive_weights(scheduler_name: str, settings: Settings) -> tuple[float, float, float]:
-    """(alpha, beta, gamma) for an adaptive variant, the ablated term zeroed."""
+def adaptive_weights(
+    scheduler_name: str, settings: Settings
+) -> tuple[float, float, float, float]:
+    """(alpha, beta, gamma, delta) for an adaptive variant, the ablated term zeroed."""
     weights = {
         "alpha": settings.scheduler_alpha_load,
         "beta": settings.scheduler_beta_reliability,
         "gamma": settings.scheduler_gamma_latency,
+        "delta": settings.scheduler_delta_speed,
     }
     off = ABLATIONS[scheduler_name]
     if off is not None:
         weights[off] = 0.0
-    return weights["alpha"], weights["beta"], weights["gamma"]
+    return weights["alpha"], weights["beta"], weights["gamma"], weights["delta"]
 
 
 class AdaptiveScheduler:

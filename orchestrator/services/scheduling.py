@@ -31,8 +31,9 @@ from __future__ import annotations
 
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -159,6 +160,66 @@ async def _node_snapshots(session: AsyncSession) -> list[NodeSnapshot]:
     ]
 
 
+#: How many of a node's most recent measurements its speed is averaged over.
+_SPEED_HISTORY = 5
+
+
+def _work_kind(spec: dict[str, Any]) -> tuple[str, str]:
+    """What makes two jobs' speeds comparable: the model and the dataset."""
+    return str(spec.get("model")), str(spec.get("dataset") or spec.get("dataset_id"))
+
+
+async def _speed_inputs(
+    session: AsyncSession, candidates: list[CandidateReliability], *, job: Job
+) -> list[CandidateReliability]:
+    """Attach each candidate's expected training speed for this kind of job.
+
+    Learned, not declared: the mean images/second of the node's last few
+    completed single-machine attempts of the same model on the same dataset.
+    A node with none borrows the mean of measured nodes of its own class (GPU
+    or CPU-only) -- a fresh GPU laptop is presumed GPU-fast, not CPU-slow. With
+    neither it stays None, which the scorer treats as neutral.
+    """
+    kind = _work_kind(job.spec)
+    node_ids = [c.snapshot.node.id for c in candidates]
+    rows = (
+        await session.execute(
+            select(Lease.node_id, Lease.samples_per_second, Job.spec)
+            .join(Job, Job.id == Lease.job_id)
+            .where(Lease.node_id.in_(node_ids), Lease.samples_per_second.is_not(None))
+            .order_by(Lease.released_at.desc())
+        )
+    ).all()
+    history: dict[object, list[float]] = {}
+    for node_id, speed, spec in rows:
+        if _work_kind(spec) != kind or int(spec.get("world_size", 1) or 1) != 1:
+            continue
+        samples = history.setdefault(node_id, [])
+        if len(samples) < _SPEED_HISTORY:
+            samples.append(float(speed))
+    own = {nid: sum(v) / len(v) for nid, v in history.items()}
+
+    def has_gpu(c: CandidateReliability) -> bool:
+        return bool((c.snapshot.node.hardware or {}).get("gpus"))
+
+    by_class: dict[bool, list[float]] = {}
+    for c in candidates:
+        if c.snapshot.node.id in own:
+            by_class.setdefault(has_gpu(c), []).append(own[c.snapshot.node.id])
+    return [
+        replace(
+            c,
+            samples_per_second=own.get(c.snapshot.node.id)
+            or (
+                sum(by_class[has_gpu(c)]) / len(by_class[has_gpu(c)])
+                if by_class.get(has_gpu(c))
+                else None
+            ),
+        )
+        for c in candidates
+    ]
+
+
 async def _reliability_inputs(
     session: AsyncSession,
     candidates: list[NodeSnapshot],
@@ -237,13 +298,14 @@ def _persist_decision(
     decision's ``selected_node_id`` is the rendezvous host (rank 0) — the single
     node the audit points at as the attempt's coordinator (ADR-005).
     """
-    alpha, beta, gamma = adaptive_weights(job.scheduler_name, settings)
+    alpha, beta, gamma, delta = adaptive_weights(job.scheduler_name, settings)
     decision = SchedulingDecision(
         job_id=job.id,
         scheduler_name=job.scheduler_name,
         alpha=alpha,
         beta=beta,
         gamma=gamma,
+        delta=delta,
         reliability_halflife_seconds=settings.reliability_decay_halflife_seconds,
         wilson_z=settings.reliability_wilson_z,
         selected_node_id=rendezvous_id,
@@ -262,6 +324,8 @@ def _persist_decision(
                 s_score=cand.s_score,
                 raw_util=cand.raw_util,
                 raw_rtt_ewma_ms=cand.raw_rtt_ewma_ms,
+                c_score=cand.c_score,
+                raw_samples_per_second=cand.raw_samples_per_second,
                 weighted_success=cand.weighted_success,
                 weighted_failure=cand.weighted_failure,
                 was_selected=cand.snapshot.node.id in selected_ids,
@@ -331,12 +395,14 @@ async def place_job_cohort(
 
     scored: list[ScoredCandidate] = []
     if job.scheduler_name in ABLATIONS:
-        alpha, beta, gamma = adaptive_weights(job.scheduler_name, settings)
+        alpha, beta, gamma, delta = adaptive_weights(job.scheduler_name, settings)
+        reliability = await _speed_inputs(session, reliability, job=job)
         scored = score_candidates(
             reliability,
             alpha=alpha,
             beta=beta,
             gamma=gamma,
+            delta=delta,
             wilson_z=settings.reliability_wilson_z,
             load_significant_spread=settings.scheduler_load_significant_spread,
             latency_significant_spread_ms=settings.scheduler_latency_significant_spread_ms,
@@ -401,7 +467,7 @@ async def place_job_cohort(
         )
         # ADR-009: the weights are logged with every decision, not applied silently.
         logger.info(
-            "adaptive cohort job=%s world_size=%d alpha=%.3f beta=%.3f gamma=%.3f "
+            "adaptive cohort job=%s world_size=%d alpha=%.3f beta=%.3f gamma=%.3f delta=%.3f "
             "halflife_s=%.1f wilson_z=%.3f candidates=%d cohort=%s rendezvous=%s",
             job.id,
             world_size,
@@ -526,6 +592,7 @@ async def list_scheduling_decisions(
             alpha=d.alpha,
             beta=d.beta,
             gamma=d.gamma,
+            delta=d.delta,
             reliability_halflife_seconds=d.reliability_halflife_seconds,
             wilson_z=d.wilson_z,
             selected_node_id=d.selected_node_id,
@@ -539,6 +606,8 @@ async def list_scheduling_decisions(
                     s_score=c.s_score,
                     raw_util=c.raw_util,
                     raw_rtt_ewma_ms=c.raw_rtt_ewma_ms,
+                    c_score=c.c_score,
+                    raw_samples_per_second=c.raw_samples_per_second,
                     weighted_success=c.weighted_success,
                     weighted_failure=c.weighted_failure,
                     was_selected=c.was_selected,

@@ -35,6 +35,8 @@ class TrainingResultIn(BaseModel):
     epochs_completed: int = Field(default=0, ge=0)
     exit_code: int | None = None
     device: Literal["cuda", "cpu"] | None = None
+    #: Training images per second the leaseholder measured (speed term).
+    samples_per_second: float | None = Field(default=None, gt=0)
 
 
 class TrainingMetricOut(BaseModel):
