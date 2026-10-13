@@ -72,20 +72,21 @@ class BenchClient:
     async def _get(self, path: str) -> Any:
         # Reads are retried: a long run against a small server sees the odd 502
         # or dropped connection, and one should not end hours of measurement.
-        for attempt in range(5):
+        # About three minutes in all: a phone hotspot can drop for that long.
+        for attempt in range(9):
             try:
                 resp = await self._client.get(
                     f"{self.base_url}{path}", headers=self._headers
                 )
             except httpx.TransportError:
-                if attempt == 4:
+                if attempt == 8:
                     raise
             else:
-                if resp.status_code == 401 and attempt < 4 and await self._relogin():
+                if resp.status_code == 401 and attempt < 8 and await self._relogin():
                     continue
-                if resp.status_code < 500 or attempt == 4:
+                if resp.status_code < 500 or attempt == 8:
                     break
-            await asyncio.sleep(2**attempt)
+            await asyncio.sleep(min(2**attempt, 30))
         if resp.status_code != 200:
             raise OrchestratorError(f"GET {path} -> {resp.status_code}: {resp.text}")
         return resp.json()

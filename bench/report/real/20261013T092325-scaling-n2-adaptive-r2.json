@@ -1,0 +1,200 @@
+{
+ "kind": "scaling",
+ "label": "n2-adaptive-r2",
+ "machines": 1,
+ "fleet": [
+  {
+   "name": "node-03",
+   "gpus": [
+    "NVIDIA GeForce RTX 3050 Laptop GPU"
+   ],
+   "cpu": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
+   "cores": 16,
+   "enrolled_by": "panchan330"
+  }
+ ],
+ "spec": {
+  "dataset": "cifar10",
+  "model": "small_cnn",
+  "epochs": 1,
+  "batch_size": 128,
+  "learning_rate": 0.001,
+  "world_size": 1,
+  "sync_every": 1
+ },
+ "scheduler": "adaptive",
+ "jobs": [
+  {
+   "id": "52507b56-271f-4c70-9248-de32afa13d6b",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 0.6283519268035889,
+   "jct_s": 17.596071004867554,
+   "submitted": 1791883170.97241,
+   "finished": 1791883188.568481,
+   "accuracy": 0.508
+  },
+  {
+   "id": "7f906aac-a8bd-445c-bd53-b632490fdc2d",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 19.612581968307495,
+   "jct_s": 35.3705530166626,
+   "submitted": 1791883171.078702,
+   "finished": 1791883206.449255,
+   "accuracy": 0.57
+  },
+  {
+   "id": "72b0c577-ed4c-41f1-9e26-596d930b05bf",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 37.654719829559326,
+   "jct_s": 56.28198599815369,
+   "submitted": 1791883171.157648,
+   "finished": 1791883227.439634,
+   "accuracy": 0.5901
+  },
+  {
+   "id": "57cb0580-ff2d-463b-b0a5-58e1177944b1",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 57.41465711593628,
+   "jct_s": 73.1460611820221,
+   "submitted": 1791883171.242359,
+   "finished": 1791883244.38842,
+   "accuracy": 0.5722
+  },
+  {
+   "id": "2db3373d-889f-4fe0-80c5-0f6065271875",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 74.42996883392334,
+   "jct_s": 89.98139595985413,
+   "submitted": 1791883171.317047,
+   "finished": 1791883261.298443,
+   "accuracy": 0.5701
+  },
+  {
+   "id": "0cac7833-0a6a-4830-bc75-bb6871ae5a1b",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 93.45321083068848,
+   "jct_s": 121.29264497756958,
+   "submitted": 1791883171.415214,
+   "finished": 1791883292.707859,
+   "accuracy": 0.5804
+  },
+  {
+   "id": "b053d115-11c4-4b59-8406-4f68877a2c59",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 123.55430102348328,
+   "jct_s": 139.27316999435425,
+   "submitted": 1791883171.495113,
+   "finished": 1791883310.768283,
+   "accuracy": 0.5347
+  },
+  {
+   "id": "3f400e43-5885-495c-93db-2ea70e8b1bc3",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 141.27429294586182,
+   "jct_s": 157.68180584907532,
+   "submitted": 1791883171.616651,
+   "finished": 1791883329.298457,
+   "accuracy": 0.5293
+  },
+  {
+   "id": "e91629ff-9460-44ee-a468-8b0b0f5b149f",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-02",
+    "node-03"
+   ],
+   "attempts": 2,
+   "wait_s": 29.082446098327637,
+   "jct_s": 176.5568768978119,
+   "submitted": 1791883171.709121,
+   "finished": 1791883348.265998,
+   "accuracy": 0.5272
+  },
+  {
+   "id": "340be2ad-96fc-4b62-bfb1-fd21d9f6c20e",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 179.63867807388306,
+   "jct_s": 195.43365597724915,
+   "submitted": 1791883171.81532,
+   "finished": 1791883367.248976,
+   "accuracy": 0.4994
+  },
+  {
+   "id": "0eb3ba0e-2128-4b58-a4a7-0d30b89c8128",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 197.74778985977173,
+   "jct_s": 213.36569595336914,
+   "submitted": 1791883171.896866,
+   "finished": 1791883385.262562,
+   "accuracy": 0.5503
+  },
+  {
+   "id": "487c631e-362c-4b05-9c20-b1079bb00166",
+   "state": "COMPLETED",
+   "scheduler": "adaptive",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 215.90389490127563,
+   "jct_s": 231.68826007843018,
+   "submitted": 1791883171.971302,
+   "finished": 1791883403.659562,
+   "accuracy": 0.5292
+  }
+ ],
+ "completed": 12,
+ "makespan_s": 232.6871521472931,
+ "jobs_per_hour": 185.65700598997407
+}

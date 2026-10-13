@@ -42,3 +42,20 @@ Placement, recovery and scaling used node-03 and node-02 only.
   from checkpoint 16.4 ± 3.5 s after the kill; 10/10 resumed from a checkpoint.
 - Scaling (12 jobs): GPU alone 235 s; GPU + CPU 340 s -- the CPU node's
   ~100 s jobs straggle. Completion-time-aware placement is the planned fix.
+
+## 13 Oct 2026: completion-time-aware placement
+
+Same two laptops; friend's hotspot unstable all day (failed checkpoint uploads,
+lease losses), this PC's hotspot dropped for >30 s once.
+
+| Run | Machines | 12-job makespan | Extra attempts | Valid |
+|---|---|---|---|---|
+| adaptive (min completion time), r1 | 2 | 243 s | 2 | yes |
+| adaptive_no_defer (greedy), r1 | 2 | 287 s | 3 | yes |
+| adaptive, r2 | 1 (node-02 offline) | 233 s | 1 | no: one machine |
+| adaptive_no_defer, r2 | 2 | 1269 s | 6 | no: network churn |
+
+Before the overrun fix (commit 56c548f) the first version held the queue
+behind a job that overran its estimate: 639 s for the same 12 jobs (run
+discarded; number kept here as the evidence for the fix). To repeat on the lab
+LAN with more machines before drawing a statistical conclusion.

@@ -1,0 +1,207 @@
+{
+ "kind": "scaling",
+ "label": "n2-adaptive_no_defer-r1",
+ "machines": 2,
+ "fleet": [
+  {
+   "name": "node-02",
+   "gpus": [],
+   "cpu": "Intel64 Family 6 Model 154 Stepping 4, GenuineIntel",
+   "cores": 12,
+   "enrolled_by": null
+  },
+  {
+   "name": "node-03",
+   "gpus": [
+    "NVIDIA GeForce RTX 3050 Laptop GPU"
+   ],
+   "cpu": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
+   "cores": 16,
+   "enrolled_by": "panchan330"
+  }
+ ],
+ "spec": {
+  "dataset": "cifar10",
+  "model": "small_cnn",
+  "epochs": 1,
+  "batch_size": 128,
+  "learning_rate": 0.001,
+  "world_size": 1,
+  "sync_every": 1
+ },
+ "scheduler": "adaptive_no_defer",
+ "jobs": [
+  {
+   "id": "ed6232ea-f619-4652-a000-6bea11297743",
+   "state": "COMPLETED",
+   "scheduler": "adaptive_no_defer",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 6.240830898284912,
+   "jct_s": 21.311398029327393,
+   "submitted": 1791882881.645365,
+   "finished": 1791882902.956763,
+   "accuracy": 0.5617
+  },
+  {
+   "id": "8e3bbada-3913-4bfc-9191-d47c603ad3a4",
+   "state": "COMPLETED",
+   "scheduler": "adaptive_no_defer",
+   "nodes": [
+    "node-02",
+    "node-03"
+   ],
+   "attempts": 4,
+   "wait_s": 6.613350868225098,
+   "jct_s": 286.6659197807312,
+   "submitted": 1791882881.743544,
+   "finished": 1791883168.409464,
+   "accuracy": 0.6008
+  },
+  {
+   "id": "313c8179-c733-437e-a121-1ae1825d3a42",
+   "state": "COMPLETED",
+   "scheduler": "adaptive_no_defer",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 22.397889852523804,
+   "jct_s": 38.23100686073303,
+   "submitted": 1791882881.838638,
+   "finished": 1791882920.069645,
+   "accuracy": 0.5512
+  },
+  {
+   "id": "c3698d59-d653-4e2f-b01d-a24c382de968",
+   "state": "COMPLETED",
+   "scheduler": "adaptive_no_defer",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 40.53938412666321,
+   "jct_s": 55.30895113945007,
+   "submitted": 1791882881.915588,
+   "finished": 1791882937.224539,
+   "accuracy": 0.5667
+  },
+  {
+   "id": "b6d2e17b-6e3c-440e-a1d5-001a2fd56130",
+   "state": "COMPLETED",
+   "scheduler": "adaptive_no_defer",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 52.558855056762695,
+   "jct_s": 68.30813813209534,
+   "submitted": 1791882888.107406,
+   "finished": 1791882956.415544,
+   "accuracy": 0.5601
+  },
+  {
+   "id": "5223c87d-ce43-4aa0-9290-5fc9876c6390",
+   "state": "COMPLETED",
+   "scheduler": "adaptive_no_defer",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 70.07654809951782,
+   "jct_s": 91.99352502822876,
+   "submitted": 1791882888.71006,
+   "finished": 1791882980.703585,
+   "accuracy": 0.474
+  },
+  {
+   "id": "5582785e-c63f-4656-ae35-5e85a5500866",
+   "state": "COMPLETED",
+   "scheduler": "adaptive_no_defer",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 93.12378597259521,
+   "jct_s": 110.26152086257935,
+   "submitted": 1791882888.804768,
+   "finished": 1791882999.066289,
+   "accuracy": 0.5862
+  },
+  {
+   "id": "21363c0a-ec3d-4701-ac7f-ba5779d95cce",
+   "state": "COMPLETED",
+   "scheduler": "adaptive_no_defer",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 111.50877594947815,
+   "jct_s": 129.44045495986938,
+   "submitted": 1791882888.881583,
+   "finished": 1791883018.322038,
+   "accuracy": 0.5608
+  },
+  {
+   "id": "9a668ae1-b0e0-4a2a-80bc-4aa27e3ce2a5",
+   "state": "COMPLETED",
+   "scheduler": "adaptive_no_defer",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 131.68434882164001,
+   "jct_s": 149.55568885803223,
+   "submitted": 1791882888.958228,
+   "finished": 1791883038.513917,
+   "accuracy": 0.5364
+  },
+  {
+   "id": "4163d4d0-0a85-47bb-a601-cc11e199aab9",
+   "state": "COMPLETED",
+   "scheduler": "adaptive_no_defer",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 150.67995810508728,
+   "jct_s": 166.42445302009583,
+   "submitted": 1791882889.032497,
+   "finished": 1791883055.45695,
+   "accuracy": 0.5275
+  },
+  {
+   "id": "8cd8f962-6f74-4e54-b834-e34061c17fe3",
+   "state": "COMPLETED",
+   "scheduler": "adaptive_no_defer",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 168.45839619636536,
+   "jct_s": 186.2034420967102,
+   "submitted": 1791882889.114153,
+   "finished": 1791883075.317595,
+   "accuracy": 0.5335
+  },
+  {
+   "id": "7b72f52b-b0d5-4407-84d7-883a7ffbeb20",
+   "state": "COMPLETED",
+   "scheduler": "adaptive_no_defer",
+   "nodes": [
+    "node-03"
+   ],
+   "attempts": 1,
+   "wait_s": 187.4280228614807,
+   "jct_s": 204.04610180854797,
+   "submitted": 1791882889.218367,
+   "finished": 1791883093.264469,
+   "accuracy": 0.5266
+  }
+ ],
+ "completed": 12,
+ "makespan_s": 286.76409888267517,
+ "jobs_per_hour": 150.64647272207728
+}
