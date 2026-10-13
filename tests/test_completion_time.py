@@ -36,7 +36,9 @@ def _lease(session: AsyncSession, node, *, state: LeaseState, granted: datetime,
                       released_at=released))
 
 
-async def _fleet(session: AsyncSession, scheduler: str, queued: int) -> list[Job]:
+async def _fleet(
+    session: AsyncSession, scheduler: str, queued: int, busy_for: float = 0.0
+) -> list[Job]:
     now = datetime.now(UTC)
     gpu = _make_node(session, "gpu", with_gpu=True, now=now)
     cpu = _make_node(session, "cpu", with_gpu=False, now=now)
@@ -48,7 +50,8 @@ async def _fleet(session: AsyncSession, scheduler: str, queued: int) -> list[Job
         _lease(session, node, state=LeaseState.COMPLETED, granted=past,
                released=past + timedelta(seconds=seconds))
     # The GPU is busy with a job that started just now.
-    _lease(session, gpu, state=LeaseState.ACTIVE, granted=now, released=None)
+    _lease(session, gpu, state=LeaseState.ACTIVE, granted=now - timedelta(seconds=busy_for),
+           released=None)
     jobs = [Job(id=uuid.uuid4(), spec=dict(_SPEC), scheduler_name=scheduler,
                 state=JobState.QUEUED, submitted_by="queue",
                 submitted_at=now + timedelta(milliseconds=i)) for i in range(queued)]
@@ -93,6 +96,18 @@ async def test_the_greedy_ablation_takes_the_idle_slow_node(
     api_client: AsyncClient, session: AsyncSession
 ) -> None:
     jobs = await _fleet(session, "adaptive_no_defer", queued=1)
+    await run_scheduler_pass(session, settings=_settings())
+    await session.commit()
+    assert await _states(session, jobs) == ["SCHEDULED"]
+
+
+@pytest.mark.asyncio
+async def test_an_overrunning_job_stops_holding_the_queue(
+    api_client: AsyncClient, session: AsyncSession
+) -> None:
+    """The GPU's current job should take 20 s but has run 150 s. It is not
+    about to finish: assume 130 s more, so the idle CPU (100 s) is better."""
+    jobs = await _fleet(session, "adaptive", queued=1, busy_for=150.0)
     await run_scheduler_pass(session, settings=_settings())
     await session.commit()
     assert await _states(session, jobs) == ["SCHEDULED"]

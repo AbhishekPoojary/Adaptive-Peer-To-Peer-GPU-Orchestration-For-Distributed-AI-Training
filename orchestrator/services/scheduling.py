@@ -247,8 +247,7 @@ async def _busy_free_in(
     """Seconds until each healthy busy node finishes its current job.
 
     Only nodes that would be eligible but for being busy, and only where the
-    current job's run time on that node has been measured; a job already past
-    its estimate counts as finishing now.
+    current job's run time on that node has been measured.
     """
     busy = {
         s.node.id: s
@@ -277,7 +276,11 @@ async def _busy_free_in(
         if rate is None or int(spec.get("world_size", 1) or 1) != 1:
             continue
         total = rate * int(spec.get("epochs", 1) or 1)
-        free_in[node_id] = max(0.0, total - (now - granted).total_seconds())
+        elapsed = (now - granted).total_seconds()
+        # A job past its estimate is not "about to finish": on the real fleet one
+        # overran 20 s by minutes, and treating it as done held every queued job
+        # for that node while a free machine idled. Overrun by X, assume X more.
+        free_in[node_id] = total - elapsed if elapsed <= total else elapsed - total
     return free_in
 
 
