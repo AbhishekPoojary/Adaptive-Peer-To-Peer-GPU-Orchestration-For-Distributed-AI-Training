@@ -56,7 +56,11 @@ from orchestrator.schedulers.adaptive import (
     score_candidates,
     select_top_n,
 )
-from orchestrator.schedulers.base import NodeSnapshot, eligible_candidates
+from orchestrator.schedulers.base import (
+    NodeSnapshot,
+    eligible_candidates,
+    passes_hard_filters,
+)
 from orchestrator.schedulers.registry import get_scheduler
 from orchestrator.schedulers.reliability import decay_weight, wilson_lower_bound
 from orchestrator.schemas.scheduling import (
@@ -218,6 +222,139 @@ async def _speed_inputs(
         )
         for c in candidates
     ]
+
+
+async def _running_kinds(session: AsyncSession) -> set[tuple[str, str]]:
+    """Kinds of the jobs busy nodes are running, so their run time is known."""
+    specs = (
+        await session.execute(
+            select(Job.spec)
+            .join(Lease, Lease.job_id == Job.id)
+            .where(Lease.state.in_((LeaseState.ACTIVE, LeaseState.PENDING)))
+        )
+    ).scalars().all()
+    return {_work_kind(spec) for spec in specs}
+
+
+async def _busy_free_in(
+    session: AsyncSession,
+    snapshots: list[NodeSnapshot],
+    per_epoch: dict[tuple[object, tuple[str, str]], float],
+    *,
+    now: datetime,
+    settings: Settings,
+) -> dict[object, float]:
+    """Seconds until each healthy busy node finishes its current job.
+
+    Only nodes that would be eligible but for being busy, and only where the
+    current job's run time on that node has been measured; a job already past
+    its estimate counts as finishing now.
+    """
+    busy = {
+        s.node.id: s
+        for s in snapshots
+        if s.has_active_lease
+        and passes_hard_filters(
+            _placeholder_job, replace(s, has_active_lease=False),
+            now=now, stale_seconds=settings.heartbeat_stale_seconds,
+        )
+    }
+    if not busy:
+        return {}
+    rows = (
+        await session.execute(
+            select(Lease.node_id, Lease.granted_at, Job.spec)
+            .join(Job, Job.id == Lease.job_id)
+            .where(
+                Lease.node_id.in_(list(busy)),
+                Lease.state.in_((LeaseState.ACTIVE, LeaseState.PENDING)),
+            )
+        )
+    ).all()
+    free_in: dict[object, float] = {}
+    for node_id, granted, spec in rows:
+        rate = per_epoch.get((node_id, _work_kind(spec)))
+        if rate is None or int(spec.get("world_size", 1) or 1) != 1:
+            continue
+        total = rate * int(spec.get("epochs", 1) or 1)
+        free_in[node_id] = max(0.0, total - (now - granted).total_seconds())
+    return free_in
+
+
+#: Stand-in for "any CPU job" when asking whether a busy node is otherwise
+#: healthy enough to wait for: no GPU requirement, so only health filters apply.
+_placeholder_job = Job(spec={"min_gpu_mem_bytes": None})
+
+
+async def _runtime_estimates(
+    session: AsyncSession, node_ids: list[object], kinds: set[tuple[str, str]]
+) -> dict[tuple[object, tuple[str, str]], float]:
+    """Seconds per epoch each node has taken on each kind of job, measured.
+
+    From the node's last few completed single-machine attempts: lease grant to
+    release over the epochs run, so container start, data loading and
+    evaluation are in it -- the time a job really occupies the machine.
+    """
+    rows = (
+        await session.execute(
+            select(Lease.node_id, Lease.granted_at, Lease.released_at, Job.spec)
+            .join(Job, Job.id == Lease.job_id)
+            .where(
+                Lease.node_id.in_(node_ids),
+                Lease.state == LeaseState.COMPLETED,
+                Lease.released_at.is_not(None),
+            )
+            .order_by(Lease.released_at.desc())
+        )
+    ).all()
+    history: dict[tuple[object, tuple[str, str]], list[float]] = {}
+    for node_id, granted, released, spec in rows:
+        kind = _work_kind(spec)
+        epochs = int(spec.get("epochs", 1) or 1)
+        if kind not in kinds or int(spec.get("world_size", 1) or 1) != 1:
+            continue
+        samples = history.setdefault((node_id, kind), [])
+        if len(samples) < _SPEED_HISTORY:
+            samples.append((released - granted).total_seconds() / epochs)
+    return {key: sum(v) / len(v) for key, v in history.items()}
+
+
+def _defer_to_busy(
+    job: Job,
+    idle: list[NodeSnapshot],
+    free_in: dict[object, float],
+    per_epoch: dict[tuple[object, tuple[str, str]], float],
+) -> object | None:
+    """The busy node to wait for, if waiting finishes this job sooner.
+
+    Minimum completion time, the classic rule for unequal machines: a job's
+    finish on a busy node is when that node frees up plus its run time there;
+    on an idle node, just the run time. Greedy placement on any idle node let a
+    CPU laptop take 100 s jobs a GPU would have finished in 20 s, and made a
+    12-job queue slower with the laptop than without it (bench/report/real).
+    Only decides when every number is measured -- an idle node with no history
+    is placed normally, so it gets tried and learned.
+    """
+    kind = _work_kind(job.spec)
+    epochs = int(job.spec.get("epochs", 1) or 1)
+    idle_finish = []
+    for s in idle:
+        rate = per_epoch.get((s.node.id, kind))
+        if rate is None:
+            return None
+        idle_finish.append(rate * epochs)
+    best_idle = min(idle_finish, default=None)
+    if best_idle is None:
+        return None
+    waits = [
+        (free + per_epoch[(node_id, kind)] * epochs, node_id)
+        for node_id, free in free_in.items()
+        if (node_id, kind) in per_epoch
+    ]
+    if not waits:
+        return None
+    finish, node_id = min(waits, key=lambda w: w[0])
+    return node_id if finish < best_idle else None
 
 
 async def _reliability_inputs(
@@ -539,6 +676,15 @@ async def run_scheduler_pass(session: AsyncSession, *, settings: Settings) -> in
     assigned_this_pass: set[object] = set()
     placed = 0
 
+    # Completion-time planning (adaptive only): when each busy node frees up,
+    # measured, and grown by every job this pass decides should wait for it.
+    per_epoch = await _runtime_estimates(
+        session,
+        [s.node.id for s in snapshots],
+        {_work_kind(job.spec) for job in jobs} | await _running_kinds(session),
+    )
+    free_in = await _busy_free_in(session, snapshots, per_epoch, now=now, settings=settings)
+
     for job in jobs:
         # world_size=N needs N distinct nodes for one attempt; a partial cohort
         # is never placed (place_job_cohort returns None and the job waits).
@@ -549,6 +695,17 @@ async def run_scheduler_pass(session: AsyncSession, *, settings: Settings) -> in
         elig = eligible_candidates(
             job, candidates, now=now, stale_seconds=settings.heartbeat_stale_seconds
         )
+        if (
+            world_size == 1
+            and job.scheduler_name in ABLATIONS
+            and job.scheduler_name != "adaptive_no_defer"
+        ):
+            wait_for = _defer_to_busy(job, elig, free_in, per_epoch)
+            if wait_for is not None:
+                free_in[wait_for] += per_epoch[(wait_for, _work_kind(job.spec))] * int(
+                    job.spec.get("epochs", 1) or 1
+                )
+                continue
         members = await place_job_cohort(
             session, job, elig, world_size=world_size, now=now, settings=settings
         )
@@ -556,6 +713,9 @@ async def run_scheduler_pass(session: AsyncSession, *, settings: Settings) -> in
             continue
         for member in members:
             assigned_this_pass.add(member.snapshot.node.id)
+            rate = per_epoch.get((member.snapshot.node.id, _work_kind(job.spec)))
+            if rate is not None and world_size == 1:
+                free_in[member.snapshot.node.id] = rate * int(job.spec.get("epochs", 1) or 1)
         placed += 1
 
     await session.flush()

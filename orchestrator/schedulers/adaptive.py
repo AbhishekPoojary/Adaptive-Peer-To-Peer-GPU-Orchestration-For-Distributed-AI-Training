@@ -264,6 +264,9 @@ ABLATIONS: dict[str, str | None] = {
     "adaptive_no_reliability": "beta",
     "adaptive_no_latency": "gamma",
     "adaptive_no_speed": "delta",
+    # Not a weight: places on the best idle node even when waiting for a faster
+    # busy one would finish sooner (see services.scheduling._defer_to_busy).
+    "adaptive_no_defer": None,
 }
 
 
