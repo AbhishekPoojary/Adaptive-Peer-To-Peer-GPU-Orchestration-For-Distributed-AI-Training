@@ -139,11 +139,14 @@ def two_columns() -> None:
 para("Learning Where to Train: Adaptive, Fault-Tolerant Orchestration of "
      "Volunteer GPUs for Deep Learning over Unreliable Networks",
      size=16, align=WD_ALIGN_PARAGRAPH.CENTER, after=8)
-para("[Author 1], [Author 2], [Author 3], [Guide name]", size=10,
+para("Abhishek S Poojary, Abhishek, Deekshith Poojary, K Anujnya Shenoy, "
+     "Subrahmanya Bhat", size=10, align=WD_ALIGN_PARAGRAPH.CENTER, after=0)
+para("Department of Information Science & Engineering, Mangalore Institute of Technology & "
+     "Engineering, Moodabidri, Karnataka, India", size=9, italic=True,
      align=WD_ALIGN_PARAGRAPH.CENTER, after=0)
-para("Department of [Department], [Institution], [City], India", size=9, italic=True,
-     align=WD_ALIGN_PARAGRAPH.CENTER, after=0)
-para("[corresponding author e-mail]", size=9, align=WD_ALIGN_PARAGRAPH.CENTER, after=10)
+para("panchan330@gmail.com (corresponding author), abhishekbellare19@gmail.com, "
+     "deekshu9191@gmail.com, anujnyashenoy@gmail.com", size=9,
+     align=WD_ALIGN_PARAGRAPH.CENTER, after=10)
 
 hb_intervals = f"{HB['intervals']:,}"
 rich([("Abstract—", "b"), (
@@ -528,7 +531,8 @@ para("Volunteer laptops behind consumer networks can serve as a practical, share
 
 h1("Data and Code Availability")
 para("The orchestrator, agent, trainer, experiment scripts and every raw result file used "
-     "in this paper are available at [repository URL].")
+     "in this paper are available at https://github.com/AbhishekPoojary/"
+     "Adaptive-Peer-To-Peer-GPU-Orchestration-For-Distributed-AI-Training.")
 
 # ------------------------------------------------------------------ References
 h1("References")
