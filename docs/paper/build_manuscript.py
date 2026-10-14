@@ -457,7 +457,8 @@ figure("fig_detector.png",
 p2, p8 = DC[2], DC[8]
 para(f"The heartbeat traces show a median interval of about 1.3 s, but heavy tails: across the "
      "five machines, intervals beyond 5 s occurred between 14 and 69 times per machine, and the "
-     "longest silence of every machine exceeded 30 s. Fig. 4 replays the traces through the detector. "
+     "longest silence of every machine exceeded 30 s. Fig. 4 replays the traces through the "
+     "detector. "
      f"With the 2 s acceptable pause tuned on a LAN, a crash would be declared after "
      f"{f1(p2['median_detect_s'])} s, but live machines would be falsely suspected "
      f"{f1(p2['false_per_node_hour'])} times per node-hour. An 8 s pause lowers this to "

@@ -83,8 +83,8 @@ numbers["recovery"]["resumed_steps"] = sorted(t["resumed_from_step"] for t in tr
 fig, ax = plt.subplots(figsize=(3.5, 1.9))
 data = [[t[k] for t in trials] for k in ("detect_s", "restart_s", "resumed_s")]
 ax.boxplot(data, vert=False, widths=0.5, medianprops={"color": "#1f4e79"})
-ax.set_yticks([1, 2, 3], ["Failure\ndetected", "Restarted\non survivor", "Resumed from\ncheckpoint"],
-              fontsize=7)
+ticks = ["Failure\ndetected", "Restarted\non survivor", "Resumed from\ncheckpoint"]
+ax.set_yticks([1, 2, 3], ticks, fontsize=7)
 ax.set_xlabel("Seconds after the machine was killed")
 ax.spines[["top", "right"]].set_visible(False)
 fig.tight_layout(pad=0.4)

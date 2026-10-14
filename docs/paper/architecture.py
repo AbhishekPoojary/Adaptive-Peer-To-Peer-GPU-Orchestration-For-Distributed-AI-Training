@@ -33,7 +33,8 @@ def arrow(a, b, label="", rad=0.0, offset=(0, 1.2)):  # type: ignore[no-untyped-
                 ha="center", fontsize=5.8, style="italic")
 
 
-box(2, 28, 20, 14, "Users (browser)", ["upload dataset", "submit job, watch,", "download model"], "#eef3f8")
+box(2, 28, 20, 14, "Users (browser)",
+    ["upload dataset", "submit job, watch,", "download model"], "#eef3f8")
 box(34, 6.5, 32, 35.5, "Orchestrator (cloud VM)",
     ["REST + WebSocket API, auth, ownership",
      "Scheduler: adaptive score",
