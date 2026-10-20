@@ -12,6 +12,7 @@ import csv
 import json
 import math
 import statistics as st
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -19,7 +20,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
-from scipy.stats import mannwhitneyu  # noqa: E402
+from scipy.stats import mannwhitneyu, wilcoxon  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 REAL = ROOT / "bench" / "report" / "real"
@@ -99,9 +100,26 @@ for f in sorted(REAL.glob("*scaling*.json")):
         scaling[d["label"]] = {"machines": d["machines"], "makespan_s": d["makespan_s"],
                                "scheduler": d["scheduler"],
                                "extra_attempts": sum(j["attempts"] - 1 for j in d["jobs"]),
-                               "per_node": {n: sum(n in j["nodes"][-1:] for j in d["jobs"])
-                                            for n in ("node-02", "node-03")}}
+                               "per_node": dict(Counter(j["nodes"][-1] for j in d["jobs"]))}
 numbers["scaling"] = scaling
+
+# --- Minimum completion time vs greedy, 17 Oct (paired runs, 3 machines) --------
+mct_runs = {s: [scaling[f"oct17-n3-{s}-r{r}"] for r in range(1, 6)
+                if f"oct17-n3-{s}-r{r}" in scaling]
+            for s in ("adaptive", "adaptive_no_defer")}
+pairs = [(a["makespan_s"], g["makespan_s"])
+         for a, g in zip(mct_runs["adaptive"], mct_runs["adaptive_no_defer"], strict=False)]
+if pairs:
+    numbers["mct"] = {
+        "mct": summary([a for a, _ in pairs]), "greedy": summary([g for _, g in pairs]),
+        "pairs": len(pairs), "mct_faster_in": sum(a < g for a, g in pairs),
+        "p_wilcoxon": wilcoxon([a for a, _ in pairs], [g for _, g in pairs],
+                               alternative="less").pvalue if len(pairs) > 1 else None,
+        "machines": sorted({m for runs in mct_runs.values() for r in runs for m in r["per_node"]}),
+        "per_run": {s: [{"makespan_s": r["makespan_s"], "per_node": r["per_node"],
+                         "extra_attempts": r["extra_attempts"]} for r in runs]
+                    for s, runs in mct_runs.items()},
+    }
 
 # --- Heartbeat inter-arrival gaps and the detector trade-off -----------------
 rows = list(csv.DictReader((REAL / "20261012-heartbeats.csv").open(encoding="utf-8")))
@@ -169,6 +187,37 @@ ax.spines[["top", "right"]].set_visible(False)
 fig.tight_layout(pad=0.4)
 fig.savefig(FIG / "fig_detector.png")
 plt.close(fig)
+
+# --- Trainer priority on CPU-only lab PCs: heartbeat gaps training vs idle -----
+# Same machine, same day, training vs idle: server-side conditions (detector
+# setting, server swap) are shared by both windows, so they cancel out.
+windows_csv = REAL / "lab-lease-windows.csv"
+if windows_csv.exists():
+    windows: dict[str, list[tuple[float, float]]] = {}
+    for r in csv.DictReader(windows_csv.open(encoding="utf-8")):
+        def _t(v: str) -> float:
+            return datetime.fromisoformat(v.replace("+00", "+00:00")).timestamp()
+        windows.setdefault(r["node"], []).append((_t(r["granted_at"]), _t(r["released_at"])))
+    stamps_all: dict[str, list[float]] = {}
+    for f in sorted(REAL.glob("2026*-heartbeats.csv")):
+        for r in csv.DictReader(f.open(encoding="utf-8")):
+            if r["node"] in windows:
+                stamps_all.setdefault(r["node"], []).append(
+                    datetime.fromisoformat(r["ts"].replace("+00", "+00:00")).timestamp())
+    priority = {}
+    for node, stamps in sorted(stamps_all.items()):
+        stamps.sort()
+        busy, idle = [], []
+        for a, b in zip(stamps, stamps[1:], strict=False):
+            if not 0 < b - a < 120:
+                continue
+            training = any(g <= a and b <= e for g, e in windows[node])
+            (busy if training else idle).append(b - a)
+        def _gap_stats(g: list[float]) -> dict[str, float | int | None]:
+            return {"n": len(g), "p99": sorted(g)[int(0.99 * len(g))] if g else None,
+                    "max": max(g, default=None), "over5": sum(x > 5 for x in g)}
+        priority[node] = {"training": _gap_stats(busy), "idle": _gap_stats(idle)}
+    numbers["priority"] = priority
 
 (OUT / "numbers.json").write_text(json.dumps(numbers, indent=1, default=float), encoding="utf-8")
 print(json.dumps(numbers, indent=1, default=float)[:6000])

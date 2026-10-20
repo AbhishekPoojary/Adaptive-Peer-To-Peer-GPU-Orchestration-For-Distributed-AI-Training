@@ -41,3 +41,4 @@ bench/report/*
 deploy/cloud/.env
 deploy/cloud/.setup.lock
 deploy/cloud/.admin-pending
+.bench/

@@ -128,8 +128,8 @@
    "scheduler": "adaptive",
    "extra_attempts": 0,
    "per_node": {
-    "node-02": 3,
-    "node-03": 9
+    "node-03": 9,
+    "node-02": 3
    }
   },
   "n1-gpu": {
@@ -138,7 +138,6 @@
    "scheduler": "adaptive",
    "extra_attempts": 0,
    "per_node": {
-    "node-02": 0,
     "node-03": 12
    }
   },
@@ -148,8 +147,8 @@
    "scheduler": "adaptive",
    "extra_attempts": 2,
    "per_node": {
-    "node-02": 1,
-    "node-03": 11
+    "node-03": 11,
+    "node-02": 1
    }
   },
   "n2-adaptive_no_defer-r1": {
@@ -158,7 +157,6 @@
    "scheduler": "adaptive_no_defer",
    "extra_attempts": 3,
    "per_node": {
-    "node-02": 0,
     "node-03": 12
    }
   },
@@ -168,7 +166,6 @@
    "scheduler": "adaptive",
    "extra_attempts": 1,
    "per_node": {
-    "node-02": 0,
     "node-03": 12
    }
   },
@@ -178,7 +175,6 @@
    "scheduler": "adaptive_no_defer",
    "extra_attempts": 6,
    "per_node": {
-    "node-02": 0,
     "node-03": 12
    }
   }
