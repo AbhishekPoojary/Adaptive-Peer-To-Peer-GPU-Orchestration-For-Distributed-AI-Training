@@ -131,6 +131,7 @@ export function Submit() {
         batch_size: Number(batchSize),
         learning_rate: Number(learningRate),
         world_size: Number(worldSize),
+        sync_every: 1, // plain synchronous training; local SGD is not offered here
         min_gpu_mem_bytes: minGpuMemBytes.trim() === "" ? null : Number(minGpuMemBytes),
       },
       scheduler_name: schedulerName,

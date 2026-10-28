@@ -188,8 +188,13 @@ def create_user_jwt(
     signing_key: str,
     ttl_seconds: int,
     now: datetime | None = None,
+    session_started_at: int | None = None,
 ) -> str:
     """Issue a short-lived HS256 access token for a human operator (ADR-012).
+
+    ``auth_time`` records when the person actually signed in. A renewed token
+    (``POST /auth/refresh``) carries the original value forward, which is what
+    caps how long one sign-in can be kept alive.
 
     Claims: ``sub`` = user id, ``aud`` = ``"user"``, plus ``username`` and
     ``role`` so authorization decisions need no database round trip on the hot
@@ -204,8 +209,20 @@ def create_user_jwt(
         "role": role,
         "iat": int(issued.timestamp()),
         "exp": int((issued + timedelta(seconds=ttl_seconds)).timestamp()),
+        "auth_time": session_started_at or int(issued.timestamp()),
     }
     return jwt.encode(payload, signing_key, algorithm=_JWT_ALGORITHM)
+
+
+def user_jwt_session_start(token: str, *, signing_key: str) -> int:
+    """When the sign-in behind a valid user token happened (unix seconds).
+
+    Tokens issued before ``auth_time`` existed fall back to their ``iat``.
+    """
+    payload = jwt.decode(
+        token, signing_key, algorithms=[_JWT_ALGORITHM], audience=USER_AUDIENCE
+    )
+    return int(payload.get("auth_time") or payload["iat"])
 
 
 def decode_user_jwt(token: str, *, signing_key: str) -> tuple[str, str, str]:

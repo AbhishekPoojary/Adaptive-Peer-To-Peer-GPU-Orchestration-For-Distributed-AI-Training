@@ -50,6 +50,23 @@ export function getToken(): string | null {
   return sessionStorage.getItem(TOKEN_KEY);
 }
 
+/**
+ * When the stored token expires (ms since epoch), from its own `exp` claim, or
+ * null without a readable token. Read only to decide when to renew it; the
+ * server is what enforces expiry.
+ */
+export function tokenExpiresAt(): number | null {
+  const token = getToken();
+  if (!token) return null;
+  try {
+    const payload = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const exp = (JSON.parse(atob(payload)) as { exp?: unknown }).exp;
+    return typeof exp === "number" ? exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
 export function getUser(): SessionUser | null {
   const raw = sessionStorage.getItem(USER_KEY);
   if (!raw) return null;

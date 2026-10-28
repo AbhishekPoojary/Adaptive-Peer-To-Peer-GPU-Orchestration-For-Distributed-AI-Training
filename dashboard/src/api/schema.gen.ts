@@ -298,6 +298,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh
+         * @description Swap a still-valid user token for a fresh one, so an open dashboard stays
+         *     signed in past the 15-minute token lifetime.
+         *
+         *     ``require_user`` has already checked the token and that the account is
+         *     still enabled, so a disabled account cannot renew. The new token keeps the
+         *     original sign-in time, and renewal stops ``user_session_max_seconds`` after
+         *     it: then the person signs in again.
+         */
+        post: operations["refresh_auth_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/me": {
         parameters: {
             query?: never;
@@ -1461,6 +1487,8 @@ export interface components {
             gpu?: components["schemas"]["GpuTelemetry"][] | null;
             /** Rtt Ms */
             rtt_ms?: number | null;
+            /** Lan Address */
+            lan_address?: string | null;
         };
         /**
          * HeartbeatResponse
@@ -1585,7 +1613,7 @@ export interface components {
              * Model
              * @enum {string}
              */
-            model: "small_cnn" | "cnn";
+            model: "small_cnn" | "cnn" | "resnet18";
             /** Epochs */
             epochs: number;
             /** Batch Size */
@@ -1594,6 +1622,11 @@ export interface components {
             learning_rate: number;
             /** World Size */
             world_size: number;
+            /**
+             * Sync Every
+             * @default 1
+             */
+            sync_every: number;
             /** Min Gpu Mem Bytes */
             min_gpu_mem_bytes?: number | null;
         };
@@ -1909,6 +1942,8 @@ export interface components {
             host_alias: string;
             /** Max Restarts */
             max_restarts: number;
+            /** Host Address */
+            host_address?: string | null;
         };
         /**
          * SchedulingCandidateOut
@@ -1931,6 +1966,10 @@ export interface components {
             raw_util: number | null;
             /** Raw Rtt Ewma Ms */
             raw_rtt_ewma_ms: number | null;
+            /** C Score */
+            c_score?: number | null;
+            /** Raw Samples Per Second */
+            raw_samples_per_second?: number | null;
             /** Weighted Success */
             weighted_success: number;
             /** Weighted Failure */
@@ -1974,6 +2013,8 @@ export interface components {
             beta: number;
             /** Gamma */
             gamma: number;
+            /** Delta */
+            delta?: number | null;
             /** Reliability Halflife Seconds */
             reliability_halflife_seconds: number;
             /** Wilson Z */
@@ -2136,6 +2177,8 @@ export interface components {
             exit_code?: number | null;
             /** Device */
             device?: ("cuda" | "cpu") | null;
+            /** Samples Per Second */
+            samples_per_second?: number | null;
         };
         /**
          * UploadLimits
@@ -2632,6 +2675,37 @@ export interface operations {
                 "application/json": components["schemas"]["GoogleLoginRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_auth_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

@@ -180,3 +180,14 @@ password for zero gain over a short-lived JWT.
 - The `users` table stores password hashes. `scripts/create_user.py` reads
   the password from a prompt or `ORCH_USER_PASSWORD`, never from `argv`,
   so it does not land in shell history or the process table.
+
+## Addendum: renewing an open session
+
+A 15-minute token with no renewal signed people out mid-use. `POST /auth/refresh`
+now swaps a still-valid user token for a fresh one; the dashboard calls it within
+the last 5 minutes of a token's life (on a 60 s timer and when the tab becomes
+visible). It goes through `require_user`, so a disabled account cannot renew.
+Each token carries `auth_time`, the original sign-in, and renewal is refused
+`USER_SESSION_MAX_SECONDS` (default 12 h) after it, so a stolen token can be kept
+alive for at most that long. A tab whose timers stopped past expiry (a sleeping
+laptop) still has to sign in again.

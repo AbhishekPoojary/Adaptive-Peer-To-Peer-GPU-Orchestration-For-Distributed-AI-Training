@@ -27,10 +27,11 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.api.deps import (
+    _bearer_token,
     enforce_rate_limit,
     get_login_limiter,
     get_node_auth_limiter,
@@ -44,6 +45,7 @@ from orchestrator.core.db import get_session
 from orchestrator.core.security import (
     create_node_jwt,
     create_user_jwt,
+    user_jwt_session_start,
     verify_ed25519_signature,
 )
 from orchestrator.models.enrollment import EnrollmentToken
@@ -519,6 +521,43 @@ async def google_login(
     )
     return LoginResponse(
         access_token=access_token,
+        expires_in=settings.user_access_token_ttl_seconds,
+        user=_user_out(user),
+    )
+
+
+@router.post("/refresh", response_model=LoginResponse)
+async def refresh(
+    user: User = Depends(require_user),
+    authorization: str | None = Header(default=None),
+    settings: Settings = Depends(get_settings_dep),
+) -> LoginResponse:
+    """Swap a still-valid user token for a fresh one, so an open dashboard stays
+    signed in past the 15-minute token lifetime.
+
+    ``require_user`` has already checked the token and that the account is
+    still enabled, so a disabled account cannot renew. The new token keeps the
+    original sign-in time, and renewal stops ``user_session_max_seconds`` after
+    it: then the person signs in again.
+    """
+    started = user_jwt_session_start(
+        _bearer_token(authorization), signing_key=settings.jwt_signing_key
+    )
+    if datetime.now(UTC).timestamp() - started > settings.user_session_max_seconds:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="this sign-in has expired; please sign in again",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return LoginResponse(
+        access_token=create_user_jwt(
+            user_id=str(user.id),
+            username=user.username,
+            role=user.role.value,
+            signing_key=settings.jwt_signing_key,
+            ttl_seconds=settings.user_access_token_ttl_seconds,
+            session_started_at=started,
+        ),
         expires_in=settings.user_access_token_ttl_seconds,
         user=_user_out(user),
     )

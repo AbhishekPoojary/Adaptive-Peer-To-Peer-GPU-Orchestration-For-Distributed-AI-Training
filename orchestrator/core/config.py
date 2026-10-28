@@ -144,6 +144,10 @@ class Settings(BaseSettings):
     # TTL of a user (aud="user") access token. Shorter than a node's because a
     # human token is held in a browser; revocation is bounded by this window.
     user_access_token_ttl_seconds: int = 900
+    # How long one sign-in can be kept alive by renewing its token
+    # (POST /auth/refresh) before the person must sign in again. Bounds what a
+    # stolen token is worth, since renewal would otherwise extend it forever.
+    user_session_max_seconds: int = 43200
     # Fixed-window rate limits on the credential endpoints, per client IP.
     # These bound password/nonce guessing; they are per-process, so a
     # multi-replica deployment multiplies them (see ADR-012 §7).
