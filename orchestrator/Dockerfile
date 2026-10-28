@@ -1,8 +1,12 @@
 FROM python:3.12-slim AS base
 
+# pip's 15 s read timeout and 5 retries failed whole builds on the Azure VM,
+# whose link to PyPI stalls for longer than that now and then.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DEFAULT_TIMEOUT=120 \
+    PIP_RETRIES=10
 
 WORKDIR /app
 
